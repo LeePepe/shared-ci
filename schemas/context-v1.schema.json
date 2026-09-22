@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Recursive context frontmatter, schema 1",
+  "description": "Missing schema retains the fixed source's legacy schema-1 behavior. Runtime additionally checks path containment, exact placeholders, unique gate/layer IDs, reciprocal graph consistency and manifest facts. Unknown project metadata is extensible.",
+  "type": "object",
+  "required": [
+    "kind"
+  ],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "kind": {
+      "enum": [
+        "index",
+        "leaf"
+      ]
+    },
+    "layer": {
+      "$ref": "#/$defs/nonempty"
+    },
+    "parent": {
+      "$ref": "#/$defs/nonempty"
+    },
+    "group": {
+      "$ref": "#/$defs/nonempty"
+    },
+    "scope": {
+      "$ref": "#/$defs/strings"
+    },
+    "test_paths": {
+      "$ref": "#/$defs/strings"
+    },
+    "dependencies": {
+      "$ref": "#/$defs/strings"
+    },
+    "dependents": {
+      "$ref": "#/$defs/strings"
+    },
+    "red_lines": {
+      "$ref": "#/$defs/strings"
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "patterns",
+          "context"
+        ],
+        "properties": {
+          "patterns": {
+            "$ref": "#/$defs/strings"
+          },
+          "test_paths": {
+            "$ref": "#/$defs/strings"
+          },
+          "context": {
+            "$ref": "#/$defs/nonempty"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "patterns",
+          "reason"
+        ],
+        "properties": {
+          "patterns": {
+            "$ref": "#/$defs/strings"
+          },
+          "reason": {
+            "$ref": "#/$defs/nonempty"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gate"
+      }
+    },
+    "manifest": {
+      "$ref": "#/$defs/manifest"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "index"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "layer"
+              ]
+            },
+            {
+              "required": [
+                "parent"
+              ]
+            },
+            {
+              "required": [
+                "group"
+              ]
+            },
+            {
+              "required": [
+                "scope"
+              ]
+            },
+            {
+              "required": [
+                "test_paths"
+              ]
+            },
+            {
+              "required": [
+                "dependencies"
+              ]
+            },
+            {
+              "required": [
+                "dependents"
+              ]
+            },
+            {
+              "required": [
+                "red_lines"
+              ]
+            },
+            {
+              "required": [
+                "gates"
+              ]
+            },
+            {
+              "required": [
+                "manifest"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "leaf"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "layer",
+          "parent",
+          "scope"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "routes"
+              ]
+            },
+            {
+              "required": [
+                "exclusions"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "nonempty": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "pattern": "\\S"
+        },
+        {
+          "not": {
+            "pattern": "\\u0000"
+          }
+        }
+      ]
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonempty"
+      }
+    },
+    "gate": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "mode",
+        "command"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "kind": {
+          "enum": [
+            "build",
+            "check",
+            "lint",
+            "test"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "both",
+            "ci",
+            "local"
+          ]
+        },
+        "command": {
+          "description": "Runtime additionally requires every token to encode as strict UTF-8; lone surrogate code points are rejected before discovery or gate execution. This is a semantic check beyond this structural schema.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonempty"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "manifest": {
+      "type": "object",
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "swift-package",
+            "xcodegen-target"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "target": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "local_dependencies": {
+          "$ref": "#/$defs/strings"
+        },
+        "external_dependencies": {
+          "$ref": "#/$defs/strings"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "xcodegen-target"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "target"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "swift-package"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "external_dependencies": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  }
+}
