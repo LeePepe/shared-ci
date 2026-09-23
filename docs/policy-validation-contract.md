@@ -298,5 +298,5 @@ includes the fixture-hook repair. The 38-test result above remains evidence for
 the bounded policy-only run, not a fresh combined-suite result or verification
 of the expanded candidate as a whole.
 
-This remains an unpublished candidate with the bounded verification recorded
+This remains a development candidate, not released or certified, with the bounded verification recorded
 above; the recorded review and test result do not imply publication or merge.

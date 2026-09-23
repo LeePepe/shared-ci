@@ -1,6 +1,6 @@
 # Pure 6DQ receipt reconciliation, v1
 
-This is an unpublished, bounded candidate: not 6DQ delivery, runtime clearance,
+This is a bounded development candidate, not released or certified: not 6DQ delivery, runtime clearance,
 required-check enforcement or Ship approval. It adds one pure-data module and
 does not change the context runner, policy evaluator or existing workflows.
 
@@ -283,7 +283,7 @@ On 2026-09-23, a separately authorized bounded run using the installed Python
 6DQ, four-metric coverage, JSON Schema engine conformance, authentication,
 R0/caller proof, required enforcement or Ship acceptance. No general runtime
 permission follows; future execution still requires the entry conditions above,
-and historical results do not transfer. The candidate remains unpublished under
+and historical results do not transfer. The development candidate remains unreleased and uncertified under
 delivery holds; no instructions, workflows or enforcement settings are changed.
 
 Producer trust, root/caller verification, full four-metric instrumentation,
