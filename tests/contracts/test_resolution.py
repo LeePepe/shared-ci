@@ -513,14 +513,18 @@ def context_parity(distribution):
         assert result.returncode == 2 and result.stdout == b"src/example.py:\nCONTEXT.md\nsrc/CONTEXT.md\n"
         assert json.loads(result.stderr)["kind"] == "context_error"
     # Audit ownership failure is generated only in the separate caller index.
-    distribution.run.write("caller/unmapped", "synthetic\n")
+    unmapped = distribution.run.write("caller/unmapped", "synthetic\n")
     distribution.run.git(distribution.caller, "add", "--", "unmapped")
     for wrapper in (False, True):
         result = distribution.context_call("audit", wrapper=wrapper)
         assert result.returncode == 1
         assert json.loads(result.stdout) == {"ok": False, "classifications": {"leaf": 2, "excluded": 4, "total": 7}, "findings": 1}
         assert json.loads(result.stderr)["kind"] == "unmapped_path"
-    distribution.run.git(distribution.caller, "rm", "--", "unmapped")
+    # This new staged file is absent from HEAD; ordinary rm refuses it.
+    assert not unmapped.is_symlink() and unmapped.is_file()
+    assert unmapped.read_bytes() == b"synthetic\n"
+    distribution.run.git(distribution.caller, "rm", "--cached", "--", "unmapped")
+    unmapped.unlink()
     probe = distribution.run.write("caller/src/probe.py", "import pathlib,sys\npathlib.Path('src/executed').write_text('owned')\nprint('synthetic gate')\nraise SystemExit(int(sys.argv[1]))\n")
     for wrapper in (False, True):
         for mode in ("local", "ci"):
