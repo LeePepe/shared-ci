@@ -71,7 +71,7 @@ class Fixture:
 
     def git(self, *arguments):
         return subprocess.run(
-            ["/usr/bin/git", "-c", "core.hooksPath=/dev/null", *arguments],
+            ["/usr/bin/git", *arguments],
             cwd=self.root, env=self.environment, check=True, text=True,
             capture_output=True, timeout=10,
         )
