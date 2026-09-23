@@ -1,0 +1,650 @@
+{
+  "schema": 1,
+  "provider": {
+    "repository_id": "1380829073",
+    "library": "shared-ci",
+    "unit": "git-source"
+  },
+  "revision_binding": "containing-commit",
+  "entries": [
+    {
+      "id": "cap.context.audit",
+      "kind": "capability",
+      "interface": {
+        "kind": "context",
+        "wrapper": {
+          "type": "source",
+          "path": "scripts/context/audit"
+        },
+        "direct": {
+          "source": {
+            "type": "source",
+            "path": "scripts/context/_context.py"
+          },
+          "command": "audit"
+        }
+      },
+      "contract": "doc.context",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/context-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "tests/context/fixture.py",
+          "scope": "synthetic-test-source"
+        },
+        {
+          "type": "example",
+          "path": "tests/context/test_resolution.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "cap.context.contexts",
+      "kind": "capability",
+      "interface": {
+        "kind": "context",
+        "wrapper": {
+          "type": "source",
+          "path": "scripts/context/contexts"
+        },
+        "direct": {
+          "source": {
+            "type": "source",
+            "path": "scripts/context/_context.py"
+          },
+          "command": "contexts"
+        }
+      },
+      "contract": "doc.context",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/context-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "tests/context/test_cli_contract.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "cap.context.field",
+      "kind": "capability",
+      "interface": {
+        "kind": "context",
+        "wrapper": {
+          "type": "source",
+          "path": "scripts/context/field"
+        },
+        "direct": {
+          "source": {
+            "type": "source",
+            "path": "scripts/context/_context.py"
+          },
+          "command": "field"
+        }
+      },
+      "contract": "doc.context",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/context-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "tests/context/test_cli_contract.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "cap.context.layers",
+      "kind": "capability",
+      "interface": {
+        "kind": "context",
+        "wrapper": {
+          "type": "source",
+          "path": "scripts/context/layers"
+        },
+        "direct": {
+          "source": {
+            "type": "source",
+            "path": "scripts/context/_context.py"
+          },
+          "command": "layers"
+        }
+      },
+      "contract": "doc.context",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/context-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "tests/context/test_cli_contract.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "cap.context.resolve",
+      "kind": "capability",
+      "interface": {
+        "kind": "context",
+        "wrapper": {
+          "type": "source",
+          "path": "scripts/context/resolve"
+        },
+        "direct": {
+          "source": {
+            "type": "source",
+            "path": "scripts/context/_context.py"
+          },
+          "command": "resolve"
+        }
+      },
+      "contract": "doc.context",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/context-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "tests/context/test_cli_contract.py",
+          "scope": "synthetic-test-source"
+        },
+        {
+          "type": "example",
+          "path": "tests/context/test_resolution.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "cap.context.run",
+      "kind": "capability",
+      "interface": {
+        "kind": "context",
+        "wrapper": {
+          "type": "source",
+          "path": "scripts/context/run"
+        },
+        "direct": {
+          "source": {
+            "type": "source",
+            "path": "scripts/context/_context.py"
+          },
+          "command": "run"
+        }
+      },
+      "contract": "doc.context",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/context-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "tests/context/test_fixture_hooks.py",
+          "scope": "synthetic-test-source"
+        },
+        {
+          "type": "example",
+          "path": "tests/context/test_runner.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "cap.contract.resolve",
+      "kind": "capability",
+      "interface": {
+        "kind": "resolver",
+        "source": {
+          "type": "source",
+          "path": "scripts/contracts/resolve.py"
+        },
+        "python_flags": [
+          "-I",
+          "-S",
+          "-B"
+        ],
+        "required_options": [
+          "--git",
+          "--revision",
+          "--entry"
+        ]
+      },
+      "contract": "doc.registry",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/ai-registry-v1.schema.json",
+          "pointer": "/$defs/finding"
+        },
+        {
+          "type": "schema",
+          "path": "schemas/ai-registry-v1.schema.json",
+          "pointer": "/$defs/result"
+        },
+        {
+          "type": "schema",
+          "path": "schemas/ai-registry-v1.schema.json",
+          "pointer": "/$defs/stored"
+        },
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "examples/contracts/resolve-from-caller.sh",
+          "scope": "isolated-distribution-consumer"
+        },
+        {
+          "type": "example",
+          "path": "tests/contracts/test_isolation.py",
+          "scope": "synthetic-test-source"
+        },
+        {
+          "type": "example",
+          "path": "tests/contracts/test_registry_consistency.py",
+          "scope": "synthetic-test-source"
+        },
+        {
+          "type": "example",
+          "path": "tests/contracts/test_resolution.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "cap.policy.evaluate",
+      "kind": "capability",
+      "interface": {
+        "kind": "function",
+        "source": {
+          "type": "source",
+          "path": "scripts/policy/validate.py"
+        },
+        "symbol": "evaluate_policy",
+        "parameters": [
+          {
+            "name": "baseline",
+            "annotation": "dict",
+            "kind": "keyword-only",
+            "required": true
+          },
+          {
+            "name": "candidate",
+            "annotation": "dict",
+            "kind": "keyword-only",
+            "required": true
+          },
+          {
+            "name": "approvals",
+            "annotation": "list",
+            "kind": "keyword-only",
+            "required": true
+          },
+          {
+            "name": "observation",
+            "annotation": "dict",
+            "kind": "keyword-only",
+            "required": true
+          }
+        ],
+        "returns": "dict",
+        "dependencies": []
+      },
+      "contract": "doc.policy",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/policy-exception-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/policy-input-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "tests/policy/test_validation.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "cap.quality.aggregate",
+      "kind": "capability",
+      "interface": {
+        "kind": "function",
+        "source": {
+          "type": "source",
+          "path": "scripts/quality/aggregate.py"
+        },
+        "symbol": "aggregate_6dq",
+        "parameters": [
+          {
+            "name": "expectation",
+            "annotation": "dict",
+            "kind": "keyword-only",
+            "required": true
+          },
+          {
+            "name": "evidence",
+            "annotation": "dict",
+            "kind": "keyword-only",
+            "required": true
+          }
+        ],
+        "returns": "dict",
+        "dependencies": [
+          "cap.policy.evaluate"
+        ]
+      },
+      "contract": "doc.quality",
+      "schemas": [
+        {
+          "type": "schema",
+          "path": "schemas/finding-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/quality-input-v1.schema.json",
+          "pointer": ""
+        },
+        {
+          "type": "schema",
+          "path": "schemas/quality-result-v1.schema.json",
+          "pointer": ""
+        }
+      ],
+      "examples": [
+        {
+          "type": "example",
+          "path": "tests/quality/test_aggregation.py",
+          "scope": "synthetic-test-source"
+        }
+      ]
+    },
+    {
+      "id": "doc.architecture",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/architecture.md",
+        "anchor": null
+      }
+    },
+    {
+      "id": "doc.compatibility",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/integration-and-migration.md",
+        "anchor": "compatibility"
+      }
+    },
+    {
+      "id": "doc.context",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/context-cli-contract.md",
+        "anchor": null
+      }
+    },
+    {
+      "id": "doc.evidence",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/integration-and-migration.md",
+        "anchor": "existing-fixtures-and-evidence"
+      }
+    },
+    {
+      "id": "doc.examples",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/integration-and-migration.md",
+        "anchor": "existing-fixtures-and-evidence"
+      }
+    },
+    {
+      "id": "doc.failure.context",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/context-cli-contract.md",
+        "anchor": "commands-and-outputs"
+      }
+    },
+    {
+      "id": "doc.failure.policy",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/policy-validation-contract.md",
+        "anchor": "deterministic-failure-order-and-kinds"
+      }
+    },
+    {
+      "id": "doc.failure.quality",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/quality-aggregation-contract.md",
+        "anchor": "exact-state-machine-and-findings"
+      }
+    },
+    {
+      "id": "doc.failure.registry",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/registry-resolution-contract.md",
+        "anchor": "errors"
+      }
+    },
+    {
+      "id": "doc.index",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "README.md",
+        "anchor": null
+      }
+    },
+    {
+      "id": "doc.integration",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/integration-and-migration.md",
+        "anchor": "fixed-checkout-surfaces"
+      }
+    },
+    {
+      "id": "doc.migration",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/integration-and-migration.md",
+        "anchor": "migration-and-rollback"
+      }
+    },
+    {
+      "id": "doc.policy",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/policy-validation-contract.md",
+        "anchor": null
+      }
+    },
+    {
+      "id": "doc.quality",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/quality-aggregation-contract.md",
+        "anchor": null
+      }
+    },
+    {
+      "id": "doc.recovery",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/disaster-recovery.md",
+        "anchor": null
+      }
+    },
+    {
+      "id": "doc.registry",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/registry-resolution-contract.md",
+        "anchor": null
+      }
+    },
+    {
+      "id": "doc.registry.example",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/registry-resolution-contract.md",
+        "anchor": "offline-consumer-example"
+      }
+    },
+    {
+      "id": "doc.usage",
+      "kind": "document",
+      "resource": {
+        "type": "document",
+        "path": "docs/ai-usage.md",
+        "anchor": null
+      }
+    },
+    {
+      "id": "task.change",
+      "kind": "task",
+      "documents": [
+        "doc.architecture",
+        "doc.registry",
+        "doc.context",
+        "doc.policy",
+        "doc.quality",
+        "doc.examples"
+      ]
+    },
+    {
+      "id": "task.diagnose",
+      "kind": "task",
+      "documents": [
+        "doc.failure.registry",
+        "doc.failure.context",
+        "doc.failure.policy",
+        "doc.failure.quality",
+        "doc.recovery"
+      ]
+    },
+    {
+      "id": "task.integrate",
+      "kind": "task",
+      "documents": [
+        "doc.integration",
+        "doc.registry",
+        "doc.registry.example",
+        "doc.context",
+        "doc.policy",
+        "doc.quality"
+      ]
+    },
+    {
+      "id": "task.upgrade",
+      "kind": "task",
+      "documents": [
+        "doc.compatibility",
+        "doc.migration"
+      ]
+    }
+  ],
+  "compatibility": {
+    "declared": "doc.compatibility",
+    "tested": "doc.evidence"
+  },
+  "release_notes": null
+}

@@ -1,0 +1,848 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Shared-ci registry, result and finding v1",
+  "$ref": "#/$defs/stored",
+  "$defs": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$(?![\\s\\S])"
+    },
+    "oid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+      "not": {
+        "const": "0000000000000000000000000000000000000000"
+      }
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*//)(?!.*[\\\\\\u0000-\\u001f\\u007f-\\u009f#?])(?!.*\\/$).+$"
+    },
+    "anchor": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$(?![\\s\\S])"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "pointer": {
+      "type": "string",
+      "pattern": "^(?:/[A-Za-z0-9_$.-]+)*$(?![\\s\\S])"
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "const": "1380829073"
+        },
+        "library": {
+          "const": "shared-ci"
+        },
+        "unit": {
+          "const": "git-source"
+        }
+      },
+      "required": [
+        "repository_id",
+        "library",
+        "unit"
+      ],
+      "additionalProperties": false
+    },
+    "documentRef": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "document"
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "anchor": {
+          "$ref": "#/$defs/anchor"
+        }
+      },
+      "required": [
+        "type",
+        "path",
+        "anchor"
+      ],
+      "additionalProperties": false
+    },
+    "sourceRef": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "source"
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "schemaRef": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "schema"
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "pointer": {
+          "$ref": "#/$defs/pointer"
+        }
+      },
+      "required": [
+        "type",
+        "path",
+        "pointer"
+      ],
+      "additionalProperties": false
+    },
+    "exampleRef": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "example"
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "scope": {
+          "enum": [
+            "synthetic-test-source",
+            "isolated-distribution-consumer"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "path",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "parameter": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "enum": [
+            "baseline",
+            "candidate",
+            "approvals",
+            "observation",
+            "expectation",
+            "evidence"
+          ]
+        },
+        "annotation": {
+          "enum": [
+            "dict",
+            "list"
+          ]
+        },
+        "kind": {
+          "const": "keyword-only"
+        },
+        "required": {
+          "const": true
+        }
+      },
+      "required": [
+        "name",
+        "annotation",
+        "kind",
+        "required"
+      ],
+      "additionalProperties": false
+    },
+    "contextInterface": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "context"
+        },
+        "wrapper": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "direct": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/sourceRef"
+            },
+            "command": {
+              "enum": [
+                "audit",
+                "resolve",
+                "layers",
+                "field",
+                "contexts",
+                "run"
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "kind",
+        "wrapper",
+        "direct"
+      ],
+      "additionalProperties": false
+    },
+    "functionInterface": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "function"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "symbol": {
+          "enum": [
+            "evaluate_policy",
+            "aggregate_6dq"
+          ]
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/parameter"
+          },
+          "minItems": 1
+        },
+        "returns": {
+          "const": "dict"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "symbol",
+        "parameters",
+        "returns",
+        "dependencies"
+      ],
+      "additionalProperties": false
+    },
+    "resolverInterface": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "resolver"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "python_flags": {
+          "const": [
+            "-I",
+            "-S",
+            "-B"
+          ]
+        },
+        "required_options": {
+          "const": [
+            "--git",
+            "--revision",
+            "--entry"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "python_flags",
+        "required_options"
+      ],
+      "additionalProperties": false
+    },
+    "document": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "const": "document"
+        },
+        "resource": {
+          "$ref": "#/$defs/documentRef"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "resource"
+      ],
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "const": "task"
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "documents"
+      ],
+      "additionalProperties": false
+    },
+    "capability": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "const": "capability"
+        },
+        "interface": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/contextInterface"
+            },
+            {
+              "$ref": "#/$defs/functionInterface"
+            },
+            {
+              "$ref": "#/$defs/resolverInterface"
+            }
+          ]
+        },
+        "contract": {
+          "$ref": "#/$defs/id"
+        },
+        "schemas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schemaRef"
+          },
+          "minItems": 1
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/exampleRef"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "interface",
+        "contract",
+        "schemas",
+        "examples"
+      ],
+      "additionalProperties": false
+    },
+    "entry": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/document"
+        },
+        {
+          "$ref": "#/$defs/task"
+        },
+        {
+          "$ref": "#/$defs/capability"
+        }
+      ]
+    },
+    "mark": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "$ref": "#/$defs/oid"
+        },
+        "mode": {
+          "enum": [
+            "100644",
+            "100755"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "blob",
+        "mode",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "resource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/documentRef"
+            },
+            "object": {
+              "$ref": "#/$defs/mark"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "object",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/sourceRef"
+                },
+                {
+                  "$ref": "#/$defs/schemaRef"
+                },
+                {
+                  "$ref": "#/$defs/exampleRef"
+                }
+              ]
+            },
+            "object": {
+              "$ref": "#/$defs/mark"
+            },
+            "text": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "ref",
+            "object",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "stored": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/version"
+        },
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "revision_binding": {
+          "const": "containing-commit"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          },
+          "minItems": 1
+        },
+        "compatibility": {
+          "type": "object",
+          "properties": {
+            "declared": {
+              "const": "doc.compatibility"
+            },
+            "tested": {
+              "const": "doc.evidence"
+            }
+          },
+          "required": [
+            "declared",
+            "tested"
+          ],
+          "additionalProperties": false
+        },
+        "release_notes": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "provider",
+        "revision_binding",
+        "entries",
+        "compatibility",
+        "release_notes"
+      ],
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/version"
+        },
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "revision": {
+          "$ref": "#/$defs/oid"
+        },
+        "tree": {
+          "$ref": "#/$defs/oid"
+        },
+        "basis": {
+          "type": "object",
+          "properties": {
+            "registry": {
+              "$ref": "#/$defs/mark"
+            },
+            "schema": {
+              "$ref": "#/$defs/mark"
+            },
+            "resolver": {
+              "$ref": "#/$defs/mark"
+            }
+          },
+          "required": [
+            "registry",
+            "schema",
+            "resolver"
+          ],
+          "additionalProperties": false
+        },
+        "selected": {
+          "$ref": "#/$defs/id"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          },
+          "minItems": 1
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schema",
+        "provider",
+        "revision",
+        "tree",
+        "basis",
+        "selected",
+        "entries",
+        "resources"
+      ],
+      "additionalProperties": false
+    },
+    "finding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "scripts/contracts/resolve.py"
+            },
+            "kind": {
+              "const": "provider_tool_unavailable"
+            },
+            "detail": {
+              "const": "Required admitted tool is unavailable. Repair: docs/registry-resolution-contract.md#tool-admission"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "scripts/contracts/resolve.py"
+            },
+            "kind": {
+              "const": "provider_distribution_unsupported"
+            },
+            "detail": {
+              "const": "Provider distribution is unsupported. Repair: docs/registry-resolution-contract.md#distribution"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "scripts/contracts/resolve.py"
+            },
+            "kind": {
+              "const": "provider_revision_mismatch"
+            },
+            "detail": {
+              "const": "Provider and resolver revision binding failed. Repair: docs/registry-resolution-contract.md#revision-binding"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "ai/registry.json"
+            },
+            "kind": {
+              "const": "registry_invalid"
+            },
+            "detail": {
+              "const": "Stored registry is invalid. Repair: docs/registry-resolution-contract.md#stored-registry"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "ai/registry.json"
+            },
+            "kind": {
+              "const": "registry_schema_unsupported"
+            },
+            "detail": {
+              "const": "Registry schema version is unsupported. Repair: docs/registry-resolution-contract.md#stored-registry"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "ai/registry.json"
+            },
+            "kind": {
+              "const": "contract_missing"
+            },
+            "detail": {
+              "const": "Required committed resource is unavailable. Repair: docs/registry-resolution-contract.md#resources"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "ai/registry.json"
+            },
+            "kind": {
+              "const": "contract_reference_invalid"
+            },
+            "detail": {
+              "const": "Contract reference is invalid. Repair: docs/registry-resolution-contract.md#resources"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "ai/registry.json"
+            },
+            "kind": {
+              "const": "contract_api_drift"
+            },
+            "detail": {
+              "const": "Public capability inventory differs from committed source. Repair: docs/registry-resolution-contract.md#capability-parity"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "const": "contracts"
+            },
+            "path": {
+              "const": "ai/registry.json"
+            },
+            "kind": {
+              "const": "contract_entry_unknown"
+            },
+            "detail": {
+              "const": "Requested entry is unknown. Repair: docs/registry-resolution-contract.md#cli"
+            },
+            "red_lines": {
+              "const": []
+            }
+          },
+          "required": [
+            "layer",
+            "path",
+            "kind",
+            "detail",
+            "red_lines"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

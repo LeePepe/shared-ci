@@ -1,7 +1,8 @@
 # shared-ci
 
 Development-candidate tooling for caller-owned context resolution, policy
-eligibility and finite 6DQ receipt reconciliation. Source and synthetic fixtures
+eligibility, finite 6DQ receipt reconciliation and committed registry resolution.
+Source and synthetic fixtures
 are present; this is not a released or certified consumer integration.
 
 | Task | Entry |
@@ -16,10 +17,18 @@ API sources of truth:
 - [Context CLI](docs/context-cli-contract.md): six [shell entrypoints](scripts/context/) backed by `_context.py`.
 - [Policy eligibility](docs/policy-validation-contract.md): [`evaluate_policy`](scripts/policy/validate.py), a pure function.
 - [Quality aggregation](docs/quality-aggregation-contract.md): [`aggregate_6dq`](scripts/quality/aggregate.py), a pure function using policy eligibility.
+- [Registry resolution](docs/registry-resolution-contract.md): one isolated CLI
+  selects documents/capabilities from an admitted full-SHA provider. The
+  [machine registry](ai/registry.json) routes four tasks and nine capabilities.
 
 Read docs, schemas, fixtures and code from the same externally selected full
 commit. Historical local verification in the API contracts is bounded evidence,
 not a new combined-suite result or full 6DQ. This tree supplies no workflow/hook
-installer, machine registry, trusted evidence producer or verified required
+installer, trusted evidence producer or verified required
 checks. Consumer installation, authentication, release and recovery validation
 remain separate work.
+
+For discovery integration, read [admission requirements](docs/registry-resolution-contract.md#tool-admission)
+before considering the [consumer example](examples/contracts/resolve-from-caller.sh).
+Registry test source is authored; tests are **NOT RUN** and grant no execution
+permission. Historical results remain attached to their original scope.

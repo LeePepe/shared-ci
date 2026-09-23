@@ -1,8 +1,9 @@
 # Integration and migration
 
 This development candidate exposes fixed-checkout source surfaces. It supplies
-no package installer, reusable workflow, hook installer, machine registry or
-verified consumer launcher. The following is integration guidance and proposed
+no package installer, reusable workflow, hook installer or verified consumer
+installation. It includes a machine registry/resolver and an authored, unexecuted
+consumer example. The following is integration guidance and proposed
 acceptance work, not a record of installation or permission to execute it.
 
 ## Fixed-checkout surfaces
@@ -11,6 +12,18 @@ Keep code, schemas, API contracts and fixtures from the same full provider commi
 selected outside the checkout. Consumer candidate and trusted policy revisions
 are separate identities; neither is automatically the provider revision. There
 is no embedded self-SHA or floating-version fallback.
+
+### Committed registry discovery
+
+Use [registry resolution](registry-resolution-contract.md#cli) to select a task,
+document or capability from the admitted provider pin. It globally validates
+consistency and returns selected committed text and identities, never caller
+same-name files. Read [tool admission](registry-resolution-contract.md#tool-admission)
+and the bounded [v1 distribution profile](registry-resolution-contract.md#distribution)
+before execution. The [offline example](registry-resolution-contract.md#offline-consumer-example)
+shows planned materialization/consumption/reference restoration; tests are NOT
+RUN. Linked implementation worktrees must be separately materialized as
+standalone consumer distributions for this resolver.
 
 ### Context CLI
 
@@ -76,6 +89,7 @@ can still require semantics unsupported by aggregation.
 | Context CLI | Python 3.9+, stdlib, Git, POSIX shell; context/finding v1 | Synthetic worktree, routing and subprocess fixtures exist. No cross-platform consumer certification is established here. |
 | Policy | Python 3.9+, stdlib; policy input/exception v1 and finding-v1 output shape | The [bounded verification record](policy-validation-contract.md#authored-coverage-and-bounded-verification) covers 38 synthetic tests, not a packaged importer or authentic approvals. |
 | Quality | Stdlib Python source, policy public-function dependency; quality input/result v1; Actions-data semantics only | The [bounded verification record](quality-aggregation-contract.md#synthetic-tests-and-execution-hold) reports Python 3.9.6 and 32 tests using a private loader, not general namespace import, CI or a runtime matrix. |
+| Registry resolution | Python 3.9+ stdlib, admitted Git; standalone detached nonshallow SHA-1 Git-source distribution; registry/result/finding v1 | Isolated parity, negative and bundle-consumer test source authored; NOT RUN. No schema-engine/runtime matrix evidence. |
 | Distribution and enforcement | Source checkout only in this tree | No wheel/sdist contract, released version, installed workflow/hook or verified remote required check. |
 
 Schema version 1 is not a library release number. No release/deprecation schedule
@@ -95,6 +109,7 @@ These are real test sources to inspect, not executions performed by this guide:
 | [Fixture-hook regression](../tests/context/test_fixture_hooks.py) | Git honors a fixture-local `post-index-change` hook without changing parent/source state | Not a consumer pre-commit/pre-push installer or required-gate demonstration. |
 | [Policy tests](../tests/policy/test_validation.py) | Exact pins and literal paths, weaker rules, complete approvals, expiry and unknown observations | Explicit source read/compile loader; synthetic external records do not establish approval authenticity. |
 | [Quality tests](../tests/quality/test_aggregation.py) | `fixture()` supplies six dimension receipts; tests cover mismatched binding, missing evidence, finite predicates and isolation observations | Private loader calls the actual policy evaluator; synthetic no-I/O records do not execute six workloads or prove isolation. |
+| [Registry isolation](../tests/contracts/test_isolation.py), [behavior](../tests/contracts/test_resolution.py), [schema consistency](../tests/contracts/test_registry_consistency.py) | External-envelope refusal/concurrency/cleanup; all selections/negatives; wrapper/direct parity; bundle consumption/restoration; offline schema validation | Separate stages, NOT RUN. Independent source/D1 review precedes behavior; no ambient dependencies, real caller or pure-function importer. |
 
 Historical local runs remain separate evidence for their stated scopes. They
 are not a combined suite, four-metric coverage, a consumer migration or full 6DQ.
@@ -102,6 +117,12 @@ Any future execution needs its own authorization and isolation review; commands
 and execution conditions remain in the API contracts.
 
 ## Migration and rollback
+
+The registry slice's narrower planned journey restores a run-owned synthetic
+caller provider/revision tuple, retaining separate old/new distributions. It
+does not replace actual caller migration below, prove full recovery or undo
+gate effects. Schema 1 is not a release; `release_notes: null` leaves release
+obligations outstanding.
 
 The first migration direction is caller-local copied context scripts → an
 explicitly pinned shared checkout. [Provenance](context-cli-contract.md#provenance-and-scope)
