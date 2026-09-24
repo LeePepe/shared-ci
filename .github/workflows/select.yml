@@ -1,0 +1,84 @@
+name: select
+
+# Reusable changed-layer selection for callers that run their own lanes (for
+# example a matrix with one required check per package). It maps the PR diff
+# to layers with the resolver pinned at this SHA, adds transitive dependents,
+# and fails closed to a full run on anything doubtful. See
+# docs/changed-layer-selection.md for the required-check-safe lane pattern:
+# keep every required job unconditional (no job-level `if` on the selection),
+# decide at step level, and run in full whenever `needs.select.result` is not
+# `success`. Pin by full 40-char SHA, the same SHA as quality.yml.
+
+on:
+  workflow_call:
+    inputs:
+      force-full-paths:
+        description: Extra glob patterns (whitespace separated) whose change forces a full run, on top of the built-in list.
+        type: string
+        default: ""
+    outputs:
+      full:
+        description: "'true' when every layer runs (non-PR event, doubtful diff, resolver or git error)."
+        value: ${{ jobs.select.outputs.full }}
+      any-layer:
+        description: "'true' when at least one layer is selected."
+        value: ${{ jobs.select.outputs.any-layer }}
+      layers:
+        description: JSON list of selected layer IDs (every layer when full).
+        value: ${{ jobs.select.outputs.layers }}
+      layers-space:
+        description: Selected layer IDs separated by single spaces.
+        value: ${{ jobs.select.outputs.layers-space }}
+      reason:
+        description: One-line human-readable reason for the selection.
+        value: ${{ jobs.select.outputs.reason }}
+      selection:
+        description: Full JSON selection record (mode, full, layers, reason, triggers, changed files, head).
+        value: ${{ jobs.select.outputs.selection }}
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      selection: ${{ steps.select.outputs.selection }}
+      full: ${{ steps.select.outputs.full }}
+      any-layer: ${{ steps.select.outputs.any-layer }}
+      layers: ${{ steps.select.outputs.layers }}
+      layers-space: ${{ steps.select.outputs.layers-space }}
+      reason: ${{ steps.select.outputs.reason }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out shared-ci at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Select changed layers
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FORCE_FULL_PATHS: ${{ inputs.force-full-paths }}
+        run: |
+          python3 .shared-ci/scripts/select/select.py --event "$EVENT" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --force-full-paths "$FORCE_FULL_PATHS" \
+            --github-output "$GITHUB_OUTPUT" --step-summary "$GITHUB_STEP_SUMMARY"

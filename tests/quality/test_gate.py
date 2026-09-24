@@ -180,6 +180,108 @@ class PrBodyTests(unittest.TestCase):
         self.assertEqual("pass", gate.evaluate(base(pr_body=body))["verdict"])
 
 
+LAYER_LANES = ["verify", "lint", "build", "test"]
+
+
+def selective(any_layer=False, full=False, ran=None, select_result="success", **overrides):
+    """v0.2.0 gate input: verify/contract/workflow-lint selected; verify short-circuits unless any_layer."""
+    data = base(**overrides)
+    for name, lane in data["lanes"].items():
+        lane["ran"] = lane["selected"] and (name not in LAYER_LANES or any_layer)
+    if ran:
+        for name, value in ran.items():
+            data["lanes"][name]["ran"] = value
+    data["layer_lanes"] = LAYER_LANES
+    data["selection"] = {"mode": "changed-only", "result": select_result, "full": full,
+                         "any_layer": any_layer, "layers": ["Core"] if any_layer else [],
+                         "reason": "only support paths changed; no layer selected", "head": HEAD}
+    return data
+
+
+class SelectionGateTests(unittest.TestCase):
+    """Short-circuited lanes: success that did not run is allowed only when the selection says so."""
+
+    def assertFails(self, data, fragment):
+        result = gate.evaluate(data)
+        self.assertEqual("fail", result["verdict"], result)
+        self.assertTrue(any(fragment in p for p in result["problems"]), result["problems"])
+
+    def test_short_circuited_layer_lane_passes_and_is_recorded(self):
+        result = gate.evaluate(selective())
+        self.assertEqual("pass", result["verdict"], result["problems"])
+        self.assertEqual(["verify"], result["short_circuited"])
+        self.assertEqual((False, []), (result["selection"]["any_layer"], result["selection"]["layers"]))
+        verify = next(row for row in result["lanes"] if row["lane"] == "verify")
+        self.assertEqual((False, False), (verify["ran"], verify["required_by_selection"]))
+
+    def test_selected_layers_run_in_full(self):
+        result = gate.evaluate(selective(any_layer=True))
+        self.assertEqual(("pass", []), (result["verdict"], result["short_circuited"]))
+
+    def test_lane_that_short_circuits_while_layers_are_selected_fails(self):
+        self.assertFails(selective(any_layer=True, ran={"verify": False}), "short-circuited but the selection requires it")
+
+    def test_full_run_lane_that_short_circuits_fails(self):
+        self.assertFails(selective(any_layer=True, full=True, ran={"verify": False}), "selection requires it")
+
+    def test_contract_lane_can_never_short_circuit(self):
+        self.assertFails(selective(ran={"contract": False}), "selected lane contract short-circuited")
+
+    def test_short_circuited_lane_must_still_succeed(self):
+        for result in ("failure", "cancelled", "skipped", ""):
+            with self.subTest(result=result):
+                data = selective()
+                data["lanes"]["verify"]["result"] = result
+                self.assertFails(data, "selected lane verify result")
+
+    def test_short_circuited_lane_must_report_head_sha(self):
+        data = selective()
+        data["lanes"]["verify"]["tested_sha"] = OLD
+        self.assertFails(data, f"tested {OLD}")
+
+    def test_unselected_lane_rules_unchanged(self):
+        data = selective()
+        data["lanes"]["build"]["result"] = "failure"
+        self.assertFails(data, "unselected lane build")
+
+    def test_select_job_failure_fails(self):
+        for result in ("failure", "cancelled", "skipped", "unknown"):
+            with self.subTest(result=result):
+                self.assertFails(selective(select_result=result), "select job result")
+
+    def test_selection_for_another_sha_fails(self):
+        data = selective()
+        data["selection"]["head"] = OLD
+        self.assertFails(data, "selection was computed for")
+
+    def test_full_without_layers_is_inconsistent(self):
+        self.assertFails(selective(full=True, any_layer=False), "full but selects no layer")
+
+    def test_disabled_selection_must_be_full(self):
+        data = selective(any_layer=True, full=True)
+        data["selection"]["mode"] = "disabled"
+        self.assertEqual("pass", gate.evaluate(data)["verdict"])
+        data["selection"]["full"] = False
+        self.assertFails(data, "disabled selection must be a full run")
+
+    def test_malformed_selection_raises(self):
+        for mutate in (lambda d: d.update(selection="x"),
+                       lambda d: d["selection"].update(mode="fast"),
+                       lambda d: d["selection"].update(full="false"),
+                       lambda d: d["selection"].update(layers="Core"),
+                       lambda d: d.pop("layer_lanes"),
+                       lambda d: d["lanes"]["verify"].pop("ran")):
+            data = selective()
+            mutate(data)
+            with self.assertRaises(ValueError):
+                gate.evaluate(data)
+
+    def test_without_selection_v010_rules_apply(self):
+        result = gate.evaluate(base())
+        self.assertEqual("pass", result["verdict"])
+        self.assertNotIn("selection", result)
+
+
 class ActionsAdapterTests(unittest.TestCase):
     """The workflow adapter maps `needs` + flags to gate input and fails closed."""
 
@@ -220,6 +322,38 @@ class ActionsAdapterTests(unittest.TestCase):
 
     def test_missing_needs_fails_closed(self):
         self.assertEqual(1, self.run_adapter(self.needs(), NEEDS_JSON="").returncode)
+
+    def selection_needs(self, any_layer, ran_verify, select_result="success", selection=None):
+        needs = self.needs()
+        for lane in LANES:
+            needs[lane]["outputs"]["ran"] = "true" if lane != "verify" or ran_verify else "false"
+        record = {"mode": "changed-only", "full": False, "any_layer": any_layer,
+                  "layers": ["Core"] if any_layer else [], "reason": "docs only", "head": HEAD}
+        needs["select"] = {"result": select_result,
+                           "outputs": {"selection": json.dumps(record) if selection is None else selection}}
+        return needs
+
+    def test_select_job_short_circuit_passes(self):
+        result = self.run_adapter(self.selection_needs(any_layer=False, ran_verify=False))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(["verify"], json.loads(result.stdout)["short_circuited"])
+
+    def test_select_job_short_circuit_while_layers_selected_fails(self):
+        self.assertEqual(1, self.run_adapter(self.selection_needs(any_layer=True, ran_verify=False)).returncode)
+
+    def test_select_job_failed_fails(self):
+        self.assertEqual(1, self.run_adapter(self.selection_needs(False, False, select_result="failure")).returncode)
+
+    def test_select_job_without_output_fails_closed(self):
+        # A successful select job always writes its record; a missing one is never trusted.
+        for ran in (False, True):
+            result = self.run_adapter(self.selection_needs(False, ran, selection=""))
+            self.assertEqual(1, result.returncode)
+            self.assertIn("selection was computed for no SHA", result.stderr)
+
+    def test_select_job_garbage_output_fails_closed(self):
+        self.assertEqual(1, self.run_adapter(self.selection_needs(False, True, selection="[1]")).returncode)
+        self.assertEqual(1, self.run_adapter(self.selection_needs(False, True, selection="{bad")).returncode)
 
     def test_pull_request_without_api_context_fails_closed(self):
         result = self.run_adapter(self.needs(), EVENT="pull_request")

@@ -11,9 +11,22 @@ Pass only when ALL hold:
 Anything else (failure, cancelled, unknown/empty result, unexpected skip, SHA
 drift, missing lane, placeholder-only section) fails. Input is one JSON object
 (file or stdin): {"lanes": {name: {"selected": bool, "result": str,
-"tested_sha": str}}, "expected_lanes": [...], "expected_sha": str,
+"tested_sha": str, "ran": bool}}, "expected_lanes": [...], "expected_sha": str,
 "event": str, "check_pr_body": bool, "pr_body": str|null,
-"required_sections": [...]}.
+"required_sections": [...], "selection": {...}, "layer_lanes": [...]}.
+
+Changed-layer selection (optional `selection`, v0.2.0+). `selection` records
+the `select` job: {"mode": "changed-only"|"disabled", "result": str,
+"full": bool, "any_layer": bool, "layers": [...], "reason": str, "head": str}.
+When present, every lane reports `ran` (did its real steps execute) and:
+  * the select job result must be `success`; a changed-only selection must be
+    computed for the expected SHA;
+  * a selected lane that the selection requires (non-layer lanes always, layer
+    lanes when `any_layer`) must have ran=true, result success, tested SHA ok;
+  * a selected layer lane the selection short-circuits must be `success` and
+    report the expected SHA (it may also have run in full);
+  * unselected lanes keep the success|skipped rule.
+Without `selection` the v0.1.0 rules apply unchanged.
 Output: JSON verdict on stdout; exit 0 pass, 1 fail, 2 malformed input.
 """
 
@@ -95,6 +108,22 @@ def _validate(data: Any) -> dict[str, Any]:
         raise ValueError("expected_sha must be a string")
     if not isinstance(data.get("check_pr_body", True), bool):
         raise ValueError("check_pr_body must be a boolean")
+    if "selection" in data:
+        selection = data["selection"]
+        if not isinstance(selection, dict) or selection.get("mode") not in ("changed-only", "disabled"):
+            raise ValueError("selection must be an object with mode changed-only|disabled")
+        for key in ("full", "any_layer"):
+            if not isinstance(selection.get(key), bool):
+                raise ValueError(f"selection.{key} must be a boolean")
+        if not isinstance(selection.get("layers"), list) or any(
+                not isinstance(item, str) for item in selection["layers"]):
+            raise ValueError("selection.layers must be a string list")
+        layer_lanes = data.get("layer_lanes")
+        if not isinstance(layer_lanes, list) or any(not isinstance(item, str) for item in layer_lanes):
+            raise ValueError("layer_lanes must be a string list when selection is present")
+        for name, lane in lanes.items():
+            if not isinstance(lane.get("ran"), bool):
+                raise ValueError(f"lane {name!r} needs a boolean 'ran' when selection is present")
     sections = data.get("required_sections", [])
     if not isinstance(sections, list) or any(not isinstance(s, str) for s in sections):
         raise ValueError("required_sections must be a string list")
@@ -117,12 +146,23 @@ def evaluate(data: dict[str, Any]) -> dict[str, Any]:
     selected = [name for name in sorted(names) if lanes[name]["selected"]]
     if not selected:
         problems.append("no lane was selected; an empty gate cannot pass")
+    selection = data.get("selection")
+    if selection is not None:
+        problems.extend(_selection_problems(selection, expected_sha))
     rows = []
     for name in sorted(names):
         lane = lanes[name]
         result = str(lane.get("result") or "unknown")
         tested = str(lane.get("tested_sha") or "")
-        rows.append({"lane": name, "selected": lane["selected"], "result": result, "tested_sha": tested})
+        row = {"lane": name, "selected": lane["selected"], "result": result, "tested_sha": tested}
+        rows.append(row)
+        if selection is not None:
+            required = name not in data["layer_lanes"] or selection["any_layer"]
+            row.update(ran=lane["ran"], required_by_selection=required)
+            if lane["selected"] and required and not lane["ran"]:
+                problems.append(f"selected lane {name} short-circuited but the selection requires it "
+                                f"({selection.get('reason') or 'no reason'})")
+                continue
         if lane["selected"]:
             if result != "success":
                 problems.append(f"selected lane {name} result is {result!r}, expected 'success'")
@@ -133,8 +173,29 @@ def evaluate(data: dict[str, Any]) -> dict[str, Any]:
     if data.get("check_pr_body", True) and data.get("event") in ("pull_request", "pull_request_target"):
         problems.extend(check_pr_body(data.get("pr_body"), data.get("required_sections", []), expected_sha))
     verdict = "pass" if not problems else "fail"
-    return {"verdict": verdict, "tested_sha": expected_sha if verdict == "pass" else "",
-            "lanes": rows, "problems": problems}
+    output = {"verdict": verdict, "tested_sha": expected_sha if verdict == "pass" else "",
+              "lanes": rows, "problems": problems}
+    if selection is not None:
+        output["selection"] = {key: selection.get(key) for key in
+                               ("mode", "result", "full", "any_layer", "layers", "reason", "head")}
+        output["short_circuited"] = [row["lane"] for row in rows if row["selected"] and not row["ran"]]
+    return output
+
+
+def _selection_problems(selection: dict[str, Any], expected_sha: str) -> list[str]:
+    problems = []
+    result = str(selection.get("result") or "unknown")
+    if result != "success":
+        problems.append(f"select job result is {result!r}, expected 'success'")
+    if selection["mode"] == "changed-only":
+        head = str(selection.get("head") or "")
+        if head != expected_sha:
+            problems.append(f"selection was computed for {head or 'no SHA'}, expected {expected_sha}")
+        if selection["full"] and not selection["any_layer"]:
+            problems.append("selection is full but selects no layer lane")
+    elif not selection["full"] or not selection["any_layer"]:
+        problems.append("disabled selection must be a full run")
+    return problems
 
 
 def main(argv: list[str] | None = None) -> int:

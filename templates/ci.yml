@@ -22,7 +22,48 @@ jobs:
     with:
       runs-on: macos-15
       setup-command: ""
-      verify-command: scripts/verify --all
+      # changed-only (v0.2.0+): run only the layers the PR diff touches, plus
+      # their dependents. A PR that touches no layer short-circuits the command
+      # lanes (they still report success). Anything doubtful is a full run.
+      # Omit it (or set false) for the v0.1.0 behaviour: every lane runs in full.
+      changed-only: true
+      # `--selected` runs $CI_SELECTED_LAYERS, or every layer on a full run.
+      verify-command: scripts/verify --selected
       lint-command: ""
       build-command: ""
       test-command: ""
+
+  # Optional: your own required lanes (e.g. one check per package). Call
+  # select.yml at the SAME SHA and decide at STEP level, never with a job-level
+  # `if`, so the check always reports. See docs/changed-layer-selection.md.
+  #
+  # select:
+  #   uses: LeePepe/shared-ci/.github/workflows/select.yml@<40-char-sha>
+  #
+  # package:
+  #   name: SPM ${{ matrix.package }}
+  #   needs: select
+  #   if: "!cancelled()"
+  #   runs-on: macos-15
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       package: [Core, App]
+  #   steps:
+  #     - id: lane
+  #       env:
+  #         SELECT_RESULT: ${{ needs.select.result }}
+  #         FULL: ${{ needs.select.outputs.full }}
+  #         LAYERS: ${{ needs.select.outputs.layers-space }}
+  #         REASON: ${{ needs.select.outputs.reason }}
+  #         LAYER: ${{ matrix.package }}
+  #       run: |
+  #         run=true
+  #         if [ "$SELECT_RESULT" = "success" ] && [ "$FULL" = "false" ]; then
+  #           case " $LAYERS " in *" $LAYER "*) ;; *) run=false; echo "not selected: $LAYER ($REASON)" ;; esac
+  #         fi
+  #         echo "run=$run" >> "$GITHUB_OUTPUT"
+  #     - if: steps.lane.outputs.run == 'true'
+  #       uses: actions/checkout@<40-char-sha>
+  #     - if: steps.lane.outputs.run == 'true'
+  #       run: scripts/verify --layer ${{ matrix.package }}
