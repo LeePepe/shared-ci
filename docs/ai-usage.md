@@ -57,3 +57,5 @@ Registry tests and the consumer journey are authored but NOT RUN. Read
 [isolation entry conditions](registry-resolution-contract.md#isolated-verification-source-and-admission)
 when planning tests/dependency loading. Static parity is not a pure-function
 importer, schema-engine pass, consumer installation or required-check proof.
+
+Demo: a docs-only PR selects no layer; see the `candidate` jobs.
