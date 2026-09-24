@@ -99,6 +99,8 @@ to any PR that removes or weakens a test, or changes existing behaviour
 without an approved spec. Until the repository enforces CODEOWNERS review,
 add the `owner-review` label and wait.
 
+Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
+
 ## 7. Incidents become rules
 
 When something goes wrong (a regression, a bypass, a missed check), fix the
