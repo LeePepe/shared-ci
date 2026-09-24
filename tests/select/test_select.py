@@ -172,6 +172,17 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual((False, False, []), (selection["full"], selection["any_layer"], selection["layers"]))
         self.assertIn("only support paths changed", selection["reason"])
 
+    def test_changed_gate_script_selects_its_layer(self):
+        text = (self.repo.root / "src/tools/tech-context.md").read_text()
+        self.repo.write("src/tools/tech-context.md",
+                        text.replace("---\n# ", "gate: {check: \"python3 scripts/tests/check_tools.py\"}\n---\n# ", 1))
+        self.repo.write("scripts/tests/check_tools.py", "print(1)\n")
+        self.repo.commit("gate")
+        self.repo.base = self.repo.rev()
+        self.repo.change("scripts/tests/check_tools.py")
+        selection = self.repo.select()
+        self.assertEqual((False, ["Tools"]), (selection["full"], selection["layers"]))
+
     def test_agents_prose_change_is_not_a_pin_change(self):
         self.repo.change("AGENTS.md")
         self.assertFalse(self.repo.select()["full"])

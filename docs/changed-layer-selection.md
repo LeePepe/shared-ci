@@ -16,7 +16,10 @@ job of [`quality.yml`](../.github/workflows/quality.yml) and in the reusable
    for `pull_request` / `pull_request_target`. Renames count old and new path.
 2. Each path goes through the pinned resolver (`scripts/context resolve`). A
    `leaf` path touches its layer; a `support` (excluded) path touches none.
-3. Every transitive dependent is added: if `B.depends_on` contains `A` (or `A`
+3. A changed file that a layer's gate names literally in its argv (for
+   example `python3 scripts/tests/test_app_startup.py`) touches that layer,
+   even when the file is a support path.
+4. Every transitive dependent is added: if `B.depends_on` contains `A` (or `A`
    declares `depended_by: [B]`) and `A` is touched, `B` runs too.
 
 **Full run** (every layer, `full=true`) when any of these holds:

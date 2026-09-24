@@ -15,7 +15,9 @@ is also a full run when any changed path is unmapped, is a dependency manifest
 or lockfile, lives under .github/, is scripts/verify or scripts/ci/**, is a
 layer-map document (tech-context.md / CONTEXT.md), matches a caller
 force-full pattern, or edits the shared-ci pin in AGENTS.md; and whenever git
-or the resolver errors. "When in doubt, run everything."
+or the resolver errors. "When in doubt, run everything." A changed file that a
+layer gate names in its argv (for example a support-path test script) selects
+that layer even when the file itself is a support path.
 
 An empty diff and a support-only diff (docs, paths the layer map excludes)
 select no layer: layer lanes short-circuit, contract and workflow-lint still run.
@@ -115,6 +117,20 @@ def dependents_closure(layers: dict[str, dict[str, Any]], seeds: set[str]) -> se
     return selected
 
 
+def gate_files(layers: dict[str, dict[str, Any]]) -> dict[str, set[str]]:
+    """Repository path named literally in a layer gate's argv -> the layers whose gate runs it."""
+    owners: dict[str, set[str]] = {}
+    for name, data in layers.items():
+        for gate in data.get("gates", []) or []:
+            for token in gate.get("command", []) or []:
+                if not isinstance(token, str) or "{" in token or token.startswith("-"):
+                    continue
+                path = token[2:] if token.startswith("./") else token
+                if "/" in path and not path.startswith("/"):
+                    owners.setdefault(path, set()).add(name)
+    return owners
+
+
 def _force_patterns(extra: list[str]) -> list[tuple[str, str]]:
     patterns = [(p, "dependency manifest or lockfile") for p in MANIFESTS]
     patterns += [(p, "CI wiring") for p in CI_WIRING]
@@ -158,7 +174,9 @@ def select(root: pathlib.Path, *, event: str, base: str, head: str, extra_patter
     touched: set[str] = set()
     if ctx is not None and layers:
         patterns = _force_patterns(extra_patterns)
+        gated = gate_files(layers)
         for path in result["changed"]:
+            touched |= gated.get(path, set())  # a gate script changed: its layer re-runs
             hit = next((reason for pattern, reason in patterns if ctx.match_pattern(path, pattern)), None)
             if hit:
                 triggers.append(f"{path}: {hit}")
