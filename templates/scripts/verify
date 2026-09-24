@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Single verification entry shared by .githooks/pre-push and CI (quality.yml).
+#   scripts/verify            changed layers vs $VERIFY_BASE (default origin/main)
+#   scripts/verify --all      every layer
+# Layer selection and gates come from the tech-context layer map via the
+# shared-ci resolver at the pinned SHA ($SHARED_CI, default .shared-ci).
+# Unmapped paths fail; any gate failure fails; no layers selected = full run.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+shared_ci="${SHARED_CI:-$root/.shared-ci}"
+pin="$(sed -n 's|.*LeePepe/shared-ci@\([0-9a-f]\{40\}\)/ai/agent-protocol\.md.*|\1|p' AGENTS.md | head -1)"
+if [ ! -d "$shared_ci/.git" ] || [ "$(git -C "$shared_ci" rev-parse HEAD 2>/dev/null)" != "$pin" ]; then
+    rm -rf "$shared_ci"
+    git init -q "$shared_ci"
+    git -C "$shared_ci" fetch -q --depth=1 https://github.com/LeePepe/shared-ci.git "$pin"
+    git -C "$shared_ci" checkout -q --detach FETCH_HEAD
+fi
+context="python3 $shared_ci/scripts/context/_context.py"
+
+$context audit >/dev/null
+
+if [ "${1:-}" = "--all" ]; then
+    layers="$($context layers --all)"
+else
+    base="${VERIFY_BASE:-origin/main}"
+    changed="$(git diff --name-only "$(git merge-base "$base" HEAD)" HEAD)"
+    if [ -z "$changed" ]; then echo "[verify] no changes"; exit 0; fi
+    layers="$(printf '%s\n' "$changed" | $context layers --stdin)"
+fi
+
+for layer in $layers; do
+    mode="local"; [ "${VERIFY_MODE:-}" = "ci" ] && mode="ci"
+    $context run "$layer" --mode "$mode"
+done
+echo "[verify] ok: ${layers:-no layer gates}"

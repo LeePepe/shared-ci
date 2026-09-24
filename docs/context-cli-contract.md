@@ -85,6 +85,34 @@ and cycles. Audit also checks duplicate layer IDs, parent/scope/test-path
 mismatches, missing dependencies, reciprocal dependency drift, dependency cycles
 and manifest drift. Audit counts only Git-tracked files, never untracked files.
 
+## Simplified tech-context layer map (repo-kit format)
+
+When the caller root has **no** `CONTEXT.md` but has
+`docs/architecture/tech-context.md` (or a root `tech-context.md`), every
+command uses the simplified format instead; legacy trees are unaffected.
+
+- Root: frontmatter (YAML subset or JSON) with optional `support` entries
+  (`{patterns, reason}` exclusions), and a Markdown table whose header has a
+  `Layer` column, a column containing `tech-context` (leaf path, root-relative)
+  and optionally a `depends_on` column (`(none)`/`-` = empty, `X(ext)` ignored).
+- Leaf `tech-context.md`: `layer`, root-relative `owns` globs (required),
+  `depends_on`, optional `depended_by`, `gate` (id → command string or argv
+  list; string commands are split with POSIX shell rules, never run through a
+  shell) and `red_lines`. Unknown keys stay readable through `field`. The leaf
+  is translated to a schema-1 leaf (`scope`=`owns`, `dependencies`=`depends_on`,
+  gates with `mode: both`, `kind` = gate id when it is a valid kind, else
+  `check`), so `run`, `field` and the runner contract apply unchanged.
+- The root file itself resolves as excluded. Every tracked path must match
+  exactly one leaf `owns` or one `support` pattern.
+- `audit` adds `layer_table_drift` (table layer/depends_on differs from the
+  leaf), `unlisted_layer_context` (a tracked `tech-context.md` missing from the
+  table), dependency/cycle checks, and the
+  [repository contract](../ai/repo-contract.md) checks (`contract_*` kinds).
+
+The YAML subset (`_frontmatter.py`) supports block/flow mappings and
+sequences, quoted and plain scalars, booleans, null, integers, comments and
+block scalars; anchors, aliases and tags are rejected.
+
 ## Caller-owned manifests and dependency policy
 
 An optional `manifest` has `kind`, root-relative `path`, and optional

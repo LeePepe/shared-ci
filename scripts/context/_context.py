@@ -26,6 +26,34 @@ VALID_GATE_KINDS = {"build", "check", "lint", "test"}
 VALID_GATE_MODES = {"both", "ci", "local"}
 
 
+def _load_sibling(name: str) -> Any:
+    """Load a same-directory helper without touching sys.path or packages."""
+    import importlib.util
+    path = pathlib.Path(__file__).with_name(name + ".py")
+    spec = importlib.util.spec_from_file_location("shared_ci_" + name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {name}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _techcontext() -> Any:
+    """Simplified repo-kit layer map; loaded lazily so legacy callers are untouched."""
+    global _TECHCONTEXT
+    if _TECHCONTEXT is None:
+        _TECHCONTEXT = _load_sibling("_techcontext")
+    return _TECHCONTEXT
+
+
+_TECHCONTEXT: Any = None
+
+
+def _tech_root(root: pathlib.Path) -> str | None:
+    """Root tech-context path when the caller uses the repo-kit format, else None."""
+    return _techcontext().root_context(root)
+
+
 class ContextError(Exception):
     """A context document is malformed or cannot be resolved."""
 
@@ -403,6 +431,9 @@ def _matching_entries(data: dict[str, Any], path: str, key: str) -> list[dict[st
 
 
 def resolve(root: pathlib.Path, raw_path: str) -> Resolution:
+    tech_root = _tech_root(root)
+    if tech_root is not None:
+        return _techcontext().resolve(sys.modules[__name__], root, tech_root, raw_path)
     path = normalize_path(root, raw_path)
     current = ROOT_CONTEXT
     chain: list[str] = []
@@ -553,6 +584,13 @@ def _project_target_dependencies(root: pathlib.Path, manifest: str, target: str)
 
 
 def audit(root: pathlib.Path) -> tuple[list[Finding], dict[str, int]]:
+    tech_root = _tech_root(root)
+    if tech_root is not None:
+        module = sys.modules[__name__]
+        findings, counts = _techcontext().audit(module, root, tech_root)
+        # The repo-kit format opts the caller into repository contract v1.
+        contract = _load_sibling("_contract")
+        return findings + contract.audit(module, root), counts
     contexts, findings = discover_contexts(root)
     leaves: dict[str, dict[str, Any]] = {}
     context_to_layer: dict[str, str] = {}
@@ -724,6 +762,9 @@ def audit(root: pathlib.Path) -> tuple[list[Finding], dict[str, int]]:
 
 
 def layer_map(root: pathlib.Path) -> dict[str, dict[str, Any]]:
+    tech_root = _tech_root(root)
+    if tech_root is not None:
+        return _techcontext().layer_map(sys.modules[__name__], root, tech_root)
     contexts, findings = discover_contexts(root)
     if findings:
         raise ContextError(findings[0].detail)

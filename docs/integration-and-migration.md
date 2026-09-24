@@ -1,7 +1,10 @@
 # Integration and migration
 
-This development candidate exposes fixed-checkout source surfaces. It supplies
-no package installer, reusable workflow, hook installer or verified consumer
+This development candidate exposes fixed-checkout source surfaces and, since
+the repository-contract slice, reusable workflows (`quality.yml`,
+`codex-review.yml`, `kimi-review.yml`, `workflow-lint.yml`) plus templates;
+see the [README](../README.md#how-a-consumer-pins-it) for caller pinning. It
+supplies no package installer, hook installer or verified consumer
 installation. It includes a machine registry/resolver and an authored, unexecuted
 consumer example. The following is integration guidance and proposed
 acceptance work, not a record of installation or permission to execute it.

@@ -1,0 +1,25 @@
+# AI review callers. Copy to .github/workflows/review.yml. pull_request_target
+# evaluates this file from the default branch, so PR authors cannot edit it.
+name: review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review-target:
+    uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@<40-char-sha>
+    with:
+      codex-launcher: ""   # e.g. "python3 scripts/ci/review-raven.py" (base-tree file)
+
+  kimi-review:
+    uses: LeePepe/shared-ci/.github/workflows/kimi-review.yml@<40-char-sha>

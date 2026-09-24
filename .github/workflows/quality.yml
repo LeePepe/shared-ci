@@ -1,0 +1,262 @@
+name: quality
+
+# Reusable fail-closed quality gate. Callers keep their own triggers and pass
+# per-repository commands; a lane is selected when its command is non-empty
+# (contract/workflow-lint are booleans). The final `aggregate` job is the only
+# check a ruleset needs to require: it fails unless every selected lane
+# succeeded on the PR head SHA, every unselected lane is success|skipped, and
+# the PR body fills the template's required sections.
+#
+# Caller example: templates/ci.yml. Pin this file by full 40-char SHA.
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: GitHub-hosted runner label for command lanes (build/test run on hosted runners only).
+        type: string
+        default: ubuntu-latest
+      setup-command:
+        description: Optional command run before every command lane (install toolchains, deps).
+        type: string
+        default: ""
+      verify-command:
+        description: Same entry the local hooks use, e.g. `scripts/verify --all`.
+        type: string
+        default: scripts/verify --all
+      verify-runs-on:
+        type: string
+        default: ""
+      lint-command:
+        type: string
+        default: ""
+      lint-runs-on:
+        type: string
+        default: ""
+      build-command:
+        type: string
+        default: ""
+      build-runs-on:
+        type: string
+        default: ""
+      test-command:
+        type: string
+        default: ""
+      test-runs-on:
+        type: string
+        default: ""
+      contract-audit:
+        description: Run shared-ci `scripts/context audit` (layer map + repository contract) on the caller tree.
+        type: boolean
+        default: true
+      workflow-lint:
+        description: Run shared-ci workflow-lint on the caller's .github/workflows.
+        type: boolean
+        default: true
+      check-pr-body:
+        description: Require the PR template's sections to be filled (pull_request events).
+        type: boolean
+        default: true
+      timeout-minutes:
+        type: number
+        default: 60
+    outputs:
+      tested-sha:
+        description: Commit SHA every selected lane verified (empty unless aggregate passed).
+        value: ${{ jobs.aggregate.outputs.tested-sha }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  verify:
+    if: inputs.verify-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ inputs.verify-runs-on != '' && inputs.verify-runs-on || inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      tested-sha: ${{ steps.sha.outputs.tested-sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: sha
+        run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - if: inputs.setup-command != ''
+        env:
+          COMMAND: ${{ inputs.setup-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+      - env:
+          COMMAND: ${{ inputs.verify-command }}
+          VERIFY_BASE: ${{ github.event.pull_request.base.sha || '' }}
+          VERIFY_MODE: ci
+        run: bash -euo pipefail -c "$COMMAND"
+
+  lint:
+    if: inputs.lint-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ inputs.lint-runs-on != '' && inputs.lint-runs-on || inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      tested-sha: ${{ steps.sha.outputs.tested-sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: sha
+        run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - if: inputs.setup-command != ''
+        env:
+          COMMAND: ${{ inputs.setup-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+      - env:
+          COMMAND: ${{ inputs.lint-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+  build:
+    if: inputs.build-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ inputs.build-runs-on != '' && inputs.build-runs-on || inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      tested-sha: ${{ steps.sha.outputs.tested-sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: sha
+        run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - if: inputs.setup-command != ''
+        env:
+          COMMAND: ${{ inputs.setup-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+      - env:
+          COMMAND: ${{ inputs.build-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+  test:
+    if: inputs.test-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ inputs.test-runs-on != '' && inputs.test-runs-on || inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      tested-sha: ${{ steps.sha.outputs.tested-sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: sha
+        run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - if: inputs.setup-command != ''
+        env:
+          COMMAND: ${{ inputs.setup-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+      - env:
+          COMMAND: ${{ inputs.test-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+  contract:
+    if: inputs.contract-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tested-sha: ${{ steps.sha.outputs.tested-sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: sha
+        run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check out shared-ci at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Repository contract and layer-map audit
+        run: python3 .shared-ci/scripts/context/_context.py audit
+
+  workflow-lint:
+    if: inputs.workflow-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tested-sha: ${{ steps.sha.outputs.tested-sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: sha
+        run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check out shared-ci at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Lint caller workflows
+        run: python3 .shared-ci/scripts/lint/workflows.py --root .
+
+  aggregate:
+    name: aggregate
+    needs: [verify, lint, build, test, contract, workflow-lint]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tested-sha: ${{ steps.gate.outputs.tested-sha }}
+    steps:
+      - name: Check out shared-ci at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Fail-closed aggregate
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CHECK_PR_BODY: ${{ inputs.check-pr-body }}
+          VERIFY_SELECTED: ${{ inputs.verify-command != '' }}
+          LINT_SELECTED: ${{ inputs.lint-command != '' }}
+          BUILD_SELECTED: ${{ inputs.build-command != '' }}
+          TEST_SELECTED: ${{ inputs.test-command != '' }}
+          CONTRACT_SELECTED: ${{ inputs.contract-audit }}
+          WORKFLOW_LINT_SELECTED: ${{ inputs.workflow-lint }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 .shared-ci/scripts/quality/gate_actions.py
