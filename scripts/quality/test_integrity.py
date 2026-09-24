@@ -173,17 +173,48 @@ def ledger_entries(root: str, base: str, head: str) -> dict[str, str]:
 
 
 CODEOWNERS_FILES = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
-LEDGER_OWNER_PATTERNS = {"/.github/", "/.github/*", "/.github/**", ".github/", "/" + LEDGER, LEDGER, "*"}
+
+
+def _codeowners_match(pattern: str, path: str) -> bool:
+    """CODEOWNERS (gitignore-style) pattern match for one repository path."""
+    anchored = pattern.startswith("/") or "/" in pattern.rstrip("/")
+    body = pattern.strip("/")
+    directory = pattern.endswith("/")
+    regex = ""
+    index = 0
+    while index < len(body):
+        if body.startswith("**", index):
+            regex += ".*"
+            index += 2
+        elif body[index] == "*":
+            regex += "[^/]*"
+            index += 1
+        elif body[index] == "?":
+            regex += "[^/]"
+            index += 1
+        else:
+            regex += re.escape(body[index])
+            index += 1
+    regex = ("^" if anchored else "^(?:.*/)?") + regex + ("/.*$" if directory else "(?:/.*)?$")
+    return re.match(regex, path) is not None
 
 
 def ledger_is_owner_gated(root: str, head: str) -> bool:
-    """True when CODEOWNERS at head has an owned entry covering the ledger."""
+    """True when the LAST matching CODEOWNERS rule for the ledger at head names an owner.
+
+    GitHub uses the first CODEOWNERS file found and last-match-wins; a later
+    ownerless rule on the ledger removes the Owner gate, so this fails closed.
+    """
     for path in CODEOWNERS_FILES:
         text = _show(root, head, path)
+        if not text:
+            continue
+        owners = None
         for line in text.splitlines():
             parts = line.split("#", 1)[0].split()
-            if len(parts) >= 2 and parts[0] in LEDGER_OWNER_PATTERNS:
-                return True
+            if parts and _codeowners_match(parts[0], LEDGER):
+                owners = parts[1:]
+        return bool(owners)
     return False
 
 

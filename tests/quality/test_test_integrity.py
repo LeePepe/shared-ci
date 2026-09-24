@@ -260,6 +260,66 @@ class TestIntegrityTests(unittest.TestCase):
         for path in ("scripts/quality/test_integrity.py", ".github/test-weakening.md", "src/parser.swift"):
             self.assertFalse(ti.is_test_path(path), path)
 
+    def test_codeowners_last_match_wins(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.repo.declare("Tests/ParserTests.swift")
+        body = BODY.format(section="Tests/ParserTests.swift removed")
+        cases = {"/.github/ @owner\n": True, "* @owner\n": True, "/.github/** @owner\n": True,
+                 ".github/test-weakening.md @owner\n": True, "/.github/ @owner\n/.github/test-weakening.md\n": False,
+                 "/.github/ @owner\n*.md\n": False, "/src/ @owner\n": False, "": False}
+        for text, gated in cases.items():
+            with self.subTest(codeowners=text):
+                self.repo.write(".github/CODEOWNERS", text)
+                result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=self.repo.commit(), body=body)
+                self.assertEqual(gated, result["verdict"] == "pass", result["problems"])
+
+    def test_ledger_line_needs_reason(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        text = (self.repo.root / ".github/test-weakening.md").read_text()
+        self.repo.write(".github/test-weakening.md", text + "- Tests/ParserTests.swift: (approved: @owner)\n")
+        self.assertEqual(["Tests/ParserTests.swift"], self.repo.check()["undeclared"])
+
+    # ---- parity with VoxPocket #65 (Swift Testing fixtures) ------------------
+    SWIFT_TESTING = ('import Testing\n\n@Test func accepts() {\n    #expect(valid("a"))\n}\n\n'
+                     '@Test func rejects() {\n    #expect(!valid("../secret"))\n    #expect(!valid("bad\\n"))\n}\n')
+
+    def swift_testing_base(self):
+        self.repo.write("Packages/F/Tests/FTests/ValidTests.swift", self.SWIFT_TESTING)
+        self.repo.base = self.repo.commit()
+        return "Packages/F/Tests/FTests/ValidTests.swift"
+
+    def test_parity_weakened_in_place_blocks(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, '#expect(!valid("../secret"))', "#expect(true)")
+        self.assertIn("assertion_removed", self.kinds(self.repo.check()))
+
+    def test_parity_removed_swift_testing_function_blocks(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, '@Test func accepts() {\n    #expect(valid("a"))\n}\n', "")
+        self.repo.write("Packages/F/Tests/FTests/Other.swift",
+                        'import Testing\n\n@Test func replacement() {\n    #expect(valid("a"))\n}\n')
+        result = self.repo.check()
+        self.assertTrue(any(l["kind"] == "test_removed" and l["detail"] == "accepts" for l in result["losses"]))
+
+    def test_parity_split_file_passes(self):
+        path = self.swift_testing_base()
+        head, tail = self.SWIFT_TESTING.split("@Test func rejects")
+        self.repo.write(path, head)
+        self.repo.write("Packages/F/Tests/FTests/Other.swift", "import Testing\n\n@Test func rejects" + tail)
+        self.assertEqual("pass", self.repo.check()["verdict"])
+
+    def test_parity_disabled_marker_blocks(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, "@Test func rejects", "@Test(." + "disabled()) func rejects")
+        self.assertIn("skip_added", self.kinds(self.repo.check()))
+
+    def test_parity_offset_by_unrelated_swift_testing_addition_blocks(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, '    #expect(!valid("../secret"))\n', "")
+        self.repo.write("Packages/F/Tests/FTests/Other.swift",
+                        'import Testing\n\n@Test func unrelated() {\n    #expect(valid("zzz"))\n}\n')
+        self.assertEqual([path], self.repo.check()["undeclared"])
+
     def test_s5_probe_shape_is_blocked(self):
         # S5 G1 replay: one assertion deleted from an input-validation test, template says "none".
         self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
