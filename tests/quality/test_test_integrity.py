@@ -66,6 +66,7 @@ class Repo:
         self.write("pytests/test_t.py", PY)
         self.write("src/parser.swift", "let x = 1\n")
         self.write(".github/test-weakening.md", LEDGER.replace("\\n", "\n"))
+        self.write(".github/CODEOWNERS", "/.github/ @owner\n")
         self.base = self.commit()
 
     def close(self) -> None:
@@ -152,12 +153,12 @@ class TestIntegrityTests(unittest.TestCase):
         self.assertEqual("pass", self.repo.check()["verdict"])
 
     def test_skip_marker_fails(self):
-        for old, new in (("    func testLength() {\n", "    func testLength() throws {\n        throw XCTSkip(\"later\")\n"),):
+        for old, new in (("    func testLength() {\n", "    func testLength() throws {\n        throw XC" + "TSkip(\"later\")\n"),):
             self.repo.edit("Tests/ParserTests.swift", old, new)
         self.assertIn("skip_added", self.kinds(self.repo.check()))
 
     def test_python_skip_and_deleted_file(self):
-        self.repo.edit("pytests/test_t.py", "    def test_one(self):\n", "    @unittest.skip('x')\n    def test_one(self):\n")
+        self.repo.edit("pytests/test_t.py", "    def test_one(self):\n", "    @unittest." + "skip('x')\n    def test_one(self):\n")
         self.assertIn("skip_added", self.kinds(self.repo.check()))
         repo = Repo()
         self.addCleanup(repo.close)
@@ -226,6 +227,38 @@ class TestIntegrityTests(unittest.TestCase):
         self.assertEqual(0, run("--base", self.repo.base, "--head", self.repo.base).returncode)
         self.assertEqual(1, run("--base", "nope", "--head", head).returncode)
         self.assertEqual(2, run().returncode)
+
+    def test_duplicate_assertions_are_a_multiset(self):
+        line = "        XCTAssertLessThan(limit, 100)\n"
+        self.repo.edit("Tests/ParserTests.swift", line, line + line)
+        self.repo.base = self.repo.commit()
+        self.repo.edit("Tests/ParserTests.swift", line + line, "")
+        self.repo.write("Tests/Moved.swift", "import XCTest\n" + line)
+        result = self.repo.check()
+        self.assertEqual(1, sum(l["kind"] == "assertion_removed" for l in result["losses"]), result["losses"])
+
+    def test_duplicate_test_names_are_a_multiset(self):
+        self.repo.write("Tests/OtherTests.swift", "import XCTest\nfinal class O: XCTestCase {\n"
+                        "    func testLength() {\n        XCTAssertTrue(true)\n    }\n}\n")
+        self.repo.base = self.repo.commit()
+        self.repo.git("rm", "-q", "Tests/OtherTests.swift")
+        result = self.repo.check()
+        self.assertTrue(any(l["kind"] == "test_removed" and l["detail"] == "testLength" for l in result["losses"]))
+
+    def test_ledger_not_owner_gated_fails_closed(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.repo.declare("Tests/ParserTests.swift")
+        self.repo.write(".github/CODEOWNERS", "/src/ @owner\n")
+        body = BODY.format(section="Tests/ParserTests.swift removed")
+        result = self.repo.check(body)
+        self.assertTrue(any("CODEOWNERS does not cover" in p for p in result["problems"]), result["problems"])
+
+    def test_test_path_classification(self):
+        for path in ("Tests/A.swift", "Packages/X/Tests/Y/ZTests.swift", "scripts/tests/test_app.py",
+                     "tests/test_x.py", "pkg/a_test.go", "web/a.test.ts", "src/test_util.py"):
+            self.assertTrue(ti.is_test_path(path), path)
+        for path in ("scripts/quality/test_integrity.py", ".github/test-weakening.md", "src/parser.swift"):
+            self.assertFalse(ti.is_test_path(path), path)
 
     def test_s5_probe_shape_is_blocked(self):
         # S5 G1 replay: one assertion deleted from an input-validation test, template says "none".

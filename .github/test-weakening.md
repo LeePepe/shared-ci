@@ -7,4 +7,3 @@ removes, skips or deletes. The Owner approves it through CODEOWNERS
 history of every approved weakening.
 
 Format: `- <test file path>: <reason, link> (approved: @<owner>)`
-

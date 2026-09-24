@@ -14,7 +14,9 @@ Declaration (all required when there is any loss):
   * the ledger `.github/test-weakening.md` gains, in this diff, a line
     `- <test file path>: <reason> (approved: @<owner>)` for every affected file.
     The ledger lives under /.github/, which the repository contract requires
-    CODEOWNERS to cover, so every declared loss needs Owner code-owner review;
+    CODEOWNERS to cover, so every declared loss needs Owner code-owner review
+    (the check fails if CODEOWNERS at head does not cover it; the approver text
+    is informational, the ruleset's code-owner review is the approval);
   * for pull requests, the PR body section "Removed or weakened tests or policy"
     is not "none" and names every affected file (G6: cross-checked against the diff);
     conversely a body that says "none" never passes with a loss.
@@ -28,6 +30,7 @@ still covered by `test_file_deleted` and the protocol rule.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import re
@@ -74,13 +77,14 @@ def _norm(line: str) -> str:
     return " ".join(line.split())
 
 
-def _names(text: str) -> set[str]:
-    names = set()
+def _names(text: str) -> collections.Counter[str]:
+    names: collections.Counter[str] = collections.Counter()
     for line in text.splitlines():
         for pattern in TEST_NAME:
             match = pattern.search(line)
             if match:
-                names.add(match.group(match.lastindex))
+                names[match.group(match.lastindex)] += 1
+                break
     return names
 
 
@@ -91,8 +95,14 @@ def _show(root: str, rev: str, path: str) -> str:
         return ""
 
 
+TEST_DIR = re.compile(r"(^|/)(Tests?|tests?|__tests__|spec|specs)/")
+
+
 def is_test_path(path: str) -> bool:
-    return bool(TEST_PATH.search(path)) and path != LEDGER
+    """Test sources; a `test_*.py` tool under scripts/ outside a test directory is not a test."""
+    if path == LEDGER or not TEST_PATH.search(path):
+        return False
+    return not (path.startswith("scripts/") and not TEST_DIR.search(path))
 
 
 def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
@@ -104,7 +114,7 @@ def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
     changed = {status[i + 1]: status[i] for i in range(0, len(status) - 1, 2) if status[i]}
     tests = {path: kind for path, kind in changed.items() if is_test_path(path)}
     removed: list[tuple[str, str]] = []
-    added_lines: set[str] = set()
+    added_lines: collections.Counter[str] = collections.Counter()
     found: list[dict[str, str]] = []
     diff = _git(root, "diff", "--unified=0", "--no-color", "--no-renames", merge_base, head, "--",
                 *sorted(tests)) if tests else ""
@@ -122,24 +132,29 @@ def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
         if line[0] == "-" and ASSERTION.search(body):
             removed.append((current, _norm(body)))
         elif line[0] == "+":
-            added_lines.add(_norm(body))
+            added_lines[_norm(body)] += 1
             if SKIP.search(body):
                 found.append({"kind": "skip_added", "file": current, "detail": body.strip()[:160]})
-    for path, text in removed:
-        if text not in added_lines:
+    for path, text in removed:  # multiset: one re-added copy excuses one removal
+        if added_lines[text] > 0:
+            added_lines[text] -= 1
+        else:
             found.append({"kind": "assertion_removed", "file": path, "detail": text[:160]})
-    base_names: dict[str, set[str]] = {}
-    head_names: set[str] = set()
+    base_names: dict[str, collections.Counter[str]] = {}
+    head_names: collections.Counter[str] = collections.Counter()
     for path, kind in tests.items():
         if kind != "A":
             base_names[path] = _names(_show(root, merge_base, path))
         if kind != "D":
-            head_names |= _names(_show(root, head, path))
+            head_names += _names(_show(root, head, path))
         if kind == "D":
             found.append({"kind": "test_file_deleted", "file": path, "detail": "test file deleted"})
-    for path, names in sorted(base_names.items()):
-        for name in sorted(names - head_names):
-            found.append({"kind": "test_removed", "file": path, "detail": name})
+    for path, names in sorted(base_names.items()):  # multiset: a move between files passes
+        for name in sorted(names):
+            keep = min(names[name], head_names[name])
+            head_names[name] -= keep
+            for _ in range(names[name] - keep):
+                found.append({"kind": "test_removed", "file": path, "detail": name})
     return found
 
 
@@ -155,6 +170,21 @@ def ledger_entries(root: str, base: str, head: str) -> dict[str, str]:
         if match:
             entries[match.group(1).strip()] = line[1:].strip()
     return entries
+
+
+CODEOWNERS_FILES = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
+LEDGER_OWNER_PATTERNS = {"/.github/", "/.github/*", "/.github/**", ".github/", "/" + LEDGER, LEDGER, "*"}
+
+
+def ledger_is_owner_gated(root: str, head: str) -> bool:
+    """True when CODEOWNERS at head has an owned entry covering the ledger."""
+    for path in CODEOWNERS_FILES:
+        text = _show(root, head, path)
+        for line in text.splitlines():
+            parts = line.split("#", 1)[0].split()
+            if len(parts) >= 2 and parts[0] in LEDGER_OWNER_PATTERNS:
+                return True
+    return False
 
 
 def section_text(body: str) -> str | None:
@@ -182,6 +212,9 @@ def evaluate(root: str, *, base: str, head: str, body: str | None) -> dict[str, 
         found = losses(root, base, head)
         files = sorted({loss["file"] for loss in found})
         if files:
+            if not ledger_is_owner_gated(root, head):
+                problems.append(f"CODEOWNERS does not cover {LEDGER} (e.g. `/.github/ @owner`); "
+                                "a declared loss would not need Owner approval")
             entries = ledger_entries(root, base, head)
             undeclared = [path for path in files if path not in entries]
             for path in undeclared:
