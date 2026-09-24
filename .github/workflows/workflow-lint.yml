@@ -1,0 +1,54 @@
+name: workflow-lint
+
+# Reusable and self-applied. Rejects shared-ci refs that are not full 40-char
+# SHAs, self-hosted jobs without the job-level fork guard, and
+# pull_request_target workflows that check out PR head code.
+# Callers: `uses: LeePepe/shared-ci/.github/workflows/workflow-lint.yml@<40-char SHA>`
+# (quality.yml already runs it as a lane).
+
+on:
+  workflow_call:
+    outputs:
+      tested-sha:
+        description: Commit SHA whose workflows were linted.
+        value: ${{ jobs.lint.outputs.tested-sha }}
+  pull_request:
+    paths: [".github/workflows/**", "scripts/lint/**", "scripts/context/_frontmatter.py"]
+  push:
+    branches: [main]
+    paths: [".github/workflows/**", "scripts/lint/**", "scripts/context/_frontmatter.py"]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tested-sha: ${{ steps.sha.outputs.tested-sha }}
+    steps:
+      - name: Check out caller at the tested SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: sha
+        run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check out shared-ci lint engine at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Lint workflows
+        run: python3 .shared-ci/scripts/lint/workflows.py --root .

@@ -1,0 +1,21 @@
+# Important paths need Owner review (enforced once the ruleset requires code-owner review).
+# Replace @OWNER with the repository owner account or team.
+/.github/                         @OWNER
+/.githooks/                       @OWNER
+/AGENTS.md                        @OWNER
+/CLAUDE.md                        @OWNER
+/.specify/memory/constitution.md  @OWNER
+/docs/architecture/               @OWNER
+**/tech-context.md                @OWNER
+/scripts/verify                   @OWNER
+/policy/                          @OWNER
+/schemas/                         @OWNER
+# Dependency manifests and lockfiles (pin upgrades)
+**/Package.swift                  @OWNER
+**/Package.resolved               @OWNER
+**/project.yml                    @OWNER
+**/package.json                   @OWNER
+**/package-lock.json              @OWNER
+**/pyproject.toml                 @OWNER
+**/uv.lock                        @OWNER
+**/requirements*.txt              @OWNER

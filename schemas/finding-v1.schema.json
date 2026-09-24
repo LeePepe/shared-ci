@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Context finding v1",
+  "type": "object",
+  "required": [
+    "layer",
+    "path",
+    "kind",
+    "detail",
+    "red_lines"
+  ],
+  "properties": {
+    "layer": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "string"
+    },
+    "red_lines": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

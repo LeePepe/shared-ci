@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Policy exception record v1",
+  "description": "Closed structural contract, not approval authentication. Self-contained local references; runtime adds native-type, UTF-8, calendar, ordering, resource and eligibility checks.",
+  "$ref": "#/$defs/approval",
+  "$defs": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Runtime requires exact Python int, not bool or float."
+    },
+    "repoId": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(?![\\s\\S])"
+    },
+    "sha": {
+      "type": "string",
+      "pattern": "^(?!0{40}(?![\\s\\S]))[0-9a-f]{40}(?![\\s\\S])"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}(?![\\s\\S])"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f-\\u009f])(?=[\\s\\S]*[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])[\\s\\S]+(?![\\s\\S])",
+      "description": "Nonblank using Python whitespace semantics; no C0/C1 controls. Runtime additionally requires strict UTF-8 (no lone surrogates)."
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![\\s\\S]*[\\\\\\u0000-\\u001f\\u007f-\\u009f])(?!(?:\\.{1,2})(?:/|(?![\\s\\S])))[^/]+(?:/(?!(?:\\.{1,2})(?:/|(?![\\s\\S])))[^/]+)*(?![\\s\\S])",
+      "description": "Literal UTF-8 Git-relative path. No empty, dot or dot-dot segments, backslash or C0/C1 controls. Spaces, Unicode, percent and wildcard-looking characters are literal; no trimming, normalization, URL decoding or pattern evaluation. Runtime additionally rejects lone surrogates. Non-UTF-8 Git names are unsupported."
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^(?!0000)[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z(?![\\s\\S])",
+      "description": "UTC Gregorian timestamp, seconds only; runtime checks actual calendar validity."
+    },
+    "pin": {
+      "type": "object",
+      "required": [
+        "repository_id",
+        "revision"
+      ],
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/repoId"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha"
+        }
+      },
+      "additionalProperties": false
+    },
+    "requirement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "required"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "minimum_basis_points"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "description": "Runtime requires exact Python int."
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "values"
+          ],
+          "properties": {
+            "kind": {
+              "const": "required_set"
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/id"
+              },
+              "uniqueItems": true,
+              "description": "Sorted by Python string/code-point order; empty is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "eventCondition": {
+      "type": "object",
+      "required": [
+        "event",
+        "condition"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/id"
+        },
+        "condition": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "additionalProperties": false
+    },
+    "waiver": {
+      "type": "object",
+      "required": [
+        "policy",
+        "repository_id",
+        "paths",
+        "revisions",
+        "rule_id",
+        "before",
+        "after",
+        "reason",
+        "expires_at",
+        "review_event",
+        "alternative_verification",
+        "revocation_events"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/pin"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/repoId"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/path"
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Strictly sorted literal spellings; exact membership only."
+        },
+        "revisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sha"
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Strictly sorted strings, without ancestry or range meaning."
+        },
+        "rule_id": {
+          "$ref": "#/$defs/id"
+        },
+        "before": {
+          "$ref": "#/$defs/requirement"
+        },
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/requirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/text"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "review_event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/eventCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alternative_verification": {
+          "$ref": "#/$defs/eventCondition"
+        },
+        "revocation_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/eventCondition"
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Runtime requires strictly sorted unique event IDs, not merely unique objects."
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "expires_at": {
+              "$ref": "#/$defs/timestamp"
+            }
+          }
+        },
+        {
+          "properties": {
+            "review_event": {
+              "$ref": "#/$defs/eventCondition"
+            }
+          }
+        }
+      ]
+    },
+    "approval": {
+      "type": "object",
+      "required": [
+        "schema",
+        "approval_id",
+        "evidence_ref",
+        "waiver"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/id"
+        },
+        "evidence_ref": {
+          "$ref": "#/$defs/text"
+        },
+        "waiver": {
+          "$ref": "#/$defs/waiver"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

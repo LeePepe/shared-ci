@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/LeePepe/shared-ci/schemas/repo-contract-v1.json",
+  "title": "Repository contract v1",
+  "description": "Machine-readable minimum repository contract (ai/repo-contract.md). The document shape describes a contract report; x-contract holds the parameters that scripts/context/_contract.py and quality.yml read from this same checkout.",
+  "type": "object",
+  "required": ["schema", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": 1},
+    "items": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {"$ref": "#/$defs/item"}
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["id", "kind", "enforcement", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"enum": ["agents", "agent_files", "ci", "verify", "ruleset", "pr_template", "dependencies", "identity"]},
+        "kind": {"enum": ["guidance", "enforced", "guidance+enforced", "red_line"]},
+        "enforcement": {
+          "type": "array",
+          "items": {"enum": ["audit", "workflow-lint", "quality-aggregate", "ruleset-readback", "doc-only"]}
+        },
+        "status": {"enum": ["pass", "fail", "not_checked"]},
+        "findings": {"type": "array", "items": {"$ref": "finding-v1.schema.json"}}
+      }
+    }
+  },
+  "x-contract": {
+    "items": [
+      {"id": "agents", "number": 1, "kind": "guidance", "enforcement": ["audit"]},
+      {"id": "agent_files", "number": 2, "kind": "guidance", "enforcement": ["audit"]},
+      {"id": "ci", "number": 3, "kind": "enforced", "enforcement": ["audit", "workflow-lint"]},
+      {"id": "verify", "number": 4, "kind": "enforced", "enforcement": ["audit"]},
+      {"id": "ruleset", "number": 5, "kind": "enforced", "enforcement": ["audit", "ruleset-readback"]},
+      {"id": "pr_template", "number": 6, "kind": "guidance+enforced", "enforcement": ["audit", "quality-aggregate"]},
+      {"id": "dependencies", "number": 7, "kind": "guidance", "enforcement": ["audit"]},
+      {"id": "identity", "number": 8, "kind": "red_line", "enforcement": ["audit"]}
+    ],
+    "agents_max_lines": 150,
+    "agents_sections": ["Read first", "Protocol", "Verify", "Required checks", "Red lines", "Delivery"],
+    "agent_files": ["CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".cursorrules"],
+    "agent_file_max_lines": 12,
+    "pr_sections": ["Existing behaviour", "Intent", "Compatibility", "Removed or weakened tests or policy", "Test evidence"],
+    "codeowners_required": ["/.github/", "/AGENTS.md"],
+    "shared_libraries": ["shared-ci", "shared-design-tokens", "shared-design-system", "shared-telemetry", "voxkit"],
+    "aggregate_check": "quality / aggregate",
+    "forbidden_patterns": [
+      {"name": "credential profile directory", "regex": "github[-]identity"},
+      {"name": "gh config override", "regex": "GH[_]CONFIG_DIR"},
+      {"name": "macOS home path", "regex": "/User[s]/"},
+      {"name": "personal profile path", "regex": "profile[s]/LeePepe"}
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+name: ci
+
+# shared-ci's own caller (dogfood). Rule: the reusable workflows are pinned to an
+# EARLIER commit of this repository, never to this commit itself, so a change
+# to the gate cannot approve itself. The `self-test` lane runs this commit's
+# tests and scripts (via verify-command) inside the pinned gate.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    uses: LeePepe/shared-ci/.github/workflows/quality.yml@9ff304e317a5ff924a4c488515ead5a607d28236
+    with:
+      runs-on: ubuntu-latest
+      verify-command: scripts/verify --all
+      contract-audit: true
+      workflow-lint: true

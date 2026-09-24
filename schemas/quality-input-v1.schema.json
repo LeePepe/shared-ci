@@ -1,0 +1,3311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "6DQ reconciliation input v1",
+  "description": "Two keyword arguments to aggregate_6dq. All references are local; no fetching. Closed structural schema, not eligibility/trust proof. Runtime adds exact-native types, UTF-8 byte limits (4096/string, 8388608 aggregate), 100000 occurrence/32 depth limits, ordering/identity uniqueness, calendar, policy-v1 validation and cross-record semantic checks. Reject duplicate JSON keys/nonstandard constants before calling. JSON Schema integers alone cannot reject Python bool/float/subclasses. Unsupported version integers have a distinct runtime fallback.",
+  "type": "object",
+  "required": [
+    "expectation",
+    "evidence"
+  ],
+  "properties": {
+    "expectation": {
+      "$ref": "#/$defs/Expectation"
+    },
+    "evidence": {
+      "$ref": "#/$defs/Evidence"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ID": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}(?![\\s\\S])",
+      "maxLength": 128
+    },
+    "Text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f-\\u009f])(?=[\\s\\S]*[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])[\\s\\S]+(?![\\s\\S])",
+      "description": "Nonblank by Python whitespace semantics, strict UTF-8, no C0/C1. Runtime bounds UTF-8 bytes (not code points) at 4096."
+    },
+    "Path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?![\\s\\S]*[\\\\\\u0000-\\u001f\\u007f-\\u009f])(?!(?:\\.{1,2})(?:/|(?![\\s\\S])))[^/]+(?:/(?!(?:\\.{1,2})(?:/|(?![\\s\\S])))[^/]+)*(?![\\s\\S])",
+      "description": "Literal Git-relative UTF-8 path, no normalization; runtime also bounds UTF-8 byte length."
+    },
+    "SHA": {
+      "type": "string",
+      "pattern": "^(?!0{40}(?![\\s\\S]))[0-9a-f]{40}(?![\\s\\S])"
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^(?!0{64}(?![\\s\\S]))[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "RepoID": {
+      "type": "string",
+      "maxLength": 4096,
+      "pattern": "^[1-9][0-9]*(?![\\s\\S])"
+    },
+    "Count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "Positive": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "BP": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "Version": {
+      "type": "integer",
+      "const": 1
+    },
+    "Time": {
+      "type": "string",
+      "pattern": "^(?!0000)[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z(?![\\s\\S])",
+      "description": "Runtime validates Gregorian calendar validity."
+    },
+    "Phase": {
+      "type": "string",
+      "enum": [
+        "actions",
+        "pre_commit",
+        "pre_push"
+      ]
+    },
+    "State": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "unknown"
+      ]
+    },
+    "Status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "failure",
+        "cancelled",
+        "skipped",
+        "manual",
+        "unmeasured",
+        "planned",
+        "not_run",
+        "unavailable",
+        "unknown"
+      ]
+    },
+    "Result": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "not_run",
+        "unavailable",
+        "unknown",
+        "unsupported"
+      ]
+    },
+    "Level": {
+      "type": "string",
+      "enum": [
+        "required",
+        "advisory"
+      ]
+    },
+    "Impl": {
+      "type": "string",
+      "enum": [
+        "not_implemented",
+        "partial",
+        "implemented",
+        "unknown"
+      ]
+    },
+    "Enforce": {
+      "type": "string",
+      "enum": [
+        "local",
+        "ci",
+        "remote_required_verified",
+        "unknown"
+      ]
+    },
+    "Control": {
+      "type": "string",
+      "enum": [
+        "identity",
+        "network",
+        "ports",
+        "state"
+      ]
+    },
+    "Negative": {
+      "type": "string",
+      "enum": [
+        "abnormal_exit",
+        "cleanup_refusal",
+        "concurrent_run",
+        "port_collision",
+        "unsafe_target"
+      ]
+    },
+    "Pin": {
+      "type": "object",
+      "required": [
+        "repository_id",
+        "revision"
+      ],
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepoID"
+        },
+        "revision": {
+          "$ref": "#/$defs/SHA"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Subject": {
+      "type": "object",
+      "required": [
+        "repository_id",
+        "revision",
+        "path",
+        "layer",
+        "red_lines"
+      ],
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepoID"
+        },
+        "revision": {
+          "$ref": "#/$defs/SHA"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        },
+        "layer": {
+          "$ref": "#/$defs/Text"
+        },
+        "red_lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Report": {
+      "type": "object",
+      "required": [
+        "id",
+        "ref",
+        "digest"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "ref": {
+          "$ref": "#/$defs/Text"
+        },
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Candidate": {
+      "type": "object",
+      "required": [
+        "repository_id",
+        "revision",
+        "tree"
+      ],
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepoID"
+        },
+        "revision": {
+          "$ref": "#/$defs/SHA"
+        },
+        "tree": {
+          "$ref": "#/$defs/SHA"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Mapping": {
+      "type": "object",
+      "required": [
+        "kind",
+        "tested_revision",
+        "tested_tree",
+        "source_revisions",
+        "evidence"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "merge"
+          ]
+        },
+        "tested_revision": {
+          "$ref": "#/$defs/SHA"
+        },
+        "tested_tree": {
+          "$ref": "#/$defs/SHA"
+        },
+        "source_revisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SHA"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Report"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Binding": {
+      "type": "object",
+      "required": [
+        "candidate",
+        "policy",
+        "phase",
+        "mapping"
+      ],
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/Candidate"
+        },
+        "policy": {
+          "$ref": "#/$defs/Pin"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "mapping": {
+          "$ref": "#/$defs/Mapping"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Item": {
+      "type": "object",
+      "required": [
+        "id",
+        "path"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Exclusion": {
+      "type": "object",
+      "required": [
+        "path",
+        "reason"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/Path"
+        },
+        "reason": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Scope": {
+      "type": "object",
+      "required": [
+        "items",
+        "exclusions",
+        "basis"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Item"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Exclusion"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "basis": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Tool": {
+      "type": "object",
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Resource": {
+      "type": "object",
+      "required": [
+        "id",
+        "target",
+        "owner",
+        "marker"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "target": {
+          "$ref": "#/$defs/Text"
+        },
+        "owner": {
+          "$ref": "#/$defs/ID"
+        },
+        "marker": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "additionalProperties": false
+    },
+    "IsolationTarget": {
+      "type": "object",
+      "required": [
+        "controls",
+        "resources",
+        "basis"
+      ],
+      "properties": {
+        "controls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Control"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Resource"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "basis": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Event": {
+      "type": "object",
+      "required": [
+        "sequence",
+        "at"
+      ],
+      "properties": {
+        "sequence": {
+          "$ref": "#/$defs/Positive"
+        },
+        "at": {
+          "$ref": "#/$defs/Time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ControlResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Control"
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "created_by_run",
+        "ownership",
+        "marker",
+        "cleanup"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "created_by_run": {
+          "$ref": "#/$defs/ID"
+        },
+        "ownership": {
+          "type": "string",
+          "enum": [
+            "match",
+            "mismatch",
+            "unknown"
+          ]
+        },
+        "marker": {
+          "type": "string",
+          "enum": [
+            "match",
+            "mismatch",
+            "unknown"
+          ]
+        },
+        "cleanup": {
+          "$ref": "#/$defs/State"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Preflight": {
+      "type": "object",
+      "required": [
+        "event",
+        "controls"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/Event"
+        },
+        "controls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ControlResult"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Cleanup": {
+      "type": "object",
+      "required": [
+        "event",
+        "state",
+        "resources"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/Event"
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceResult"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Isolation": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "target",
+        "preflight",
+        "start",
+        "finish",
+        "cleanup"
+      ],
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/ID"
+        },
+        "target": {
+          "$ref": "#/$defs/IsolationTarget"
+        },
+        "preflight": {
+          "$ref": "#/$defs/Preflight"
+        },
+        "start": {
+          "$ref": "#/$defs/Event"
+        },
+        "finish": {
+          "$ref": "#/$defs/Event"
+        },
+        "cleanup": {
+          "$ref": "#/$defs/Cleanup"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MetricIDs": {
+      "type": "object",
+      "required": [
+        "statements",
+        "branches",
+        "functions",
+        "lines"
+      ],
+      "properties": {
+        "statements": {
+          "$ref": "#/$defs/ID"
+        },
+        "branches": {
+          "$ref": "#/$defs/ID"
+        },
+        "functions": {
+          "$ref": "#/$defs/ID"
+        },
+        "lines": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Denominators": {
+      "type": "object",
+      "required": [
+        "statements",
+        "branches",
+        "functions",
+        "lines"
+      ],
+      "properties": {
+        "statements": {
+          "$ref": "#/$defs/Positive"
+        },
+        "branches": {
+          "$ref": "#/$defs/Positive"
+        },
+        "functions": {
+          "$ref": "#/$defs/Positive"
+        },
+        "lines": {
+          "$ref": "#/$defs/Positive"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ScannerTarget": {
+      "type": "object",
+      "required": [
+        "id",
+        "items"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Measurement": {
+      "type": "object",
+      "required": [
+        "state",
+        "numerator",
+        "denominator",
+        "report_id"
+      ],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "measured",
+            "unmeasured",
+            "unknown"
+          ]
+        },
+        "numerator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Count"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "denominator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Positive"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "report_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "measured"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "numerator": {
+                "$ref": "#/$defs/Count"
+              },
+              "denominator": {
+                "$ref": "#/$defs/Positive"
+              },
+              "report_id": {
+                "$ref": "#/$defs/ID"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "numerator": {
+                "type": "null"
+              },
+              "denominator": {
+                "type": "null"
+              },
+              "report_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Measurements": {
+      "type": "object",
+      "required": [
+        "statements",
+        "branches",
+        "functions",
+        "lines"
+      ],
+      "properties": {
+        "statements": {
+          "$ref": "#/$defs/Measurement"
+        },
+        "branches": {
+          "$ref": "#/$defs/Measurement"
+        },
+        "functions": {
+          "$ref": "#/$defs/Measurement"
+        },
+        "lines": {
+          "$ref": "#/$defs/Measurement"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CaseResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "report_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "report_id": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ScannerResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "verdict",
+        "items",
+        "report_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "verdict": {
+          "$ref": "#/$defs/State"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "report_id": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Condition": {
+      "type": "object",
+      "required": [
+        "event",
+        "condition"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/ID"
+        },
+        "condition": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Requirement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "required"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "minimum_basis_points"
+            },
+            "value": {
+              "$ref": "#/$defs/BP"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "values"
+          ],
+          "properties": {
+            "kind": {
+              "const": "required_set"
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ID"
+              },
+              "uniqueItems": true,
+              "description": "Strictly sorted strings; policy arrays do not inherit the quality U bound."
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Waiver": {
+      "type": "object",
+      "required": [
+        "policy",
+        "repository_id",
+        "paths",
+        "revisions",
+        "rule_id",
+        "before",
+        "after",
+        "reason",
+        "expires_at",
+        "review_event",
+        "alternative_verification",
+        "revocation_events"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/Pin"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/RepoID"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Path"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "revisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SHA"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "rule_id": {
+          "$ref": "#/$defs/ID"
+        },
+        "before": {
+          "$ref": "#/$defs/Requirement"
+        },
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Requirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/Text"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "review_event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alternative_verification": {
+          "$ref": "#/$defs/Condition"
+        },
+        "revocation_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Condition"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "description": "Policy evaluator enforces expiry-or-review presence, path/revision ordering, unique sorted revocation event IDs, complete claims and eligibility.",
+      "anyOf": [
+        {"properties": {"expires_at": {"$ref": "#/$defs/Time"}}},
+        {"properties": {"review_event": {"$ref": "#/$defs/Condition"}}}
+      ]
+    },
+    "Approval": {
+      "type": "object",
+      "required": [
+        "schema",
+        "approval_id",
+        "evidence_ref",
+        "waiver"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/Version"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/ID"
+        },
+        "evidence_ref": {
+          "$ref": "#/$defs/Text"
+        },
+        "waiver": {
+          "$ref": "#/$defs/Waiver"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Rules": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/ID"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/Requirement"
+      }
+    },
+    "Baseline": {
+      "type": "object",
+      "required": [
+        "schema",
+        "policy",
+        "subject",
+        "rules"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/Version"
+        },
+        "policy": {
+          "$ref": "#/$defs/Pin"
+        },
+        "subject": {
+          "$ref": "#/$defs/Subject"
+        },
+        "rules": {
+          "$ref": "#/$defs/Rules",
+          "minProperties": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyCandidate": {
+      "type": "object",
+      "required": [
+        "schema",
+        "policy",
+        "rules",
+        "exceptions"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/Version"
+        },
+        "policy": {
+          "$ref": "#/$defs/Pin"
+        },
+        "rules": {
+          "$ref": "#/$defs/Rules"
+        },
+        "exceptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Approval"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Observation": {
+      "type": "object",
+      "required": [
+        "schema",
+        "now",
+        "events"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/Version"
+        },
+        "now": {
+          "$ref": "#/$defs/Time"
+        },
+        "events": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/ID"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "occurred",
+              "not_occurred",
+              "unknown"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyInput": {
+      "type": "object",
+      "required": [
+        "baseline",
+        "candidate",
+        "approvals",
+        "observation"
+      ],
+      "properties": {
+        "baseline": {
+          "$ref": "#/$defs/Baseline"
+        },
+        "candidate": {
+          "$ref": "#/$defs/PolicyCandidate"
+        },
+        "approvals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Approval"
+          }
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyCase": {
+      "type": "object",
+      "required": [
+        "id",
+        "input"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "input": {
+          "$ref": "#/$defs/PolicyInput"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindingsL1": {
+      "type": "object",
+      "required": [
+        "obligation",
+        "scope",
+        "metrics"
+      ],
+      "properties": {
+        "obligation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/ID"
+        },
+        "metrics": {
+          "$ref": "#/$defs/MetricIDs"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetL1": {
+      "type": "object",
+      "required": [
+        "denominators"
+      ],
+      "properties": {
+        "denominators": {
+          "$ref": "#/$defs/Denominators"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PayloadL1": {
+      "type": "object",
+      "required": [
+        "metrics",
+        "skipped",
+        "focused",
+        "integrity_report"
+      ],
+      "properties": {
+        "metrics": {
+          "$ref": "#/$defs/Measurements"
+        },
+        "skipped": {
+          "$ref": "#/$defs/Count"
+        },
+        "focused": {
+          "$ref": "#/$defs/Count"
+        },
+        "integrity_report": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckL1": {
+      "type": "object",
+      "required": [
+        "id",
+        "subjects",
+        "case_ids",
+        "level",
+        "basis",
+        "command",
+        "tools",
+        "scope",
+        "reports",
+        "isolation",
+        "bindings",
+        "target"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "case_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "basis": {
+          "$ref": "#/$defs/Text"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "$ref": "#/$defs/IsolationTarget"
+        },
+        "bindings": {
+          "$ref": "#/$defs/BindingsL1"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetL1"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReceiptL1": {
+      "type": "object",
+      "required": [
+        "id",
+        "binding",
+        "subjects",
+        "command",
+        "tools",
+        "scope",
+        "run_id",
+        "status",
+        "reports",
+        "isolation",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Report"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadL1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "run_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "isolation": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "isolation": {
+                "$ref": "#/$defs/Isolation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pass"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "run_id": {
+                "$ref": "#/$defs/ID"
+              },
+              "payload": {
+                "$ref": "#/$defs/PayloadL1"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExpectedL1": {
+      "type": "object",
+      "required": [
+        "owner",
+        "checks"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ID"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckL1"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedL1": {
+      "type": "object",
+      "required": [
+        "implementation",
+        "enforcement",
+        "checks"
+      ],
+      "properties": {
+        "implementation": {
+          "$ref": "#/$defs/Impl"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/Enforce"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptL1"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindingsL2": {
+      "type": "object",
+      "required": [
+        "obligation",
+        "scope"
+      ],
+      "properties": {
+        "obligation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetL2": {
+      "type": "object",
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PayloadL2": {
+      "type": "object",
+      "required": [
+        "cases"
+      ],
+      "properties": {
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaseResult"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckL2": {
+      "type": "object",
+      "required": [
+        "id",
+        "subjects",
+        "case_ids",
+        "level",
+        "basis",
+        "command",
+        "tools",
+        "scope",
+        "reports",
+        "isolation",
+        "bindings",
+        "target"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "case_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "basis": {
+          "$ref": "#/$defs/Text"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "$ref": "#/$defs/IsolationTarget"
+        },
+        "bindings": {
+          "$ref": "#/$defs/BindingsL2"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetL2"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReceiptL2": {
+      "type": "object",
+      "required": [
+        "id",
+        "binding",
+        "subjects",
+        "command",
+        "tools",
+        "scope",
+        "run_id",
+        "status",
+        "reports",
+        "isolation",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Report"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadL2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "run_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "isolation": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "isolation": {
+                "$ref": "#/$defs/Isolation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pass"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "run_id": {
+                "$ref": "#/$defs/ID"
+              },
+              "payload": {
+                "$ref": "#/$defs/PayloadL2"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExpectedL2": {
+      "type": "object",
+      "required": [
+        "owner",
+        "checks"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ID"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckL2"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedL2": {
+      "type": "object",
+      "required": [
+        "implementation",
+        "enforcement",
+        "checks"
+      ],
+      "properties": {
+        "implementation": {
+          "$ref": "#/$defs/Impl"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/Enforce"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptL2"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindingsL3": {
+      "type": "object",
+      "required": [
+        "obligation",
+        "scope"
+      ],
+      "properties": {
+        "obligation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetL3": {
+      "type": "object",
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PayloadL3": {
+      "type": "object",
+      "required": [
+        "cases"
+      ],
+      "properties": {
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaseResult"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckL3": {
+      "type": "object",
+      "required": [
+        "id",
+        "subjects",
+        "case_ids",
+        "level",
+        "basis",
+        "command",
+        "tools",
+        "scope",
+        "reports",
+        "isolation",
+        "bindings",
+        "target"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "case_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "basis": {
+          "$ref": "#/$defs/Text"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "$ref": "#/$defs/IsolationTarget"
+        },
+        "bindings": {
+          "$ref": "#/$defs/BindingsL3"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetL3"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReceiptL3": {
+      "type": "object",
+      "required": [
+        "id",
+        "binding",
+        "subjects",
+        "command",
+        "tools",
+        "scope",
+        "run_id",
+        "status",
+        "reports",
+        "isolation",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Report"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadL3"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "run_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "isolation": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "isolation": {
+                "$ref": "#/$defs/Isolation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pass"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "run_id": {
+                "$ref": "#/$defs/ID"
+              },
+              "payload": {
+                "$ref": "#/$defs/PayloadL3"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExpectedL3": {
+      "type": "object",
+      "required": [
+        "owner",
+        "checks"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ID"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckL3"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedL3": {
+      "type": "object",
+      "required": [
+        "implementation",
+        "enforcement",
+        "checks"
+      ],
+      "properties": {
+        "implementation": {
+          "$ref": "#/$defs/Impl"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/Enforce"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptL3"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindingsG1": {
+      "type": "object",
+      "required": [
+        "obligation",
+        "scope"
+      ],
+      "properties": {
+        "obligation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetG1": {
+      "type": "object",
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PayloadG1": {
+      "type": "object",
+      "required": [
+        "errors",
+        "warnings",
+        "report_id"
+      ],
+      "properties": {
+        "errors": {
+          "$ref": "#/$defs/Count"
+        },
+        "warnings": {
+          "$ref": "#/$defs/Count"
+        },
+        "report_id": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckG1": {
+      "type": "object",
+      "required": [
+        "id",
+        "subjects",
+        "case_ids",
+        "level",
+        "basis",
+        "command",
+        "tools",
+        "scope",
+        "reports",
+        "isolation",
+        "bindings",
+        "target"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "case_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "basis": {
+          "$ref": "#/$defs/Text"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "$ref": "#/$defs/IsolationTarget"
+        },
+        "bindings": {
+          "$ref": "#/$defs/BindingsG1"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetG1"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReceiptG1": {
+      "type": "object",
+      "required": [
+        "id",
+        "binding",
+        "subjects",
+        "command",
+        "tools",
+        "scope",
+        "run_id",
+        "status",
+        "reports",
+        "isolation",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Report"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadG1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "run_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "isolation": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "isolation": {
+                "$ref": "#/$defs/Isolation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pass"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "run_id": {
+                "$ref": "#/$defs/ID"
+              },
+              "payload": {
+                "$ref": "#/$defs/PayloadG1"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExpectedG1": {
+      "type": "object",
+      "required": [
+        "owner",
+        "checks"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ID"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckG1"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedG1": {
+      "type": "object",
+      "required": [
+        "implementation",
+        "enforcement",
+        "checks"
+      ],
+      "properties": {
+        "implementation": {
+          "$ref": "#/$defs/Impl"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/Enforce"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptG1"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindingsG2": {
+      "type": "object",
+      "required": [
+        "obligation",
+        "scope",
+        "scanners"
+      ],
+      "properties": {
+        "obligation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/ID"
+        },
+        "scanners": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetG2": {
+      "type": "object",
+      "required": [
+        "scanners"
+      ],
+      "properties": {
+        "scanners": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScannerTarget"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "PayloadG2": {
+      "type": "object",
+      "required": [
+        "scanners"
+      ],
+      "properties": {
+        "scanners": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScannerResult"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckG2": {
+      "type": "object",
+      "required": [
+        "id",
+        "subjects",
+        "case_ids",
+        "level",
+        "basis",
+        "command",
+        "tools",
+        "scope",
+        "reports",
+        "isolation",
+        "bindings",
+        "target"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "case_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "basis": {
+          "$ref": "#/$defs/Text"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "$ref": "#/$defs/IsolationTarget"
+        },
+        "bindings": {
+          "$ref": "#/$defs/BindingsG2"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetG2"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReceiptG2": {
+      "type": "object",
+      "required": [
+        "id",
+        "binding",
+        "subjects",
+        "command",
+        "tools",
+        "scope",
+        "run_id",
+        "status",
+        "reports",
+        "isolation",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Report"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadG2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "run_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "isolation": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "isolation": {
+                "$ref": "#/$defs/Isolation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pass"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "run_id": {
+                "$ref": "#/$defs/ID"
+              },
+              "payload": {
+                "$ref": "#/$defs/PayloadG2"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExpectedG2": {
+      "type": "object",
+      "required": [
+        "owner",
+        "checks"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ID"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckG2"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedG2": {
+      "type": "object",
+      "required": [
+        "implementation",
+        "enforcement",
+        "checks"
+      ],
+      "properties": {
+        "implementation": {
+          "$ref": "#/$defs/Impl"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/Enforce"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptG2"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindingsD1": {
+      "type": "object",
+      "required": [
+        "obligation",
+        "scope"
+      ],
+      "properties": {
+        "obligation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetD1": {
+      "type": "object",
+      "required": [
+        "negative_cases"
+      ],
+      "properties": {
+        "negative_cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Negative"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "PayloadD1": {
+      "type": "object",
+      "required": [
+        "runs",
+        "cases"
+      ],
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaseResult"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckD1": {
+      "type": "object",
+      "required": [
+        "id",
+        "subjects",
+        "case_ids",
+        "level",
+        "basis",
+        "command",
+        "tools",
+        "scope",
+        "reports",
+        "isolation",
+        "bindings",
+        "target"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "case_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "basis": {
+          "$ref": "#/$defs/Text"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ID"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "$ref": "#/$defs/IsolationTarget"
+        },
+        "bindings": {
+          "$ref": "#/$defs/BindingsD1"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetD1"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReceiptD1": {
+      "type": "object",
+      "required": [
+        "id",
+        "binding",
+        "subjects",
+        "command",
+        "tools",
+        "scope",
+        "run_id",
+        "status",
+        "reports",
+        "isolation",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Report"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadD1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "run_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "isolation": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "isolation": {
+                "$ref": "#/$defs/Isolation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pass"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "run_id": {
+                "$ref": "#/$defs/ID"
+              },
+              "payload": {
+                "$ref": "#/$defs/PayloadD1"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExpectedD1": {
+      "type": "object",
+      "required": [
+        "owner",
+        "checks"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ID"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckD1"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedD1": {
+      "type": "object",
+      "required": [
+        "implementation",
+        "enforcement",
+        "checks"
+      ],
+      "properties": {
+        "implementation": {
+          "$ref": "#/$defs/Impl"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/Enforce"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptD1"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExpectedDimensions": {
+      "type": "object",
+      "required": [
+        "L1",
+        "L2",
+        "L3",
+        "G1",
+        "G2",
+        "D1"
+      ],
+      "properties": {
+        "L1": {
+          "$ref": "#/$defs/ExpectedL1"
+        },
+        "L2": {
+          "$ref": "#/$defs/ExpectedL2"
+        },
+        "L3": {
+          "$ref": "#/$defs/ExpectedL3"
+        },
+        "G1": {
+          "$ref": "#/$defs/ExpectedG1"
+        },
+        "G2": {
+          "$ref": "#/$defs/ExpectedG2"
+        },
+        "D1": {
+          "$ref": "#/$defs/ExpectedD1"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedDimensions": {
+      "type": "object",
+      "required": [
+        "L1",
+        "L2",
+        "L3",
+        "G1",
+        "G2",
+        "D1"
+      ],
+      "properties": {
+        "L1": {
+          "$ref": "#/$defs/ObservedL1"
+        },
+        "L2": {
+          "$ref": "#/$defs/ObservedL2"
+        },
+        "L3": {
+          "$ref": "#/$defs/ObservedL3"
+        },
+        "G1": {
+          "$ref": "#/$defs/ObservedG1"
+        },
+        "G2": {
+          "$ref": "#/$defs/ObservedG2"
+        },
+        "D1": {
+          "$ref": "#/$defs/ObservedD1"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Expectation": {
+      "type": "object",
+      "required": [
+        "schema",
+        "binding",
+        "policy_cases",
+        "dimensions"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/Version"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "policy_cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PolicyCase"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "dimensions": {
+          "$ref": "#/$defs/ExpectedDimensions"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Evidence": {
+      "type": "object",
+      "required": [
+        "schema",
+        "binding",
+        "dimensions"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/Version"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/ObservedDimensions"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

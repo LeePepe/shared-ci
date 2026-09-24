@@ -1,0 +1,14 @@
+# Important paths need Owner review.
+/.github/            @LeePepe
+/.githooks/          @LeePepe
+/AGENTS.md           @LeePepe
+/ai/                 @LeePepe
+/schemas/            @LeePepe
+/docs/architecture/  @LeePepe
+**/tech-context.md   @LeePepe
+/scripts/verify      @LeePepe
+/scripts/quality/    @LeePepe
+/scripts/lint/       @LeePepe
+/scripts/policy/     @LeePepe
+/scripts/review/     @LeePepe
+/templates/          @LeePepe

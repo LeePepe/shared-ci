@@ -1,0 +1,87 @@
+name: codex-review
+
+# Reusable required AI review gate. Call it from a `pull_request_target`
+# workflow on the default branch (templates/review.yml). Safety properties:
+#   * job-level fork guard: fork PRs never reach the self-hosted runner;
+#   * the workspace is the TRUSTED BASE commit; PR head is fetched as objects
+#     and read only as a diff, never checked out or executed;
+#   * review scripts come from this shared-ci revision (job.workflow_sha).
+# Verdict: no blockers -> pass; critical/high blockers -> PR comment + failure;
+# tool/setup/parse errors -> PR comment + failure (fail closed).
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: JSON array of runner labels for the local-CLI runner.
+        type: string
+        default: '["self-hosted", "macOS", "ARM64"]'
+      codex-launcher:
+        description: Optional base-tree launcher that routes codex to a local provider (receives the codex binary and exec args).
+        type: string
+        default: ""
+      codex-bin:
+        type: string
+        default: codex
+      rules-file:
+        description: Base-tree file with repository review rules (default AGENTS.md).
+        type: string
+        default: ""
+      max-diff-bytes:
+        type: number
+        default: 200000
+      timeout-minutes:
+        type: number
+        default: 25
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  codex-review:
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Check out trusted base (never the PR head)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      - name: Check out shared-ci review scripts at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Run codex review on the PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REPO: ${{ github.repository }}
+          SHARED_CI_DIR: ${{ github.workspace }}/.shared-ci
+          CODEX_BIN: ${{ inputs.codex-bin }}
+          CODEX_LAUNCHER: ${{ inputs.codex-launcher }}
+          REVIEW_RULES_FILE: ${{ inputs.rules-file }}
+          REVIEW_MAX_BYTES: ${{ inputs.max-diff-bytes }}
+        run: bash .shared-ci/scripts/review/codex-review.sh
+
+  codex-review-fork:
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::Fork pull requests are not reviewed on self-hosted runners; a maintainer must re-open the change from a branch in this repository."
+          exit 1

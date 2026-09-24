@@ -1,0 +1,28 @@
+# Caller workflow. Copy to .github/workflows/ci.yml. Replace every
+# <40-char-sha> with ONE shared-ci commit SHA (the same one AGENTS.md points to).
+name: ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    uses: LeePepe/shared-ci/.github/workflows/quality.yml@<40-char-sha>
+    with:
+      runs-on: macos-15
+      setup-command: ""
+      verify-command: scripts/verify --all
+      lint-command: ""
+      build-command: ""
+      test-command: ""

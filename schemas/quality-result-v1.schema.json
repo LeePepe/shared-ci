@@ -1,0 +1,599 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "6DQ reconciliation result v1",
+  "description": "Self-contained, local-reference-only result structure. Runtime fixes findings, ordering, one first failure per check, fallback dimensions and acceptance/exception coupling. No authenticity, enforcement or Ship proof. A reported enforcement enum is retained separately from assurance.",
+  "type": "object",
+  "required": [
+    "schema",
+    "binding",
+    "required_acceptable",
+    "dimensions",
+    "findings",
+    "applied_exceptions",
+    "assurance"
+  ],
+  "properties": {
+    "schema": {
+      "$ref": "#/$defs/Version"
+    },
+    "binding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Binding"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "required_acceptable": {
+      "type": "boolean"
+    },
+    "dimensions": {
+      "$ref": "#/$defs/ResultDimensions"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Finding"
+      }
+    },
+    "applied_exceptions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ID"
+      },
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "description": "Sorted union, empty unless all required checks pass."
+    },
+    "assurance": {
+      "type": "object",
+      "required": [
+        "authenticity",
+        "enforcement",
+        "ship"
+      ],
+      "properties": {
+        "authenticity": {
+          "const": "not_verified"
+        },
+        "enforcement": {
+          "const": "not_verified"
+        },
+        "ship": {
+          "const": "not_assessed"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Version": {
+      "type": "integer",
+      "const": 1
+    },
+    "Binding": {
+      "type": "object",
+      "required": [
+        "candidate",
+        "policy",
+        "phase",
+        "mapping"
+      ],
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/Candidate"
+        },
+        "policy": {
+          "$ref": "#/$defs/Pin"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "mapping": {
+          "$ref": "#/$defs/Mapping"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Candidate": {
+      "type": "object",
+      "required": [
+        "repository_id",
+        "revision",
+        "tree"
+      ],
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepoID"
+        },
+        "revision": {
+          "$ref": "#/$defs/SHA"
+        },
+        "tree": {
+          "$ref": "#/$defs/SHA"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RepoID": {
+      "type": "string",
+      "maxLength": 4096,
+      "pattern": "^[1-9][0-9]*(?![\\s\\S])"
+    },
+    "SHA": {
+      "type": "string",
+      "pattern": "^(?!0{40}(?![\\s\\S]))[0-9a-f]{40}(?![\\s\\S])"
+    },
+    "Pin": {
+      "type": "object",
+      "required": [
+        "repository_id",
+        "revision"
+      ],
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepoID"
+        },
+        "revision": {
+          "$ref": "#/$defs/SHA"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Phase": {
+      "type": "string",
+      "enum": [
+        "actions",
+        "pre_commit",
+        "pre_push"
+      ]
+    },
+    "Mapping": {
+      "type": "object",
+      "required": [
+        "kind",
+        "tested_revision",
+        "tested_tree",
+        "source_revisions",
+        "evidence"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "merge"
+          ]
+        },
+        "tested_revision": {
+          "$ref": "#/$defs/SHA"
+        },
+        "tested_tree": {
+          "$ref": "#/$defs/SHA"
+        },
+        "source_revisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SHA"
+          },
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Strictly increasing by id (strings by code point; Subjects by repository_id/revision/path/layer; Exclusions by path). Runtime enforces identity uniqueness and order."
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Report"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Report": {
+      "type": "object",
+      "required": [
+        "id",
+        "ref",
+        "digest"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "ref": {
+          "$ref": "#/$defs/Text"
+        },
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ID": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}(?![\\s\\S])",
+      "maxLength": 128
+    },
+    "Text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f-\\u009f])(?=[\\s\\S]*[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])[\\s\\S]+(?![\\s\\S])",
+      "description": "Nonblank by Python whitespace semantics, strict UTF-8, no C0/C1. Runtime bounds UTF-8 bytes (not code points) at 4096."
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^(?!0{64}(?![\\s\\S]))[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "ResultDimensions": {
+      "type": "object",
+      "required": [
+        "L1",
+        "L2",
+        "L3",
+        "G1",
+        "G2",
+        "D1"
+      ],
+      "properties": {
+        "L1": {
+          "$ref": "#/$defs/DimensionResult"
+        },
+        "L2": {
+          "$ref": "#/$defs/DimensionResult"
+        },
+        "L3": {
+          "$ref": "#/$defs/DimensionResult"
+        },
+        "G1": {
+          "$ref": "#/$defs/DimensionResult"
+        },
+        "G2": {
+          "$ref": "#/$defs/DimensionResult"
+        },
+        "D1": {
+          "$ref": "#/$defs/DimensionResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DimensionResult": {
+      "type": "object",
+      "required": [
+        "owner",
+        "implementation",
+        "enforcement",
+        "latest",
+        "checks",
+        "gaps"
+      ],
+      "properties": {
+        "owner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "implementation": {
+          "$ref": "#/$defs/Impl"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/Enforce"
+        },
+        "latest": {
+          "$ref": "#/$defs/Result"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckResult"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Runtime sorted by unique id."
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Gap"
+          },
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "description": "Runtime sorted by unique check_id."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Impl": {
+      "type": "string",
+      "enum": [
+        "not_implemented",
+        "partial",
+        "implemented",
+        "unknown"
+      ]
+    },
+    "Enforce": {
+      "type": "string",
+      "enum": [
+        "local",
+        "ci",
+        "remote_required_verified",
+        "unknown"
+      ]
+    },
+    "Result": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "not_run",
+        "unavailable",
+        "unknown",
+        "unsupported"
+      ]
+    },
+    "CheckResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "requirement",
+        "observed",
+        "result",
+        "findings"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ID"
+        },
+        "requirement": {
+          "$ref": "#/$defs/Level"
+        },
+        "observed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Status"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "$ref": "#/$defs/Result"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "maxItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "Level": {
+      "type": "string",
+      "enum": [
+        "required",
+        "advisory"
+      ]
+    },
+    "Status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "failure",
+        "cancelled",
+        "skipped",
+        "manual",
+        "unmeasured",
+        "planned",
+        "not_run",
+        "unavailable",
+        "unknown"
+      ]
+    },
+    "Finding": {
+      "type": "object",
+      "required": [
+        "layer",
+        "path",
+        "kind",
+        "detail",
+        "red_lines"
+      ],
+      "properties": {
+        "layer": {
+          "$ref": "#/$defs/Text"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Path"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        },
+        "detail": {
+          "$ref": "#/$defs/Text"
+        },
+        "red_lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Text"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_input_invalid"
+            },
+            "detail": {
+              "const": "Input structure is invalid."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_limit_exceeded"
+            },
+            "detail": {
+              "const": "Input exceeds transport limits."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_unsupported"
+            },
+            "detail": {
+              "const": "Evaluation requires unsupported semantics."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_policy_rejected"
+            },
+            "detail": {
+              "const": "Existing policy evaluation rejected the case."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_contract_invalid"
+            },
+            "detail": {
+              "const": "Expected obligation mapping is invalid."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_binding_mismatch"
+            },
+            "detail": {
+              "const": "Observed identity or scope differs."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_missing"
+            },
+            "detail": {
+              "const": "Expected receipt is missing."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_nonpass"
+            },
+            "detail": {
+              "const": "Observed execution is not a pass."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_measurement"
+            },
+            "detail": {
+              "const": "Required measurements do not satisfy the obligation."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_coverage"
+            },
+            "detail": {
+              "const": "Required evidence coverage is incomplete or unsuccessful."
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_isolation"
+            },
+            "detail": {
+              "const": "Isolation evidence does not satisfy the obligation."
+            }
+          }
+        }
+      ]
+    },
+    "Path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?![\\s\\S]*[\\\\\\u0000-\\u001f\\u007f-\\u009f])(?!(?:\\.{1,2})(?:/|(?![\\s\\S])))[^/]+(?:/(?!(?:\\.{1,2})(?:/|(?![\\s\\S])))[^/]+)*(?![\\s\\S])",
+      "description": "Literal Git-relative UTF-8 path, no normalization; runtime also bounds UTF-8 byte length."
+    },
+    "Kind": {
+      "type": "string",
+      "enum": [
+        "quality_input_invalid",
+        "quality_limit_exceeded",
+        "quality_unsupported",
+        "quality_policy_rejected",
+        "quality_contract_invalid",
+        "quality_binding_mismatch",
+        "quality_missing",
+        "quality_nonpass",
+        "quality_measurement",
+        "quality_coverage",
+        "quality_isolation"
+      ]
+    },
+    "Gap": {
+      "type": "object",
+      "required": [
+        "check_id",
+        "kind"
+      ],
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/ID"
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
