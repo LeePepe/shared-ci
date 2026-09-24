@@ -4,8 +4,10 @@
 Compares the PR head with merge-base(base, head); stdlib only, fail-closed.
 
 Losses (no netting: adding unrelated tests never offsets a loss):
-  assertion_removed  an assertion line removed from a test file that is not
-                     re-added (whitespace-normalized) anywhere in the same diff
+  assertion_removed  an assertion statement (a multiline call is one statement,
+                     joined by paren depth) present at the base of a changed
+                     test file and absent, whitespace-normalized, from every
+                     changed test file at the head
   test_removed       a test name present at the base and absent at the head
   skip_added         a new skip/disable marker in a test file
   test_file_deleted  a deleted test file (its tests and assertions are losses too)
@@ -121,6 +123,46 @@ def is_test_path(path: str) -> bool:
     return not (path.startswith("scripts/") and not TEST_DIR.search(path))
 
 
+def _strip_strings(line: str) -> str:
+    """Line with string/char literal contents removed, for paren counting only."""
+    return re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', '""', line)
+
+
+def _statement(text: str) -> str:
+    """Whitespace-insensitive around brackets/commas and trailing commas, so reformatting is not a loss."""
+    text = _norm(text)
+    text = re.sub(r"\s*([()\[\]{},])\s*", r"\1", text)
+    return re.sub(r",([)\]}])", r"\1", text)
+
+
+def assertions(text: str) -> list[str]:
+    """Normalized assertion statements; a call spanning lines (by paren depth) is one statement.
+
+    Changing or deleting any line of a multiline `#expect(` / `XCTAssertEqual(` changes
+    the whole statement, so it cannot slip through a line-based diff.
+    """
+    statements: list[str] = []
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        match = ASSERTION.search(line)
+        if not match:
+            index += 1
+            continue
+        parts = [line]
+        tail = _strip_strings(line[match.start():])
+        depth = tail.count("(") - tail.count(")")
+        while depth > 0 and index + 1 < len(lines) and len(parts) < 200:
+            index += 1
+            parts.append(lines[index])
+            code = _strip_strings(lines[index])
+            depth += code.count("(") - code.count(")")
+        statements.append(_statement(" ".join(parts)))
+        index += 1
+    return statements
+
+
 def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
     """Every loss in merge-base(base, head)..head, each with its file."""
     merge_base = _git(root, "merge-base", base, head).strip()
@@ -129,40 +171,32 @@ def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
     status = _git(root, "diff", "--name-status", "--no-renames", "-z", merge_base, head, "--").split("\0")
     changed = {status[i + 1]: status[i] for i in range(0, len(status) - 1, 2) if status[i]}
     tests = {path: kind for path, kind in changed.items() if is_test_path(path)}
-    removed: list[tuple[str, str]] = []
-    added_lines: collections.Counter[str] = collections.Counter()
     found: list[dict[str, str]] = []
     diff = _git(root, "diff", "--unified=0", "--no-color", "--no-renames", merge_base, head, "--",
                 *sorted(tests)) if tests else ""
     current = None
     for line in diff.splitlines():
-        if line.startswith("--- "):
-            current = line[6:] if line.startswith("--- a/") else None
-            continue
         if line.startswith("+++ "):
-            current = line[6:] if line.startswith("+++ b/") else current
-            continue
-        if current is None or not line[:1] in "+-":
-            continue
-        body = line[1:]
-        if line[0] == "-" and ASSERTION.search(body):
-            removed.append((current, _norm(body)))
-        elif line[0] == "+":
-            added_lines[_norm(body)] += 1
-            if SKIP.search(body):
-                found.append({"kind": "skip_added", "file": current, "detail": body.strip()[:160]})
-    for path, text in removed:  # multiset: one re-added copy excuses one removal
-        if added_lines[text] > 0:
-            added_lines[text] -= 1
-        else:
-            found.append({"kind": "assertion_removed", "file": path, "detail": text[:160]})
-    base_names: dict[str, collections.Counter[str]] = {}
+            current = line[6:] if line.startswith("+++ b/") else None
+        elif current and line.startswith("+") and SKIP.search(line[1:]):
+            found.append({"kind": "skip_added", "file": current, "detail": line[1:].strip()[:160]})
+    base_texts = {path: _show(root, merge_base, path) for path, kind in tests.items() if kind != "A"}
+    head_texts = {path: _show(root, head, path) for path, kind in tests.items() if kind != "D"}
+    # Assertion statements: multiset across all changed test files (moves pass, no netting).
+    head_statements: collections.Counter[str] = collections.Counter()
+    for text in head_texts.values():
+        head_statements.update(assertions(text))
+    for path in sorted(base_texts):
+        for statement in assertions(base_texts[path]):
+            if head_statements[statement] > 0:
+                head_statements[statement] -= 1
+            else:
+                found.append({"kind": "assertion_removed", "file": path, "detail": statement[:160]})
+    base_names = {path: _names(text) for path, text in base_texts.items()}
     head_names: collections.Counter[str] = collections.Counter()
-    for path, kind in tests.items():
-        if kind != "A":
-            base_names[path] = _names(_show(root, merge_base, path))
-        if kind != "D":
-            head_names += _names(_show(root, head, path))
+    for text in head_texts.values():
+        head_names += _names(text)
+    for path, kind in sorted(tests.items()):
         if kind == "D":
             found.append({"kind": "test_file_deleted", "file": path, "detail": "test file deleted"})
     for path, names in sorted(base_names.items()):  # multiset: a move between files passes

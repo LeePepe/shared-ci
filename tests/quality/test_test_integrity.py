@@ -358,6 +358,47 @@ class TestIntegrityTests(unittest.TestCase):
         result = self.repo.check()
         self.assertTrue(any(l["kind"] == "test_removed" and l["detail"] == "multi" for l in result["losses"]))
 
+    # ---- multiline assertions (VoxPocket #65 codex round 4) ------------------
+    MULTI = ('import XCTest\nimport Testing\n\n@Test func rejects() {\n    #expect(\n        !valid("../secret")\n    )\n}\n\n'
+             'final class E: XCTestCase {\n    func testEq() {\n        XCTAssertEqual(\n            parse("a"),\n'
+             '            "a",\n            "parses (plain) input"\n        )\n    }\n}\n')
+
+    def multi_base(self):
+        self.repo.write("Tests/MultiAssertTests.swift", self.MULTI)
+        self.repo.base = self.repo.commit()
+        return "Tests/MultiAssertTests.swift"
+
+    def test_multiline_expect_condition_change_fails(self):
+        path = self.multi_base()
+        self.repo.edit(path, '        !valid("../secret")\n', "        true\n")
+        result = self.repo.check()
+        self.assertEqual([path], result["undeclared"])
+        self.assertIn("assertion_removed", self.kinds(result))
+
+    def test_multiline_xctassert_argument_deleted_fails(self):
+        path = self.multi_base()
+        self.repo.edit(path, '            "a",\n', "")
+        self.assertIn("assertion_removed", self.kinds(self.repo.check()))
+
+    def test_multiline_assertion_moved_to_another_file_passes(self):
+        path = self.multi_base()
+        block = '        XCTAssertEqual(\n            parse("a"),\n            "a",\n            "parses (plain) input"\n        )\n'
+        self.repo.edit(path, block, "")
+        self.repo.write("Tests/MovedTests.swift", "import XCTest\nfinal class M: XCTestCase {\n    func testEq() {\n"
+                        + block.replace("        ", "      ") + "    }\n}\n")
+        self.assertEqual("pass", self.repo.check()["verdict"])
+
+    def test_multiline_assertion_reformatted_in_place_passes(self):
+        path = self.multi_base()
+        self.repo.edit(path, '    #expect(\n        !valid("../secret")\n    )\n', '    #expect(!valid("../secret"))\n')
+        result = self.repo.check()
+        self.assertTrue(all(l["kind"] != "assertion_removed" or "secret" not in l["detail"] for l in result["losses"]),
+                        result["losses"])
+
+    def test_assertions_statement_joining(self):
+        self.assertEqual(['#expect(!valid("../secret"))',
+                          'XCTAssertEqual(parse("a"),"a","parses(plain)input")'], ti.assertions(self.MULTI))
+
     def test_s5_probe_shape_is_blocked(self):
         # S5 G1 replay: one assertion deleted from an input-validation test, template says "none".
         self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
