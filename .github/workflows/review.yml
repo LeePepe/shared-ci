@@ -1,0 +1,23 @@
+name: review
+
+# AI review for shared-ci's own PRs (dogfood; pinned to an earlier commit).
+# pull_request_target evaluates this file from main, so it takes effect after merge.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review-target:
+    uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@9ff304e317a5ff924a4c488515ead5a607d28236
+
+  kimi-review:
+    uses: LeePepe/shared-ci/.github/workflows/kimi-review.yml@9ff304e317a5ff924a4c488515ead5a607d28236

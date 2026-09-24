@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# shared-ci's own verification entry (same entry for .githooks/pre-push and CI).
+#   scripts/verify         all suites (the suites are fast; no layer selection)
+#   scripts/verify --all   same
+# Uses only python3 (3.9+) stdlib, git and POSIX shell.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+python="${PYTHON:-python3}"
+
+step() { printf '\n[verify] %s\n' "$*"; }
+
+step "syntax"
+for entry in audit resolve layers field contexts run; do /bin/sh -n "scripts/context/$entry"; done
+for script in scripts/review/*.sh scripts/ruleset/apply.sh templates/scripts/verify templates/githooks/pre-push .githooks/pre-push; do
+    bash -n "$script"
+done
+"$python" -I -B -c 'import ast,sys; [ast.parse(open(p).read(), p) for p in sys.argv[1:]]' $(git ls-files '*.py')
+"$python" -I -B -c 'import json,sys; [json.load(open(p)) for p in sys.argv[1:]]' $(git ls-files '*.json')
+
+step "layer map + repository contract (self-applied)"
+"$python" -I -B scripts/context/_context.py audit
+
+step "workflow-lint (self-applied)"
+"$python" -I -B scripts/lint/workflows.py --root .
+
+step "unit tests"
+for suite in context repo lint review ruleset; do
+    "$python" -I -B -m unittest discover -s "tests/$suite" -p 'test_*.py'
+done
+"$python" -I -B -m unittest discover -s tests/quality -p 'test_gate.py'
+"$python" -I -S -B -m unittest discover -s tests/policy -p 'test_validation.py'
+"$python" -I -S -B tests/quality/test_aggregation.py
+
+step "whitespace"
+git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- . ':!*.patch' >/dev/null
+
+echo "[verify] ok"
