@@ -133,7 +133,7 @@ jobs:
           MODE: ${{ inputs.changed-only && 'changed-only' || 'disabled' }}
           FORCE_FULL_PATHS: ${{ inputs.force-full-paths }}
         run: |
-          python3 .shared-ci/scripts/select/select.py --mode "$MODE" --event "$EVENT" \
+          python3 .shared-ci/scripts/select/layers.py --mode "$MODE" --event "$EVENT" \
             --base "$BASE_SHA" --head "$HEAD_SHA" --force-full-paths "$FORCE_FULL_PATHS" \
             --github-output "$GITHUB_OUTPUT" --step-summary "$GITHUB_STEP_SUMMARY"
 

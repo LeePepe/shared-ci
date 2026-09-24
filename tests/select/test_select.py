@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts" / "select" / "select.py"
+SCRIPT = REPO / "scripts" / "select" / "layers.py"
 SPEC = importlib.util.spec_from_file_location("shared_ci_select", SCRIPT)
 select = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(select)
@@ -321,6 +321,16 @@ class SelectionTests(unittest.TestCase):
                   "C": {"dependencies": ["B"]}, "D": {"dependencies": [], "dependents": ["A"]}}
         self.assertEqual({"B", "C"}, select.dependents_closure(layers, {"B"}))
         self.assertEqual({"D", "A"}, select.dependents_closure(layers, {"D"}))
+
+    def test_plain_python_invocation_selects(self):
+        # The workflows run `python3 scripts/select/layers.py` without -I; the script's
+        # directory is then sys.path[0] and must not shadow a stdlib module.
+        self.repo.change("src/tools/snap.py")
+        result = subprocess.run([sys.executable, str(SCRIPT), "--event", "pull_request", "--base", self.repo.base,
+                                 "--head", self.repo.rev()], cwd=self.repo.root, env=self.repo.env,
+                                capture_output=True, text=True, timeout=60)
+        data = json.loads(result.stdout)
+        self.assertEqual((False, ["Tools"], []), (data["full"], data["layers"], data["triggers"]))
 
     def test_usage_error_exits_2(self):
         self.assertEqual(2, self.repo.cli().returncode)

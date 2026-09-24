@@ -8,7 +8,7 @@ closed, lanes that always report, and an aggregate that knows the difference.
 
 ## 1. Selector
 
-[`scripts/select/select.py`](../scripts/select/select.py) runs in the `select`
+[`scripts/select/layers.py`](../scripts/select/layers.py) runs in the `select`
 job of [`quality.yml`](../.github/workflows/quality.yml) and in the reusable
 [`select.yml`](../.github/workflows/select.yml), both at the pinned SHA.
 
