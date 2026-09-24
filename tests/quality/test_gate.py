@@ -15,7 +15,7 @@ SPEC.loader.exec_module(gate)
 ACTIONS = REPO / "scripts/quality/gate_actions.py"
 HEAD = "a" * 40
 OLD = "b" * 40
-LANES = ["verify", "lint", "build", "test", "contract", "workflow-lint"]
+LANES = ["verify", "lint", "build", "test", "contract", "workflow-lint", "test-integrity"]
 SECTIONS = ["Existing behaviour", "Intent", "Compatibility", "Removed or weakened tests or policy", "Test evidence"]
 BODY = f"""## Existing behaviour
 Parses config once at start-up.
@@ -96,6 +96,10 @@ class AggregateNegativeTests(unittest.TestCase):
     def test_selected_unknown_or_empty_result(self):
         self.assertFails(with_lane("verify", result=""), "'unknown'")
         self.assertFails(with_lane("verify", result="neutral"), "'neutral'")
+
+    def test_selected_test_integrity_failure_fails(self):
+        data = with_lane("test-integrity", selected=True, result="failure", tested_sha=HEAD)
+        self.assertFails(data, "selected lane test-integrity result is 'failure'")
 
     def test_unselected_lane_failure(self):
         self.assertFails(with_lane("build", result="failure"), "unselected lane build")

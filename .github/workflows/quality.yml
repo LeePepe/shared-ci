@@ -64,6 +64,10 @@ on:
         description: Run shared-ci workflow-lint on the caller's .github/workflows.
         type: boolean
         default: true
+      test-integrity:
+        description: Fail on removed or weakened tests (per assertion and per test, no netting) unless each file is declared in .github/test-weakening.md with an approver and named in the PR body (pull_request events; v0.2.1+).
+        type: boolean
+        default: true
       check-pr-body:
         description: Require the PR template's sections to be filled (pull_request events).
         type: boolean
@@ -380,9 +384,57 @@ jobs:
       - name: Lint caller workflows
         run: python3 .shared-ci/scripts/lint/workflows.py --root .
 
+  test-integrity:
+    if: inputs.test-integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tested-sha: ${{ steps.sha.outputs.tested-sha }}
+      ran: "true"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: sha
+        run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check out shared-ci at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Removed or weakened tests must be declared
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+        run: |
+          case "$EVENT" in
+            pull_request|pull_request_target) ;;
+            *) echo "not a pull request ($EVENT): test integrity is checked before merge"; exit 0 ;;
+          esac
+          # Live PR body, so an edited body plus re-run is honoured (same source as the aggregate).
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > "$RUNNER_TEMP/pr-body.md"
+          python3 .shared-ci/scripts/quality/test_integrity.py --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --body-file "$RUNNER_TEMP/pr-body.md"
+
   aggregate:
     name: aggregate
-    needs: [select, verify, lint, build, test, contract, workflow-lint]
+    needs: [select, verify, lint, build, test, contract, workflow-lint, test-integrity]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -419,5 +471,6 @@ jobs:
           TEST_SELECTED: ${{ inputs.test-command != '' }}
           CONTRACT_SELECTED: ${{ inputs.contract-audit }}
           WORKFLOW_LINT_SELECTED: ${{ inputs.workflow-lint }}
+          TEST_INTEGRITY_SELECTED: ${{ inputs.test-integrity }}
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: python3 .shared-ci/scripts/quality/gate_actions.py

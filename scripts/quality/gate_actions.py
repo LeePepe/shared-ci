@@ -17,7 +17,7 @@ import sys
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
-LANES = ("verify", "lint", "build", "test", "contract", "workflow-lint")
+LANES = ("verify", "lint", "build", "test", "contract", "workflow-lint", "test-integrity")
 LAYER_LANES = ("verify", "lint", "build", "test")
 
 

@@ -42,6 +42,25 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
     SHA or exact version.
 - If a check is wrong, fix it in its own PR that states the reason and needs
   Owner review. Do not work around it in a feature PR.
+- **Declaring a removed or weakened test.** `quality / test-integrity` fails
+  on any loss in the PR diff unless the loss is declared. It checks each
+  assertion and each test separately, so adding unrelated tests cannot
+  offset a loss. A loss is:
+  - a removed assertion that is not re-added elsewhere in the diff;
+  - a removed test (by name);
+  - a new skip or disable marker;
+  - a deleted test file.
+
+  To declare a loss, the Owner must approve it, and then you:
+  1. add one line per affected test file to `.github/test-weakening.md` in
+     the same PR: `- <test file path>: <reason> (approved: @<owner>)`.
+     That file is under `/.github/`, which CODEOWNERS covers, so the PR
+     cannot merge without the Owner's code-owner review;
+  2. name every affected file in the PR section `Removed or weakened tests
+     or policy`. The check compares that section with the diff, so `none`
+     fails when there is a loss.
+
+  Moving an assertion or a test to another file is not a loss.
 - With changed-layer selection (`changed-only: true`, see
   `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
   touches plus their dependents. A lane that prints `not selected: <reason>`
@@ -109,12 +128,23 @@ test, a contract or audit check, or a small lint rule. Do not answer an
 incident by making a prompt longer. If the guard belongs in shared-ci, open a
 shared-ci PR and link it.
 
-## 8. Never commit
+## 8. Never commit or print
 
-- Credentials, tokens or keys.
+- Credentials, tokens or keys. Never run a command that prints a token,
+  even partly masked, into a log or transcript: `gh auth status`,
+  `gh auth token`, `echo $GH_TOKEN`, `env`/`printenv` dumps,
+  `git config --get-all credential.*`, or `set -x` around token use. To
+  check identity, use `git config user.email` and `gh api user` (for a
+  GitHub App: `gh api /repos/<owner>/<repo> --jq .full_name`).
 - Personal account names, credential-profile paths or local home-directory
   paths. `scripts/context audit` rejects them.
 - Generated local evidence files. The PR and its checks are the record.
+
+Tool attribution is allowed and is not an identity leak. This covers
+`Co-Authored-By: <tool> <noreply@...>` commit trailers and generated-by
+footers in PR bodies, as long as they name the tool and contain no personal
+account, profile path or home path. The contract audit (item 8) does not
+flag them.
 
 ## 9. When you are blocked
 

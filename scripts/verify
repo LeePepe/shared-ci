@@ -30,6 +30,7 @@ for suite in context repo lint review ruleset select; do
     "$python" -I -B -m unittest discover -s "tests/$suite" -p 'test_*.py'
 done
 "$python" -I -B -m unittest discover -s tests/quality -p 'test_gate.py'
+"$python" -I -B -m unittest discover -s tests/quality -p 'test_test_integrity.py'
 "$python" -I -S -B -m unittest discover -s tests/policy -p 'test_validation.py'
 "$python" -I -S -B tests/quality/test_aggregation.py
 

@@ -192,6 +192,14 @@ class ContractNegativeTests(unittest.TestCase):
         self.assertFinding("contract_identity", "credential profile directory")
 
 
+    def test_tool_attribution_is_not_an_identity_finding(self):
+        # G8: tool attribution trailers and PR footers are allowed (agent-protocol §8).
+        self.repo.write("docs/release.md", "Co-Authored-By: Claude <noreply@anthropic.com>\n"
+                        "Co-authored-by: bot[bot] <1+bot[bot]@users.noreply.github.com>\n"
+                        "Generated with [Claude Code](https://claude.com/claude-code)\n")
+        self.assertNotIn("contract_identity", self.repo.kinds())
+
+
 class LegacyFormatUnaffectedTests(unittest.TestCase):
     def test_legacy_context_tree_skips_contract(self):
         repo = ContractRepo()

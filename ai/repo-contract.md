@@ -22,7 +22,24 @@ and `kind: "contract_<item>"`.
 | 5 `ruleset` | The default-branch ruleset is code: [`templates/ruleset.json`](../templates/ruleset.json). It blocks deletion and non-fast-forward, requires a PR, requires `quality / aggregate` and `codex-review-target / codex-review` plus caller extras, requires code-owner review, allows no bypass actors, and uses strict=false unless the caller opts in. CODEOWNERS covers the important paths | enforced | audit checks that CODEOWNERS exists and covers `/.github/` and `/AGENTS.md`. [`scripts/ruleset/plan.py`](../scripts/ruleset/plan.py) computes old → new from the API dumps and keeps every existing required check unless `--map OLD=NEW` says otherwise. [`scripts/ruleset/apply.sh`](../scripts/ruleset/apply.sh) is a dry run by default; with `--apply` it applies the change and reads it back | the ruleset step itself: dry run, then Owner approval, then `--apply`, then readback (it needs admin API access) |
 | 6 `pr_template` | `.github/pull_request_template.md` with the sections `Existing behaviour`, `Intent`, `Compatibility`, `Removed or weakened tests or policy`, `Test evidence` | guidance + enforced | audit checks that the template has every section. The `quality / aggregate` check fails a PR whose body is missing a section, leaves one empty or placeholder-only, or names a tested SHA other than the head | the Owner label for removed tests |
 | 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
-| 8 `identity` | No personal account names, credential-profile paths or local home paths | red line | audit scans every tracked text file for the `forbidden_patterns` | account names in prose that the patterns do not cover |
+| 8 `identity` | No personal account names, credential-profile paths or local home paths. Tool attribution (`Co-Authored-By: <tool> <noreply@…>` trailers, generated-by PR footers) is allowed | red line | audit scans every tracked text file for the `forbidden_patterns`, which never match tool attribution | account names in prose that the patterns do not cover |
+
+## Test integrity
+
+`quality.yml`'s `test-integrity` lane is on by default from v0.2.1, and the
+aggregate requires it. On a pull request it fails on any removed or weakened
+test that is not declared. A loss is any of these:
+
+- a removed assertion that is not re-added in the diff;
+- a removed test name;
+- a new skip marker;
+- a deleted test file.
+
+Each affected file needs an added line in `.github/test-weakening.md`
+(`- <path>: <reason> (approved: @<owner>)`, Owner-gated through CODEOWNERS
+`/.github/`) and must be named in the PR section `Removed or weakened tests
+or policy`. A section that says "none" while the diff removes a test fails.
+Template: [`templates/test-weakening.md`](../templates/test-weakening.md).
 
 ## Changed-layer selection (optional)
 
