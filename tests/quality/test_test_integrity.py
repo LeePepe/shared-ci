@@ -323,7 +323,8 @@ class TestIntegrityTests(unittest.TestCase):
     def test_parity_enabled_if_marker_blocks(self):
         # VoxPocket #65 codex round 2: `.enabled(if: false)` disabled a test undetected.
         for trait in ("@Test(." + "enabled(if: false)) func rejects",
-                      "@Test(\n    .en" + "abled( if : Env.never)\n)\nfunc rejects"):
+                      "@Test(\n    .en" + "abled( if : Env.never)\n)\nfunc rejects",
+                      "@Test(\n    .en" + "abled(if: false)\n)\nfunc rejects"):  # #65 fixture
             with self.subTest(trait=trait):
                 repo = Repo()
                 self.addCleanup(repo.close)
@@ -331,6 +332,22 @@ class TestIntegrityTests(unittest.TestCase):
                 path = self.swift_testing_base()
                 repo.edit(path, "@Test func rejects", trait)
                 self.assertIn("skip_added", self.kinds(repo.check()))
+
+    def test_retagging_a_test_is_not_a_loss(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, "@Test func accepts", "@Test(.tags(.fast)) func accepts")
+        self.assertEqual("pass", self.repo.check()["verdict"])
+
+    def test_unwrap_and_raises_are_assertions(self):
+        self.repo.write("Tests/UnwrapTests.swift", "import XCTest\nfinal class U: XCTestCase {\n"
+                        "    func testU() throws {\n        _ = try XCTUnwrap(value)\n        XCTAssertTrue(true)\n    }\n}\n")
+        self.repo.write("pytests/test_r.py", "import pytest\n\ndef test_r():\n    with pytest.raises(ValueError):\n        f()\n")
+        self.repo.base = self.repo.commit()
+        self.repo.edit("Tests/UnwrapTests.swift", "        _ = try XCTUnwrap(value)\n", "")
+        self.repo.edit("pytests/test_r.py", "    with pytest.raises(ValueError):\n        f()\n", "    f()\n")
+        result = self.repo.check()
+        self.assertEqual({"Tests/UnwrapTests.swift", "pytests/test_r.py"},
+                         {l["file"] for l in result["losses"] if l["kind"] == "assertion_removed"})
 
     def test_multiline_swift_testing_name_is_tracked(self):
         multi = 'import Testing\n\n@Test(\n    .tags(.fast)\n)\nfunc multi() {\n    #expect(true)\n}\n'
