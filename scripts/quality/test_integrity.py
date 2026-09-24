@@ -58,7 +58,7 @@ TEST_NAME = [
 SKIP = re.compile(
     r"\.disabled\b|\bXCTSkip\w*\s*\(|withKnownIssue\s*\(|@unittest\.skip|\bpytest\.mark\.(skip|xfail)|"
     r"\bself\.skipTest\s*\(|\b(?:it|test|describe)\.(skip|todo)\s*\(|\bx(?:it|describe|test)\s*\(|"
-    r"\bt\.Skip(?:f|Now)?\s*\(|@Disabled\b|@Ignore\b")
+    r"\bt\.Skip(?:f|Now)?\s*\(|@Disabled\b|@Ignore\b|\.enabled\s*\(\s*if\s*:")
 
 
 class IntegrityError(Exception):
@@ -77,14 +77,30 @@ def _norm(line: str) -> str:
     return " ".join(line.split())
 
 
+SWIFT_TEST_ATTR = re.compile(r"@Test\b")
+SWIFT_FUNC = re.compile(r"\bfunc\s+(\w+)\s*\(")
+
+
 def _names(text: str) -> collections.Counter[str]:
+    """Test names; a multiline `@Test(` / traits / `func name(` counts once."""
     names: collections.Counter[str] = collections.Counter()
+    pending = False
     for line in text.splitlines():
+        if pending:
+            func = SWIFT_FUNC.search(line)
+            if func:
+                names[func.group(1)] += 1
+                pending = False
+                continue
         for pattern in TEST_NAME:
             match = pattern.search(line)
             if match:
                 names[match.group(match.lastindex)] += 1
+                pending = False
                 break
+        else:
+            if SWIFT_TEST_ATTR.search(line):
+                pending = True
     return names
 
 

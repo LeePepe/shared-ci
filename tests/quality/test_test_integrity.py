@@ -320,6 +320,27 @@ class TestIntegrityTests(unittest.TestCase):
                         'import Testing\n\n@Test func unrelated() {\n    #expect(valid("zzz"))\n}\n')
         self.assertEqual([path], self.repo.check()["undeclared"])
 
+    def test_parity_enabled_if_marker_blocks(self):
+        # VoxPocket #65 codex round 2: `.enabled(if: false)` disabled a test undetected.
+        for trait in ("@Test(." + "enabled(if: false)) func rejects",
+                      "@Test(\n    .en" + "abled( if : Env.never)\n)\nfunc rejects"):
+            with self.subTest(trait=trait):
+                repo = Repo()
+                self.addCleanup(repo.close)
+                self.repo = repo
+                path = self.swift_testing_base()
+                repo.edit(path, "@Test func rejects", trait)
+                self.assertIn("skip_added", self.kinds(repo.check()))
+
+    def test_multiline_swift_testing_name_is_tracked(self):
+        multi = 'import Testing\n\n@Test(\n    .tags(.fast)\n)\nfunc multi() {\n    #expect(true)\n}\n'
+        self.repo.write("Tests/MultiTests.swift", multi)
+        self.repo.base = self.repo.commit()
+        self.assertEqual({"multi": 1}, dict(ti._names(multi)))
+        self.repo.write("Tests/MultiTests.swift", "import Testing\n")
+        result = self.repo.check()
+        self.assertTrue(any(l["kind"] == "test_removed" and l["detail"] == "multi" for l in result["losses"]))
+
     def test_s5_probe_shape_is_blocked(self):
         # S5 G1 replay: one assertion deleted from an input-validation test, template says "none".
         self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
