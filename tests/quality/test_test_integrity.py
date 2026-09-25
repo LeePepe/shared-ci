@@ -430,7 +430,20 @@ class TestIntegrityTests(unittest.TestCase):
 
     def test_assertions_statement_joining(self):
         self.assertEqual(['#expect(!valid("../secret"))',
-                          'XCTAssertEqual(parse("a"),"a","parses(plain)input")'], ti.assertions(self.MULTI))
+                          'XCTAssertEqual(parse("a"),"a","parses (plain) input")'], ti.assertions(self.MULTI))
+
+    def test_string_literal_whitespace_change_is_a_loss(self):
+        path = self.multi_base()
+        self.repo.edit(path, '            "parses (plain) input"', '            "parses  (plain) input"')
+        result = self.repo.check()
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual([path], result["undeclared"])
+
+    def test_single_quoted_and_template_literal_contents_are_preserved(self):
+        for before, after in (("expect(value).toBe('a, b')", "expect(value).toBe('a,b')"),
+                              ('expect(value).toBe(`a  b`)', 'expect(value).toBe(`a b`)')):
+            with self.subTest(before=before):
+                self.assertNotEqual(ti.assertions(before), ti.assertions(after))
 
     def test_s5_probe_shape_is_blocked(self):
         # S5 G1 replay: one assertion deleted from an input-validation test, template says "none".

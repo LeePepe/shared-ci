@@ -128,10 +128,19 @@ def _strip_strings(line: str) -> str:
 
 
 def _statement(text: str) -> str:
-    """Whitespace-insensitive around brackets/commas and trailing commas, so reformatting is not a loss."""
+    """Normalize formatting outside literals, never assertion data inside them."""
+    literals: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        literals.append(match.group(0))
+        return f"\0{len(literals) - 1}\0"
+
+    text = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`',
+                  protect, text, flags=re.DOTALL)
     text = _norm(text)
     text = re.sub(r"\s*([()\[\]{},])\s*", r"\1", text)
-    return re.sub(r",([)\]}])", r"\1", text)
+    text = re.sub(r",([)\]}])", r"\1", text)
+    return re.sub(r"\0(\d+)\0", lambda match: literals[int(match.group(1))], text)
 
 
 def assertions(text: str) -> list[str]:
