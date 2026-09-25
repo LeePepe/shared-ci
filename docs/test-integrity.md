@@ -53,6 +53,10 @@ accepted). Each affected path needs a separate line with a non-placeholder reaso
 - "Tests/tab\tname.swift": renamed to match the suite responsibility.
 ```
 
+Heading recognition uses bounded prefix matching and linear suffix trimming,
+including long whitespace runs before invalid trailing text. No PR-body size cap
+or truncation is imposed; malformed headings still cannot declare a rationale.
+
 Plain paths, backtick-wrapped paths, or JSON-quoted paths are accepted, followed
 immediately by `:` and a reason. JSON quoting safely represents paths containing
 newlines, tabs, quotes or backticks. Paths are exact and case-sensitive;

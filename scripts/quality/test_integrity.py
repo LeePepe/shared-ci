@@ -322,10 +322,14 @@ def section_text(body: str) -> str | None:
         if marker:
             fence = marker.group(1)
             continue
-        heading = re.match(r"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
-        if heading:
+        heading = re.match(r"^ {0,3}(#{1,6})\s", line)
+        # Keep the required title character, even for whitespace-only titles.
+        if heading and heading.end() < len(line):
+            # Strip the suffix in bounded passes; overlapping regex whitespace
+            # repetitions backtrack cubically on a long malformed title.
+            title = line[heading.end():].strip().rstrip("#").rstrip()
             current = None
-            if len(heading.group(1)) in (2, 3) and heading.group(2).lower() == SECTION:
+            if len(heading.group(1)) in (2, 3) and title.lower() == SECTION:
                 sections.append([])
                 current = sections[-1]
         elif current is not None:
