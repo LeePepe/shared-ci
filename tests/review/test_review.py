@@ -301,6 +301,44 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
         self.assertIn("exceeds", result.stderr)
         self.assertIn("could not post", result.stderr)
 
+    def test_codex_budget_validator_ignores_trusted_base_re_module(self):
+        self.repo.write("re.py", 'open("poison-imported", "w").close()\nraise RuntimeError("ambient re imported")\n')
+        self.repo.git("add", "re.py")
+        self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base module")
+        self.base = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        # Include the base on PYTHONPATH to expose poison even when site startup
+        # preloads re before Python inserts the stdin cwd into its import path.
+        result, comment = self.run_script(
+            "codex-review.sh", json.dumps(PASS), HEAD_SHA=self.base, PYTHONPATH=str(self.repo.root))
+        self.assertFalse((self.repo.root / "poison-imported").exists(), result.stderr)
+        self.assertFalse((self.repo.root / "__pycache__").exists())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("No committed diff", comment)
+        self.assertFalse((self.out / "prompt").exists())
+
+    def test_codex_budget_validator_ignores_pythonpath(self):
+        # Execute the actual new here-doc and prefix, not a copy of its logic.
+        # Other existing Python invocations intentionally remain outside scope.
+        source = (REVIEW / "codex-review.sh").read_text()
+        start = source.index('BUDGET_ERROR="$(') + len('BUDGET_ERROR="$(')
+        validator = source[start:source.index('\n)" || fail_closed', start)]
+        poison = self.out / "pythonpath"
+        poison.mkdir()
+        (poison / "re.py").write_text(
+            'open("poison-imported", "w").close()\nraise RuntimeError("ambient re imported")\n')
+        (self.out / "diff").write_bytes(b"full diff")
+        for budget, expected in (("9", 0), ("8", 1), ("invalid", 1)):
+            with self.subTest(budget=budget):
+                (self.repo.root / "poison-imported").unlink(missing_ok=True)
+                env = dict(self.repo.env, WORK=str(self.out), MAX_BYTES=budget, PYTHONPATH=str(poison))
+                result = subprocess.run(["bash", "-c", validator], cwd=self.repo.root, env=env,
+                                        capture_output=True, text=True, timeout=20)
+                self.assertFalse((self.repo.root / "poison-imported").exists(), result.stderr)
+                self.assertFalse((poison / "__pycache__").exists())
+                self.assertEqual(expected, result.returncode, result.stderr)
+                if expected:
+                    self.assertIn("REVIEW_MAX_BYTES", result.stdout)
+
     def test_codex_utf8_budget_counts_bytes(self):
         self.repo.write("src/app/main.py", 'Y = "完整 diff"\n')
         self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "utf8")

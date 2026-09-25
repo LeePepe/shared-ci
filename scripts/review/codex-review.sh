@@ -54,7 +54,7 @@ git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null \
 
 # Admit the complete diff, never a prefix. Compare decimal strings in Python
 # to avoid shell integer overflow (the budget is configurable, not a PR policy).
-BUDGET_ERROR="$(python3 - "$MAX_BYTES" "$WORK/diff" <<'PYTHON'
+BUDGET_ERROR="$(python3 -I -B - "$MAX_BYTES" "$WORK/diff" <<'PYTHON'
 import os
 import re
 import sys
