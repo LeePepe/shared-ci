@@ -377,7 +377,10 @@ class TemplateVerifySelectedTests(unittest.TestCase):
                        check=True, capture_output=True, env=self.repo.env)
 
     def verify(self, *args: str, **env: str) -> subprocess.CompletedProcess:
-        environment = dict(self.repo.env, SHARED_CI=self.checkout, **env)
+        # Outer CI selects provider layers, not this synthetic caller's layers.
+        environment = {key: value for key, value in self.repo.env.items()
+                       if key not in ("CI_SELECTION_FULL", "CI_SELECTED_LAYERS")}
+        environment.update(SHARED_CI=self.checkout, **env)
         return subprocess.run(["bash", "scripts/verify", *args], cwd=self.repo.root, env=environment,
                               capture_output=True, text=True, timeout=120)
 
@@ -388,6 +391,16 @@ class TemplateVerifySelectedTests(unittest.TestCase):
         result = self.verify("--selected", CI_SELECTION_FULL="false", CI_SELECTED_LAYERS="App")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(["gate-App"], self.gates(result))
+
+    def test_outer_selection_does_not_define_fixture_selection(self):
+        self.repo.env.update(CI_SELECTION_FULL="false", CI_SELECTED_LAYERS="Context Lint Review Select")
+        for env, gates in (({}, ["gate-App", "gate-Core"]),
+                           ({"CI_SELECTION_FULL": "true"}, ["gate-App", "gate-Core"]),
+                           ({"CI_SELECTION_FULL": "false", "CI_SELECTED_LAYERS": "App"}, ["gate-App"])):
+            with self.subTest(env=env):
+                result = self.verify("--selected", **env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(gates, self.gates(result))
 
     def test_full_or_missing_selection_runs_every_layer(self):
         for env in ({"CI_SELECTION_FULL": "true", "CI_SELECTED_LAYERS": "App"}, {}, {"CI_SELECTION_FULL": ""}):
