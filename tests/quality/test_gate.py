@@ -15,7 +15,7 @@ SPEC.loader.exec_module(gate)
 ACTIONS = REPO / "scripts/quality/gate_actions.py"
 HEAD = "a" * 40
 OLD = "b" * 40
-LANES = ["verify", "lint", "build", "test", "contract", "workflow-lint"]
+LANES = ["verify", "lint", "build", "test", "contract", "workflow-lint", "test-integrity"]
 SECTIONS = ["Existing behaviour", "Intent", "Compatibility", "Removed or weakened tests or policy", "Test evidence"]
 BODY = f"""## Existing behaviour
 Parses config once at start-up.
@@ -37,9 +37,9 @@ none
 
 
 def base(**overrides):
-    lanes = {name: {"selected": name in ("verify", "contract", "workflow-lint"),
-                    "result": "success" if name in ("verify", "contract", "workflow-lint") else "skipped",
-                    "tested_sha": HEAD if name in ("verify", "contract", "workflow-lint") else ""}
+    lanes = {name: {"selected": name in ("verify", "contract", "workflow-lint", "test-integrity"),
+                    "result": "success" if name in ("verify", "contract", "workflow-lint", "test-integrity") else "skipped",
+                    "tested_sha": HEAD if name in ("verify", "contract", "workflow-lint", "test-integrity") else ""}
              for name in LANES}
     data = {"lanes": lanes, "expected_lanes": LANES, "expected_sha": HEAD, "event": "pull_request",
             "check_pr_body": True, "pr_body": BODY, "required_sections": SECTIONS}
@@ -290,14 +290,14 @@ class ActionsAdapterTests(unittest.TestCase):
                        "EXPECTED_SHA": HEAD, "CHECK_PR_BODY": "true",
                        "NEEDS_JSON": json.dumps(needs)}
         for lane in LANES:
-            environment[lane.upper().replace("-", "_") + "_SELECTED"] = "true" if lane in ("verify", "contract", "workflow-lint") else "false"
+            environment[lane.upper().replace("-", "_") + "_SELECTED"] = "true" if lane in ("verify", "contract", "workflow-lint", "test-integrity") else "false"
         environment.update(env)
         return subprocess.run([sys.executable, "-I", "-B", str(ACTIONS)], env=environment,
                               capture_output=True, text=True, timeout=20)
 
     def needs(self, **overrides):
-        result = {lane: {"result": "success" if lane in ("verify", "contract", "workflow-lint") else "skipped",
-                         "outputs": {"tested-sha": HEAD} if lane in ("verify", "contract", "workflow-lint") else {}}
+        result = {lane: {"result": "success" if lane in ("verify", "contract", "workflow-lint", "test-integrity") else "skipped",
+                         "outputs": {"tested-sha": HEAD} if lane in ("verify", "contract", "workflow-lint", "test-integrity") else {}}
                   for lane in LANES}
         for lane, value in overrides.items():
             result[lane.replace("_", "-")] = value
@@ -321,7 +321,8 @@ class ActionsAdapterTests(unittest.TestCase):
         self.assertEqual(1, self.run_adapter(self.needs(), VERIFY_SELECTED="").returncode)
 
     def test_missing_needs_fails_closed(self):
-        self.assertEqual(1, self.run_adapter(self.needs(), NEEDS_JSON="").returncode)
+        for raw in ("", "null", "[]", '"success"', "{malformed"):
+            self.assertEqual(1, self.run_adapter(self.needs(), NEEDS_JSON=raw).returncode)
 
     def selection_needs(self, any_layer, ran_verify, select_result="success", selection=None):
         needs = self.needs()
@@ -354,6 +355,28 @@ class ActionsAdapterTests(unittest.TestCase):
     def test_select_job_garbage_output_fails_closed(self):
         self.assertEqual(1, self.run_adapter(self.selection_needs(False, True, selection="[1]")).returncode)
         self.assertEqual(1, self.run_adapter(self.selection_needs(False, True, selection="{bad")).returncode)
+
+    def test_integrity_is_required_with_empty_layer_selection(self):
+        needs = self.selection_needs(any_layer=False, ran_verify=False)
+        self.assertEqual(0, self.run_adapter(needs).returncode)
+        for value in (None, [], "success", {"result": "success", "outputs": []},
+                      {"result": "skipped", "outputs": {}}, {"result": "success", "outputs": {}},
+                      {"result": "success", "outputs": {"tested-sha": HEAD, "ran": "garbage"}},
+                      {"result": "success", "outputs": {"tested-sha": OLD, "ran": "true"}}):
+            with self.subTest(value=value):
+                broken = copy.deepcopy(needs)
+                broken["test-integrity"] = value
+                result = self.run_adapter(broken)
+                self.assertEqual(1, result.returncode, result.stdout)
+        del needs["test-integrity"]
+        self.assertEqual(1, self.run_adapter(needs).returncode)
+
+    def test_integrity_disabled_requires_explicit_valid_lane_result(self):
+        needs = self.needs(test_integrity={"result": "skipped", "outputs": {}})
+        self.assertEqual(0, self.run_adapter(needs, TEST_INTEGRITY_SELECTED="false").returncode)
+        needs["test-integrity"]["result"] = "failure"
+        self.assertEqual(1, self.run_adapter(needs, TEST_INTEGRITY_SELECTED="false").returncode)
+        self.assertEqual(1, self.run_adapter(needs, TEST_INTEGRITY_SELECTED="").returncode)
 
     def test_pull_request_without_api_context_fails_closed(self):
         result = self.run_adapter(self.needs(), EVENT="pull_request")

@@ -20,7 +20,7 @@ otherwise make the stacked branch conflict).
 
 ## Removed or weakened tests or policy
 
-<!-- List removed/skipped/weakened tests/assertions and policy/gate/ruleset changes with reasons, or "none". Approval and review routing follow the pinned agent protocol; ordinary test-code changes do not themselves require Owner approval. -->
+<!-- List removed/skipped/weakened tests/assertions and policy/gate/ruleset changes with reasons, or "none". When test integrity is enabled, put each affected file on its own line as `path`: reason (JSON-quoted paths also work); keep this section heading unchanged. Approval and review routing follow the pinned agent protocol; ordinary test-code changes do not themselves require Owner approval. -->
 
 ## Test evidence
 
