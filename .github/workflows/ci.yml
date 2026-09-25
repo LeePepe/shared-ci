@@ -26,3 +26,18 @@ jobs:
       verify-command: scripts/verify --all
       contract-audit: true
       workflow-lint: true
+
+  # Advisory smoke test of THIS commit's reusable workflows with changed-only
+  # selection. Never required: a commit cannot approve itself, so the pinned
+  # `quality` job above stays the gate.
+  candidate:
+    uses: ./.github/workflows/quality.yml
+    with:
+      runs-on: ubuntu-latest
+      changed-only: true
+      verify-command: scripts/verify
+      contract-audit: true
+      workflow-lint: true
+
+  candidate-select:
+    uses: ./.github/workflows/select.yml

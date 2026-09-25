@@ -26,7 +26,7 @@ step "workflow-lint (self-applied)"
 "$python" -I -B scripts/lint/workflows.py --root .
 
 step "unit tests"
-for suite in context repo lint review ruleset; do
+for suite in context repo lint review ruleset select; do
     "$python" -I -B -m unittest discover -s "tests/$suite" -p 'test_*.py'
 done
 "$python" -I -B -m unittest discover -s tests/quality -p 'test_gate.py'

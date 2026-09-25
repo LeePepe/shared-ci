@@ -7,7 +7,18 @@ name: quality
 # succeeded on the PR head SHA, every unselected lane is success|skipped, and
 # the PR body fills the template's required sections.
 #
-# Caller example: templates/ci.yml. Pin this file by full 40-char SHA.
+# Changed-layer selection (opt-in, `changed-only: true`, v0.2.0+): the `select`
+# job maps the PR diff to caller layers (plus their dependents) with the pinned
+# resolver. When no layer is selected, the verify/lint/build/test lanes still
+# run and succeed but short-circuit ("not selected: <reason>") instead of being
+# skipped, so a required check always reports. Anything doubtful (unmapped
+# path; dependency manifest, .github/**, scripts/verify, scripts/ci/**, layer
+# map or shared-ci pin change; non-PR event; resolver or git error) selects a
+# full run. The aggregate records the selection and which lanes short-circuited.
+# With `changed-only: false` (the default) every lane runs as in v0.1.0.
+#
+# Caller example: templates/ci.yml. Callers with their own matrix lanes call
+# select.yml instead (docs/changed-layer-selection.md). Pin by full 40-char SHA.
 
 on:
   workflow_call:
@@ -60,23 +71,99 @@ on:
       timeout-minutes:
         type: number
         default: 60
+      changed-only:
+        description: Select layers from the PR diff; command lanes short-circuit (and succeed) when no layer is selected. false = v0.1.0 behaviour.
+        type: boolean
+        default: false
+      force-full-paths:
+        description: Extra glob patterns (whitespace separated) whose change forces a full run, on top of the built-in list.
+        type: string
+        default: ""
     outputs:
       tested-sha:
         description: Commit SHA every selected lane verified (empty unless aggregate passed).
         value: ${{ jobs.aggregate.outputs.tested-sha }}
+      selection:
+        description: JSON selection record of the select job (mode, full, layers, reason, triggers, changed files).
+        value: ${{ jobs.select.outputs.selection }}
 
 permissions:
   contents: read
   pull-requests: read
 
 jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      selection: ${{ steps.select.outputs.selection }}
+      full: ${{ steps.select.outputs.full }}
+      any-layer: ${{ steps.select.outputs.any-layer }}
+      layers: ${{ steps.select.outputs.layers }}
+      layers-space: ${{ steps.select.outputs.layers-space }}
+      reason: ${{ steps.select.outputs.reason }}
+    steps:
+      - if: inputs.changed-only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out shared-ci at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Select changed layers
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          MODE: ${{ inputs.changed-only && 'changed-only' || 'disabled' }}
+          FORCE_FULL_PATHS: ${{ inputs.force-full-paths }}
+        run: |
+          python3 .shared-ci/scripts/select/layers.py --mode "$MODE" --event "$EVENT" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --force-full-paths "$FORCE_FULL_PATHS" \
+            --github-output "$GITHUB_OUTPUT" --step-summary "$GITHUB_STEP_SUMMARY"
+
   verify:
-    if: inputs.verify-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ${{ inputs.verify-runs-on != '' && inputs.verify-runs-on || inputs.runs-on }}
+    needs: select
+    if: "!cancelled() && inputs.verify-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)"
+    # A short-circuited lane only reports its reason, so it uses a small hosted runner.
+    runs-on: ${{ (inputs.changed-only && needs.select.result == 'success' && needs.select.outputs.any-layer == 'false') && 'ubuntu-latest' || (inputs.verify-runs-on != '' && inputs.verify-runs-on || inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       tested-sha: ${{ steps.sha.outputs.tested-sha }}
+      ran: ${{ steps.lane.outputs.ran }}
     steps:
+      - name: Layer selection
+        id: lane
+        env:
+          CHANGED_ONLY: ${{ inputs.changed-only }}
+          SELECT_RESULT: ${{ needs.select.result }}
+          ANY_LAYER: ${{ needs.select.outputs.any-layer }}
+          REASON: ${{ needs.select.outputs.reason }}
+        run: |
+          ran=true
+          if [ "$CHANGED_ONLY" = "true" ] && [ "$SELECT_RESULT" = "success" ] && [ "$ANY_LAYER" = "false" ]; then
+            ran=false
+            echo "not selected: ${REASON:-no layer selected}"
+            echo "not selected: ${REASON:-no layer selected}" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$CHANGED_ONLY" = "true" ] && [ "$SELECT_RESULT" != "success" ]; then
+            echo "::warning::select job result is ${SELECT_RESULT:-unknown}; running this lane in full (fail-closed)"
+          fi
+          echo "ran=$ran" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -84,77 +171,149 @@ jobs:
           persist-credentials: false
       - id: sha
         run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - if: inputs.setup-command != ''
+      - if: steps.lane.outputs.ran == 'true' && inputs.setup-command != ''
         env:
           COMMAND: ${{ inputs.setup-command }}
         run: bash -euo pipefail -c "$COMMAND"
-      - env:
+      - if: steps.lane.outputs.ran == 'true'
+        env:
           COMMAND: ${{ inputs.verify-command }}
           VERIFY_BASE: ${{ github.event.pull_request.base.sha || '' }}
           VERIFY_MODE: ci
+          CI_SELECTED_LAYERS: ${{ needs.select.outputs.layers-space }}
+          CI_SELECTION_FULL: ${{ inputs.changed-only && needs.select.outputs.full || 'true' }}
         run: bash -euo pipefail -c "$COMMAND"
 
   lint:
-    if: inputs.lint-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ${{ inputs.lint-runs-on != '' && inputs.lint-runs-on || inputs.runs-on }}
+    needs: select
+    if: "!cancelled() && inputs.lint-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)"
+    # A short-circuited lane only reports its reason, so it uses a small hosted runner.
+    runs-on: ${{ (inputs.changed-only && needs.select.result == 'success' && needs.select.outputs.any-layer == 'false') && 'ubuntu-latest' || (inputs.lint-runs-on != '' && inputs.lint-runs-on || inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       tested-sha: ${{ steps.sha.outputs.tested-sha }}
+      ran: ${{ steps.lane.outputs.ran }}
     steps:
+      - name: Layer selection
+        id: lane
+        env:
+          CHANGED_ONLY: ${{ inputs.changed-only }}
+          SELECT_RESULT: ${{ needs.select.result }}
+          ANY_LAYER: ${{ needs.select.outputs.any-layer }}
+          REASON: ${{ needs.select.outputs.reason }}
+        run: |
+          ran=true
+          if [ "$CHANGED_ONLY" = "true" ] && [ "$SELECT_RESULT" = "success" ] && [ "$ANY_LAYER" = "false" ]; then
+            ran=false
+            echo "not selected: ${REASON:-no layer selected}"
+            echo "not selected: ${REASON:-no layer selected}" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$CHANGED_ONLY" = "true" ] && [ "$SELECT_RESULT" != "success" ]; then
+            echo "::warning::select job result is ${SELECT_RESULT:-unknown}; running this lane in full (fail-closed)"
+          fi
+          echo "ran=$ran" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - id: sha
         run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - if: inputs.setup-command != ''
+      - if: steps.lane.outputs.ran == 'true' && inputs.setup-command != ''
         env:
           COMMAND: ${{ inputs.setup-command }}
         run: bash -euo pipefail -c "$COMMAND"
-      - env:
+      - if: steps.lane.outputs.ran == 'true'
+        env:
           COMMAND: ${{ inputs.lint-command }}
+          CI_SELECTED_LAYERS: ${{ needs.select.outputs.layers-space }}
+          CI_SELECTION_FULL: ${{ inputs.changed-only && needs.select.outputs.full || 'true' }}
         run: bash -euo pipefail -c "$COMMAND"
 
   build:
-    if: inputs.build-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ${{ inputs.build-runs-on != '' && inputs.build-runs-on || inputs.runs-on }}
+    needs: select
+    if: "!cancelled() && inputs.build-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)"
+    # A short-circuited lane only reports its reason, so it uses a small hosted runner.
+    runs-on: ${{ (inputs.changed-only && needs.select.result == 'success' && needs.select.outputs.any-layer == 'false') && 'ubuntu-latest' || (inputs.build-runs-on != '' && inputs.build-runs-on || inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       tested-sha: ${{ steps.sha.outputs.tested-sha }}
+      ran: ${{ steps.lane.outputs.ran }}
     steps:
+      - name: Layer selection
+        id: lane
+        env:
+          CHANGED_ONLY: ${{ inputs.changed-only }}
+          SELECT_RESULT: ${{ needs.select.result }}
+          ANY_LAYER: ${{ needs.select.outputs.any-layer }}
+          REASON: ${{ needs.select.outputs.reason }}
+        run: |
+          ran=true
+          if [ "$CHANGED_ONLY" = "true" ] && [ "$SELECT_RESULT" = "success" ] && [ "$ANY_LAYER" = "false" ]; then
+            ran=false
+            echo "not selected: ${REASON:-no layer selected}"
+            echo "not selected: ${REASON:-no layer selected}" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$CHANGED_ONLY" = "true" ] && [ "$SELECT_RESULT" != "success" ]; then
+            echo "::warning::select job result is ${SELECT_RESULT:-unknown}; running this lane in full (fail-closed)"
+          fi
+          echo "ran=$ran" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - id: sha
         run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - if: inputs.setup-command != ''
+      - if: steps.lane.outputs.ran == 'true' && inputs.setup-command != ''
         env:
           COMMAND: ${{ inputs.setup-command }}
         run: bash -euo pipefail -c "$COMMAND"
-      - env:
+      - if: steps.lane.outputs.ran == 'true'
+        env:
           COMMAND: ${{ inputs.build-command }}
+          CI_SELECTED_LAYERS: ${{ needs.select.outputs.layers-space }}
+          CI_SELECTION_FULL: ${{ inputs.changed-only && needs.select.outputs.full || 'true' }}
         run: bash -euo pipefail -c "$COMMAND"
 
   test:
-    if: inputs.test-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ${{ inputs.test-runs-on != '' && inputs.test-runs-on || inputs.runs-on }}
+    needs: select
+    if: "!cancelled() && inputs.test-command != '' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)"
+    # A short-circuited lane only reports its reason, so it uses a small hosted runner.
+    runs-on: ${{ (inputs.changed-only && needs.select.result == 'success' && needs.select.outputs.any-layer == 'false') && 'ubuntu-latest' || (inputs.test-runs-on != '' && inputs.test-runs-on || inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       tested-sha: ${{ steps.sha.outputs.tested-sha }}
+      ran: ${{ steps.lane.outputs.ran }}
     steps:
+      - name: Layer selection
+        id: lane
+        env:
+          CHANGED_ONLY: ${{ inputs.changed-only }}
+          SELECT_RESULT: ${{ needs.select.result }}
+          ANY_LAYER: ${{ needs.select.outputs.any-layer }}
+          REASON: ${{ needs.select.outputs.reason }}
+        run: |
+          ran=true
+          if [ "$CHANGED_ONLY" = "true" ] && [ "$SELECT_RESULT" = "success" ] && [ "$ANY_LAYER" = "false" ]; then
+            ran=false
+            echo "not selected: ${REASON:-no layer selected}"
+            echo "not selected: ${REASON:-no layer selected}" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$CHANGED_ONLY" = "true" ] && [ "$SELECT_RESULT" != "success" ]; then
+            echo "::warning::select job result is ${SELECT_RESULT:-unknown}; running this lane in full (fail-closed)"
+          fi
+          echo "ran=$ran" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - id: sha
         run: echo "tested-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - if: inputs.setup-command != ''
+      - if: steps.lane.outputs.ran == 'true' && inputs.setup-command != ''
         env:
           COMMAND: ${{ inputs.setup-command }}
         run: bash -euo pipefail -c "$COMMAND"
-      - env:
+      - if: steps.lane.outputs.ran == 'true'
+        env:
           COMMAND: ${{ inputs.test-command }}
+          CI_SELECTED_LAYERS: ${{ needs.select.outputs.layers-space }}
+          CI_SELECTION_FULL: ${{ inputs.changed-only && needs.select.outputs.full || 'true' }}
         run: bash -euo pipefail -c "$COMMAND"
 
   contract:
@@ -163,6 +322,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       tested-sha: ${{ steps.sha.outputs.tested-sha }}
+      ran: "true"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -194,6 +354,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       tested-sha: ${{ steps.sha.outputs.tested-sha }}
+      ran: "true"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -221,7 +382,7 @@ jobs:
 
   aggregate:
     name: aggregate
-    needs: [verify, lint, build, test, contract, workflow-lint]
+    needs: [select, verify, lint, build, test, contract, workflow-lint]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -3,7 +3,9 @@
 
 Reads NEEDS_JSON (toJSON(needs)), <LANE>_SELECTED flags, EXPECTED_SHA, EVENT and,
 for pull requests, the live PR body through the REST API (so an edited body
-plus re-run is honoured). Any missing/malformed input fails closed.
+plus re-run is honoured). When NEEDS_JSON has a `select` job (quality.yml
+v0.2.0+), the selection record (its `selection` output) and each lane's `ran`
+output are passed to the gate. Any missing/malformed input fails closed.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 LANES = ("verify", "lint", "build", "test", "contract", "workflow-lint")
+LAYER_LANES = ("verify", "lint", "build", "test")
 
 
 def _gate():
@@ -66,11 +69,34 @@ def build_input(env: dict[str, str], needs: dict, pr_body: str | None) -> dict:
             "result": (need or {}).get("result", "unknown"),
             "tested_sha": ((need or {}).get("outputs") or {}).get("tested-sha", ""),
         }
-    return {
+    data = {
         "lanes": lanes, "expected_lanes": list(LANES), "expected_sha": env.get("EXPECTED_SHA", ""),
         "event": env.get("EVENT", ""), "check_pr_body": _flag("CHECK_PR_BODY"),
         "pr_body": pr_body, "required_sections": contract["pr_sections"],
     }
+    if "select" in needs:
+        data["selection"] = _selection(needs["select"])
+        data["layer_lanes"] = list(LAYER_LANES)
+        for lane in LANES:
+            ran = ((needs.get(lane) or {}).get("outputs") or {}).get("ran", "")
+            lanes[lane]["ran"] = ran == "true"
+    return data
+
+
+def _selection(need: dict) -> dict:
+    """Selection record from the select job; unparseable output fails closed."""
+    if not isinstance(need, dict):
+        raise ValueError("select job result is missing")
+    raw = ((need.get("outputs") or {}).get("selection") or "")
+    record = {"mode": "changed-only", "full": True, "any_layer": True, "layers": [],
+              "reason": "select job produced no selection", "head": ""}
+    if raw:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("select job selection output is not an object")
+        record.update({key: parsed[key] for key in record if key in parsed})
+    record["result"] = need.get("result", "unknown")
+    return record
 
 
 def main() -> int:
@@ -91,9 +117,15 @@ def main() -> int:
     summary = env.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(f"## quality / aggregate: {result['verdict']}\n\n| lane | selected | result | tested SHA |\n|---|---|---|---|\n")
+            handle.write(f"## quality / aggregate: {result['verdict']}\n\n")
+            selection = result.get("selection")
+            if selection:
+                handle.write(f"Selection ({selection['mode']}): {selection.get('reason') or ''}; "
+                             f"layers: {', '.join(selection.get('layers') or []) or '(none)'}\n\n")
+            handle.write("| lane | selected | ran | result | tested SHA |\n|---|---|---|---|---|\n")
             for row in result["lanes"]:
-                handle.write(f"| {row['lane']} | {row['selected']} | {row['result']} | {row['tested_sha']} |\n")
+                handle.write(f"| {row['lane']} | {row['selected']} | {row.get('ran', '')} | "
+                             f"{row['result']} | {row['tested_sha']} |\n")
             for problem in result["problems"]:
                 handle.write(f"\n- {problem}")
     for problem in result["problems"]:

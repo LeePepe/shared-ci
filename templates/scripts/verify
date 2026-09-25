@@ -2,6 +2,9 @@
 # Single verification entry shared by .githooks/pre-push and CI (quality.yml).
 #   scripts/verify            changed layers vs $VERIFY_BASE (default origin/main)
 #   scripts/verify --all      every layer
+#   scripts/verify --selected CI changed-only: the layers the shared-ci select job
+#                             chose ($CI_SELECTED_LAYERS); every layer unless
+#                             $CI_SELECTION_FULL is exactly "false"
 # Layer selection and gates come from the tech-context layer map via the
 # shared-ci resolver at the pinned SHA ($SHARED_CI, default .shared-ci).
 # Unmapped paths fail; any gate failure fails; no layers selected = full run.
@@ -23,6 +26,16 @@ $context audit >/dev/null
 
 if [ "${1:-}" = "--all" ]; then
     layers="$($context layers --all)"
+elif [ "${1:-}" = "--selected" ]; then
+    if [ "${CI_SELECTION_FULL:-true}" = "false" ]; then
+        layers="${CI_SELECTED_LAYERS:-}"
+        known=" $(echo $($context layers --all)) "
+        for layer in $layers; do
+            case "$known" in *" $layer "*) ;; *) echo "[verify] unknown selected layer: $layer" >&2; exit 1 ;; esac
+        done
+    else
+        layers="$($context layers --all)"
+    fi
 else
     base="${VERIFY_BASE:-origin/main}"
     changed="$(git diff --name-only "$(git merge-base "$base" HEAD)" HEAD)"

@@ -42,6 +42,16 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
     SHA or exact version.
 - If a check is wrong, fix it in its own PR that states the reason and needs
   Owner review. Do not work around it in a feature PR.
+- With changed-layer selection (`changed-only: true`, see
+  `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
+  touches plus their dependents. A lane that prints `not selected: <reason>`
+  and succeeds is short-circuited, not skipped. Do not treat that as evidence
+  the layer was tested. Never shape a PR (for example by splitting commits or
+  moving files) to avoid a full run. Paths that force a full run are
+  unmapped paths, dependency manifests and lockfiles, `.github/**`,
+  `scripts/verify`, `scripts/ci/**`, layer maps and the shared-ci pin.
+- Never put the selection in a job-level `if` of a required check. Decide at
+  step level so the check always reports.
 
 ## 4. Pull request
 
@@ -88,6 +98,8 @@ dependency pins, credentials, privacy and data migrations). The same applies
 to any PR that removes or weakens a test, or changes existing behaviour
 without an approved spec. Until the repository enforces CODEOWNERS review,
 add the `owner-review` label and wait.
+
+Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
 
 ## 7. Incidents become rules
 
