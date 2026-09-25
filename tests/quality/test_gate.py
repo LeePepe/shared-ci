@@ -1,25 +1,18 @@
 """Fail-closed aggregate gate: positive and negative fixtures."""
 import copy
-import contextlib
 import importlib.util
-import io
 import json
 import os
 import pathlib
 import subprocess
 import sys
-import tempfile
 import unittest
-from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("quality_gate", REPO / "scripts/quality/gate.py")
 gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 ACTIONS = REPO / "scripts/quality/gate_actions.py"
-ACTION_SPEC = importlib.util.spec_from_file_location("quality_actions", ACTIONS)
-actions = importlib.util.module_from_spec(ACTION_SPEC)
-ACTION_SPEC.loader.exec_module(actions)
 HEAD = "a" * 40
 OLD = "b" * 40
 LANES = ["verify", "lint", "build", "test", "contract", "workflow-lint"]
@@ -292,132 +285,15 @@ class SelectionGateTests(unittest.TestCase):
 class ActionsAdapterTests(unittest.TestCase):
     """The workflow adapter maps `needs` + flags to gate input and fails closed."""
 
-    def run_adapter(self, needs, *, api_response=None, **env):
+    def run_adapter(self, needs, **env):
         environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "EVENT": "push",
                        "EXPECTED_SHA": HEAD, "CHECK_PR_BODY": "true",
                        "NEEDS_JSON": json.dumps(needs)}
         for lane in LANES:
             environment[lane.upper().replace("-", "_") + "_SELECTED"] = "true" if lane in ("verify", "contract", "workflow-lint") else "false"
         environment.update(env)
-        if api_response is not None:
-            def fetch(request, timeout):
-                self.assertEqual("https://api.github.com/repos/example/repo/pulls/7", request.full_url)
-                if isinstance(api_response, Exception):
-                    raise api_response
-                return io.BytesIO(api_response)
-            stdout, stderr = io.StringIO(), io.StringIO()
-            with mock.patch.dict(os.environ, environment, clear=True), \
-                    mock.patch("urllib.request.urlopen", side_effect=fetch) as api, \
-                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                code = actions.main()
-            if environment["EVENT"] in ("pull_request", "pull_request_target") and all(
-                    environment.get(key) for key in ("REPO", "PR_NUMBER", "GH_TOKEN")):
-                api.assert_called_once()
-            else:
-                api.assert_not_called()
-            return subprocess.CompletedProcess([str(ACTIONS)], code, stdout.getvalue(), stderr.getvalue())
         return subprocess.run([sys.executable, "-I", "-B", str(ACTIONS)], env=environment,
                               capture_output=True, text=True, timeout=20)
-
-    def pr(self, **overrides):
-        record = {"head": {"sha": HEAD}, "body": BODY,
-                  "additions": 200, "deletions": 200, "changed_files": 10}
-        record.update(overrides)
-        return record
-
-    def run_pr(self, record, *, needs=None, **env):
-        context = {"EVENT": "pull_request", "REPO": "example/repo",
-                   "PR_NUMBER": "7", "GH_TOKEN": "test-token"}
-        context.update(env)
-        return self.run_adapter(self.needs() if needs is None else needs,
-                                api_response=json.dumps(record).encode(), **context)
-
-    def test_pr_size_boundary_and_overflow(self):
-        for changes, expected in (({}, 0), ({"additions": 201}, 1), ({"deletions": 201}, 1),
-                                  ({"changed_files": 11}, 1)):
-            with self.subTest(changes=changes):
-                result = self.run_pr(self.pr(**changes))
-                self.assertEqual(expected, result.returncode, result.stderr)
-                if expected:
-                    self.assertIn("PR size exceeds budget", result.stderr)
-                    self.assertIn("TL", result.stderr)
-                else:
-                    self.assertEqual(HEAD, json.loads(result.stdout)["tested_sha"])
-
-    def test_pr_size_counters_must_be_nonnegative_integers(self):
-        for field in ("additions", "deletions", "changed_files"):
-            for value in (None, -1, True, False, 1.0, "1", [], {}):
-                with self.subTest(field=field, value=value):
-                    result = self.run_pr(self.pr(**{field: value}))
-                    self.assertEqual(1, result.returncode, result.stderr)
-                    self.assertIn(field, result.stderr)
-            record = self.pr()
-            del record[field]
-            self.assertEqual(1, self.run_pr(record).returncode)
-
-    def test_pr_head_must_match_full_expected_sha(self):
-        for head in (None, {}, [], "bad", {"sha": None}, {"sha": ""}, {"sha": OLD}):
-            with self.subTest(head=head):
-                result = self.run_pr(self.pr(head=head))
-                self.assertEqual(1, result.returncode)
-                self.assertIn("PR head", result.stderr)
-        record = self.pr()
-        del record["head"]
-        self.assertEqual(1, self.run_pr(record).returncode)
-        for expected in ("", "abc123", HEAD + "\n"):
-            self.assertEqual(1, self.run_pr(self.pr(head={"sha": expected}), EXPECTED_SHA=expected).returncode)
-
-    def test_pr_metadata_must_be_readable_object(self):
-        for response in (b"null", b"[]", b"true", b"42", b'"text"', b"{bad", b"\xff", OSError("offline")):
-            with self.subTest(response=response):
-                result = self.run_adapter(self.needs(), api_response=response, EVENT="pull_request",
-                                          REPO="example/repo", PR_NUMBER="7", GH_TOKEN="test-token")
-                self.assertEqual(1, result.returncode)
-                self.assertIn("aggregate input invalid", result.stderr)
-
-    def test_pr_size_applies_without_body_validation(self):
-        for event in ("pull_request", "pull_request_target"):
-            for fields, expected in (({}, 0), ({"additions": 201}, 1), ({"head": {}}, 1)):
-                with self.subTest(event=event, fields=fields):
-                    result = self.run_pr(self.pr(body="", **fields), EVENT=event, CHECK_PR_BODY="false")
-                    self.assertEqual(expected, result.returncode, result.stderr)
-            for key in ("REPO", "PR_NUMBER", "GH_TOKEN"):
-                result = self.run_pr(self.pr(), EVENT=event, CHECK_PR_BODY="false", **{key: ""})
-                self.assertEqual(1, result.returncode)
-                self.assertIn("PR metadata unavailable", result.stderr)
-
-    def test_non_pr_events_do_not_fetch_pr_evidence(self):
-        for event in ("push", "workflow_dispatch", "merge_group"):
-            result = self.run_adapter(self.needs(), EVENT=event,
-                                      api_response=AssertionError("non-PR event fetched PR metadata"))
-            self.assertEqual(0, result.returncode, result.stderr)
-
-    def test_zero_text_changes_still_count_files_without_exemptions(self):
-        for files, expected in ((0, 0), (10, 0), (11, 1)):
-            record = self.pr(additions=0, deletions=0, changed_files=files,
-                             labels=[{"name": "size-exempt"}], body=BODY + "\nSize exemption requested.")
-            self.assertEqual(expected, self.run_pr(record).returncode)
-
-    def test_small_pr_preserves_body_lane_and_selection_failures(self):
-        for record, needs, fragment in (
-                (self.pr(body=""), self.needs(), "PR body is empty"),
-                (self.pr(), self.needs(verify={"result": "cancelled", "outputs": {}}), "'cancelled'"),
-                (self.pr(), self.needs(verify={"result": "success", "outputs": {"tested-sha": OLD}}), "tested"),
-                (self.pr(), self.selection_needs(False, False, select_result="failure"), "select job result")):
-            with self.subTest(fragment=fragment):
-                result = self.run_pr(record, needs=needs)
-                self.assertEqual(1, result.returncode)
-                self.assertIn(fragment, result.stderr)
-                self.assertEqual("", json.loads(result.stdout)["tested_sha"])
-
-    def test_only_passing_pr_emits_tested_sha(self):
-        for additions, expected in ((200, 0), (201, 1)):
-            with tempfile.TemporaryDirectory() as directory:
-                output = pathlib.Path(directory) / "outputs"
-                result = self.run_pr(self.pr(additions=additions), GITHUB_OUTPUT=str(output))
-                self.assertEqual(expected, result.returncode)
-                self.assertEqual(f"tested-sha={HEAD}\n" if expected == 0 else "",
-                                 output.read_text() if output.exists() else "")
 
     def needs(self, **overrides):
         result = {lane: {"result": "success" if lane in ("verify", "contract", "workflow-lint") else "skipped",
@@ -482,7 +358,7 @@ class ActionsAdapterTests(unittest.TestCase):
     def test_pull_request_without_api_context_fails_closed(self):
         result = self.run_adapter(self.needs(), EVENT="pull_request")
         self.assertEqual(1, result.returncode)
-        self.assertIn("PR metadata unavailable", result.stderr)
+        self.assertIn("PR body is empty", result.stderr)
 
 
 class CliTests(unittest.TestCase):

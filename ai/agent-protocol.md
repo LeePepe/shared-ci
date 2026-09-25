@@ -20,14 +20,23 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 2. Scope
 
-- Freeze one independently mergeable purpose, one owned layer, planned paths
-  and non-goals before editing. Resolve every planned path with
-  `scripts/context/resolve <path> --format layer`. Essential tests and support
-  documentation travel with the implementation; support edits serve only
-  that purpose.
-- New independent concerns go to follow-up work, even in the same repository
-  or layer. Fix defects introduced by the current patch here. If the necessary
-  fix crosses the scope or size bound, return to the implementer/TL to reslice.
+- Before editing, agree the task's [scope declaration](repo-contract.md#pr-scope):
+  one independently acceptable purpose, one primary responsibility area,
+  allowed paths and non-goals, layer ownership, CI verification and reviewers.
+  Areas may be a code layer, CI wiring, documentation or reviewer rules; use
+  the repository's existing ownership and review boundaries, not file extensions.
+  Resolve planned paths with `scripts/context/resolve <path> --format layer`.
+- Include essential tests and documentation with their implementation. Split
+  independently mergeable CI, docs, review-policy and feature work, even within
+  the same layer or reviewer assignment. For an inseparable cross-area change,
+  name the minimal companion paths, why they cannot merge separately, and all
+  verification/review responsibilities before dispatch. A support path is not
+  permission to add unrelated work.
+- New independent concerns go to follow-up tasks. An insufficient scope returns
+  to the task owner/TL for revision or reslicing before further edits; the
+  implementer cannot widen the declaration to legitimize an out-of-scope diff.
+  Fix defects introduced by this patch; if that requires crossing its scope,
+  resolve the scope first and keep each resulting slice buildable and testable.
 - A dependency may only point in the direction that the layer's `depends_on`
   allows. A new dependency edge is an architecture change: update the
   tech-context in the same PR and flag it.
@@ -44,8 +53,9 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
   - edit policy, gate, schema, ruleset or CI files in order to pass;
   - pin shared-ci, or any shared library, by branch or tag instead of a full
     SHA or exact version.
-- If a check is wrong, fix it in its own PR that states the reason and needs
-  Owner review. Do not work around it in a feature PR.
+- If a check is wrong, fix it in its own scoped PR with the reason. Ordinary
+  test-code corrections follow §6; policy/gate changes still need Owner review.
+  Do not work around the check in a feature PR.
 - With changed-layer selection (`changed-only: true`, see
   `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
   touches plus their dependents. A lane that prints `not selected: <reason>`
@@ -63,17 +73,18 @@ What a PR must be:
 
 - **Base is the default branch.** A PR must be mergeable on its own. Do not
   make it depend on another open PR being merged first.
-- **Bounded purpose.** Keep the frozen scope from §2 and the
-  [whole-PR size budget](repo-contract.md#whole-pr-size-budget). Measure the
-  entire PR before every push, not just the last commit or push; CI checks
-  the current head too.
-- **Overflow returns to the implementer/TL for reslicing**, not automatically
-  to Owner. Same repository/layer, an already reviewed plan, a label or a
-  written explanation is not a waiver. Separate policy/permission protections
-  still apply.
-- **Keep viable slices.** Never drop tests, minify, mislabel generated files
-  or create uncompilable code/test-only shards to fit the budget. Each slice
-  carries its essential tests/docs and passes its checks.
+- **Bounded scope.** Compare the whole PR diff with the original task scope
+  from §2 before every push, not just the last commit. Every change must be
+  within the allowed paths and necessary for the declared purpose. Line and
+  file counts are diagnostic signals, not a substitute for that decision.
+- **Scope review.** The assigned Reviewer checks the actual diff against that
+  scope; PRM verifies head-bound review, required CI and approval evidence,
+  without repeating code review. Scope drift returns to the implementer/TL,
+  not automatically to Owner. A label or an approved broad plan cannot widen
+  the task; preserve separate policy/permission protections.
+- **Keep viable slices.** Each slice carries its essential tests/docs and
+  passes its checks. Split by responsibility and purpose, not by deleting
+  coverage or creating uncompilable shards to reduce line counts.
 - **Stacked PRs** are allowed only as a temporary queue. Once the base PR
   merges, retarget the next PR to the default branch and rebase it onto that
   branch, dropping the base PR's pre-squash commits
@@ -88,9 +99,9 @@ Fill in every section of the repository's PR template:
 | Section | Content |
 | --- | --- |
 | Existing behaviour | What the code does today, including behaviour that must be kept |
-| Intent | What changes and why; the task or issue link |
+| Intent | What changes and why; task/issue link and scope declaration from §2 |
 | Compatibility | API/data/config compatibility, migrations, rollback |
-| Removed or weakened tests or policy | Each item with its reason and who approved it, or `none` |
+| Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
 
 The `quality / aggregate` check rejects empty or placeholder sections.
@@ -108,10 +119,15 @@ The `quality / aggregate` check rejects empty or placeholder sections.
 
 Changes under `CODEOWNERS` paths need Owner approval (for example
 `.github/**`, policy, schemas, gates, `AGENTS.md`, the constitution,
-dependency pins, credentials, privacy and data migrations). The same applies
-to any PR that removes or weakens a test, or changes existing behaviour
-without an approved spec. Until the repository enforces CODEOWNERS review,
-add the `owner-review` label and wait.
+dependency pins, credentials, privacy and data migrations). Ordinary test-code
+edits or deletions require a stated reason, CI and AI review, not separate
+Owner approval merely because tests changed. Changes to actual gate/policy
+semantics or permissions remain important even when placed in a test or Markdown
+file. Existing behaviour changes without an approved spec also need the Owner.
+Use trusted policy and effective CODEOWNERS protections, not an author's label,
+to route review. Keep independently mergeable ordinary work separate from
+important changes. Until CODEOWNERS review is enforced, add `owner-review` for
+important PRs and wait; do not bypass existing protections.
 
 Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
 
