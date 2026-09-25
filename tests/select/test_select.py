@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "select" / "layers.py"
@@ -263,10 +264,19 @@ class SelectionTests(unittest.TestCase):
             def resolve(root, path):
                 raise RuntimeError("boom")
 
-        selection = select.select(self.repo.root, event="pull_request", base=self.repo.base,
-                                  head=self.repo.rev(), extra_patterns=[], ctx=Broken())
+        # Direct engine calls inherit the test process environment, including
+        # a Git hook's GIT_DIR for the outer repository.
+        with patch.dict(os.environ, self.repo.env, clear=True):
+            selection = select.select(self.repo.root, event="pull_request", base=self.repo.base,
+                                      head=self.repo.rev(), extra_patterns=[], ctx=Broken())
         self.assertTrue(selection["full"])
         self.assertIn("src/app/main.py", selection["unmapped"])
+
+    def test_resolver_exception_during_resolve_with_foreign_git_dir(self):
+        foreign = Fixture()
+        self.addCleanup(foreign.close)
+        with patch.dict(os.environ, {"GIT_DIR": str(foreign.root / ".git")}):
+            self.test_resolver_exception_during_resolve_is_full()
 
     def test_git_error_is_full(self):
         self.assertFull(self.repo.select(base="f" * 40), "diff error")
