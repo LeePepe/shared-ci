@@ -9,11 +9,16 @@ Items 3 and 5 are partly enforced elsewhere (workflow-lint, ruleset readback).
 
 from __future__ import annotations
 
+import html
 import json
 import pathlib
 import re
+import stat
 import subprocess
+import unicodedata
+from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import unquote
 
 HERE = pathlib.Path(__file__).resolve().parent
 CONTRACT_FILE = HERE.parents[1] / "schemas" / "repo-contract-v1.json"
@@ -23,7 +28,8 @@ POINTER = re.compile(
     r"(?:github\.com/LeePepe/shared-ci/blob/|LeePepe/shared-ci@)([0-9A-Za-z._/-]+?)/ai/agent-protocol\.md",
     re.IGNORECASE)
 METADATA = ".github/repo-contract.json"
-ROUTE = re.compile(r"^\s*(?:(?:[-*]|\d+\.)\s+)?(?:[^`\[\]<>:]+:\s*)?\[[^\[\]]+\]\(([^\s)]+)\)\s*$")
+ROUTE = re.compile(r"^\s*(?:(?:[-*]|\d+\.)\s+)?(?:[^`\[\]<>:]+:\s*)?\[[^\[\]]+\]\(([^\s)]+)\)[.;]?\s*$")
+INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 
 
 def load_contract() -> dict[str, Any]:
@@ -42,14 +48,26 @@ def _git_files(root: pathlib.Path) -> dict[str, str]:
         if not item:
             continue
         meta, _, path = item.partition(b"\t")
-        files[path.decode("utf-8", errors="surrogateescape")] = meta.split(b" ")[0].decode()
+        mode, _, stage = meta.split(b" ")
+        files[path.decode("utf-8", errors="surrogateescape")] = mode.decode() if stage == b"0" else ""
     return files
 
 
 def _text(root: pathlib.Path, path: str, limit: int = 2_000_000) -> str | None:
-    target = root / path
+    if not _local_path(path):
+        return None
+    target = root
     try:
-        if target.is_symlink() or not target.is_file() or target.stat().st_size > limit:
+        # Check each component before reading: even an internal ancestor alias
+        # can turn a tracked pathname into unrelated local or outside content.
+        parts = path.split("/")
+        for index, part in enumerate(parts):
+            target = target / part
+            info = target.lstat()
+            regular = stat.S_ISREG(info.st_mode) if index == len(parts) - 1 else stat.S_ISDIR(info.st_mode)
+            if not regular:
+                return None
+        if info.st_size > limit:
             return None
         raw = target.read_bytes()
     except OSError:
@@ -57,6 +75,12 @@ def _text(root: pathlib.Path, path: str, limit: int = 2_000_000) -> str | None:
     if b"\0" in raw[:8192]:
         return None
     return raw.decode("utf-8", errors="replace")
+
+
+def _tracked_text(root: pathlib.Path, path: str, files: dict) -> str | None:
+    if files.get(path) not in ("100644", "100755"):
+        return None
+    return _text(root, path)
 
 
 def section(markdown: str, title: str) -> str | None:
@@ -101,12 +125,14 @@ class _Report:
 
 
 def _local_path(value: Any) -> bool:
-    return isinstance(value, str) and bool(value) and not value.startswith("/") and "\\" not in value and all(
+    return isinstance(value, str) and bool(value) and not value.startswith("/") and "\\" not in value and not any(
+        ord(char) < 32 or ord(char) == 127 for char in value) and all(
         part not in ("", ".", "..") for part in value.split("/"))
 
 
 def _metadata(report: _Report, root: pathlib.Path, files: dict) -> dict | None:
-    if METADATA not in files and not (root / METADATA).exists():
+    if (METADATA not in files and not (root / METADATA).exists()
+            and not (root / METADATA).is_symlink() and not (root / ".github").is_symlink()):
         return None  # Legacy v1 callers retain their pinned AGENTS contract.
     if METADATA not in files:
         report.add("agents", METADATA, "repository metadata must be tracked")
@@ -118,7 +144,7 @@ def _metadata(report: _Report, root: pathlib.Path, files: dict) -> dict | None:
                     raise ValueError(f"duplicate key {key!r}")
                 result[key] = value
             return result
-        data = json.loads(_text(root, METADATA) or "", object_pairs_hook=unique)
+        data = json.loads(_tracked_text(root, METADATA, files) or "", object_pairs_hook=unique)
         if not isinstance(data, dict) or set(data) != {"schema", "guide", "shared_ci", "dependencies"}:
             raise ValueError("expected schema, guide, shared_ci and dependencies")
         if type(data["schema"]) is not int or data["schema"] != 1:
@@ -127,8 +153,8 @@ def _metadata(report: _Report, root: pathlib.Path, files: dict) -> dict | None:
             raise ValueError("shared_ci must be a full 40-char SHA")
         if not _local_path(data["guide"]):
             raise ValueError("guide must be a repository-relative file path")
-        if data["guide"] not in files or _text(root, data["guide"]) is None or not (root / data["guide"]).resolve().is_relative_to(root.resolve()):
-            raise ValueError("guide must name a tracked readable file")
+        if _tracked_text(root, data["guide"], files) is None:
+            raise ValueError("guide must name a tracked readable regular file without symlinks")
         if not isinstance(data["dependencies"], dict):
             raise ValueError("dependencies must be an object")
         for name, item in data["dependencies"].items():
@@ -148,8 +174,106 @@ def _metadata(report: _Report, root: pathlib.Path, files: dict) -> dict | None:
         return {}  # Invalid new metadata never silently falls back to AGENTS.
 
 
+class _ExplicitAnchors(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.anchors: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        for name, value in attrs:
+            if value and (name == "id" or (tag == "a" and name == "name")):
+                self.anchors.add(value)
+
+
+def _markdown_anchors(text: str) -> set[str]:
+    """Block ATX/Setext headings and explicit HTML anchors, not a Markdown renderer."""
+    headings: set[str] = set()
+    explicit = _ExplicitAnchors()
+    paragraph: list[str] = []
+    visible: list[str] = []
+    fence = ""
+    html_block = False
+    comment = False
+
+    def heading(value: str) -> None:
+        value = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", value)
+        value = re.sub(r"<[^>]*>", "", value)
+        value = re.sub(r"(?<!\w)(_+)(?=\S)(.+?)(?<=\S)\1(?!\w)", r"\2", value)
+        value = html.unescape(value).lower()
+        slug = "".join("-" if char.isspace() else char for char in value
+                       if char.isspace() or char in "_-" or unicodedata.category(char)[0] in "LNM")
+        unique, suffix = slug, 0
+        while unique in headings:
+            suffix += 1
+            unique = f"{slug}-{suffix}"
+        headings.add(unique)
+
+    text = re.sub(r"\A---[^\S\n]*\n.*?\n(?:---|\.\.\.)[^\S\n]*(?:\n|$)", "", text, flags=re.DOTALL)
+    for line in text.splitlines():
+        if fence:
+            if re.fullmatch(r" {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*", line):
+                fence = ""
+            continue
+        if not comment and line.startswith(("    ", "\t")):
+            paragraph = []
+            continue
+        # Code examples and escaped HTML are displayed text, not HTML syntax.
+        # Encode before comment/markup processing and decode only for the slug.
+        line = INLINE_CODE.sub(lambda match: "".join(f"&#{ord(char)};" for char in match.group(2)), line)
+        line = re.sub(r"\\([<>])", lambda match: html.escape(match.group(1)), line)
+        if comment:
+            _, end, line = line.partition("-->")
+            if not end:
+                continue
+            comment = False
+        line = re.sub(r"<!--.*?-->", "", line)
+        if "<!--" in line:
+            line = line.partition("<!--")[0]
+            comment = True
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if opening:
+            fence = opening.group(1)
+            paragraph = []
+            continue
+        visible.append(line)
+        if re.match(r"^ {0,3}</?[A-Za-z][\w-]*(?:\s|/?>)", line):
+            html_block = True
+        if html_block:
+            html_block = bool(line.strip())
+            paragraph = []
+            continue
+        atx = re.match(r"^ {0,3}#{1,6}(?:[ \t]+(.*?)|)[ \t]*$", line)
+        if atx:
+            heading(re.sub(r"[ \t]+#+[ \t]*$", "", atx.group(1) or "").strip())
+            paragraph = []
+        elif paragraph and re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*", line):
+            heading(" ".join(paragraph))
+            paragraph = []
+        elif not line.strip() or re.match(r"^ {0,3}(?:<|>|[-*+]\s|\d+[.)]\s)", line):
+            paragraph = []
+        else:
+            paragraph.append(line.strip())
+    explicit.feed("\n".join(visible))
+    explicit.close()
+    return headings | explicit.anchors
+
+
+def _local_route(target: str) -> tuple[str, str | None]:
+    """Decode once, then validate repository path syntax before any file access."""
+    path, marker, fragment = target.partition("#")
+    if "?" in path or ":" in path or re.search(r"%(?![0-9A-Fa-f]{2})", target):
+        raise ValueError("malformed local route")
+    path = unquote(path, errors="strict") if path else "AGENTS.md"
+    fragment = unquote(fragment, errors="strict") if marker else None
+    if not _local_path(path) or (fragment is not None and (not fragment or any(
+            ord(char) < 32 or ord(char) == 127 for char in fragment))):
+        raise ValueError("malformed local route")
+    return path, fragment
+
+
 def _index_agents(report: _Report, root: pathlib.Path, text: str, metadata: dict, refs: list, files: dict) -> None:
     routes = []
+    local_paths = set()
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip() or re.match(r"^#{1,6}\s+", line):
             continue
@@ -161,13 +285,23 @@ def _index_agents(report: _Report, root: pathlib.Path, text: str, metadata: dict
         routes.append(target)
         if target.startswith("https://"):
             continue
-        path = target.split("#", 1)[0]
-        if not _local_path(path) or path not in files or _text(root, path) is None or not (root / path).resolve().is_relative_to(root.resolve()):
-            report.add("agents", f"AGENTS.md:{number}", f"route target is not a readable repository file: {target}")
+        try:
+            path, fragment = _local_route(target)
+        except ValueError:
+            report.add("agents", f"AGENTS.md:{number}", f"malformed local route: {target}")
+            continue
+        document = _tracked_text(root, path, files)
+        if document is None:
+            report.add("agents", f"AGENTS.md:{number}", f"route target is not a tracked readable regular repository file without symlinks: {target}")
+            continue
+        local_paths.add(path)
+        if fragment is not None and (pathlib.PurePosixPath(path).suffix.lower() not in (".md", ".markdown")
+                                     or fragment not in _markdown_anchors(document)):
+            report.add("agents", f"AGENTS.md:{number}", f"route fragment does not resolve to a Markdown anchor: {target}")
     if not routes:
         report.add("agents", "AGENTS.md", "index must route to repository documents")
     guide = metadata.get("guide")
-    if guide and not any(route.split("#", 1)[0] == guide for route in routes):
+    if guide and guide not in local_paths:
         report.add("agents", "AGENTS.md", f"index must route to the repository guide: {guide}")
     pin = metadata.get("shared_ci")
     caller = {ref for _, _, _, ref in refs}
@@ -179,7 +313,7 @@ def _index_agents(report: _Report, root: pathlib.Path, text: str, metadata: dict
 
 
 def _agents(report: _Report, root: pathlib.Path, contract: dict, refs: list, metadata: dict | None, files: dict) -> str:
-    text = _text(root, "AGENTS.md")
+    text = _tracked_text(root, "AGENTS.md", files) if metadata is not None else _text(root, "AGENTS.md")
     if text is None:
         report.add("agents", "AGENTS.md", "AGENTS.md is missing")
         return ""

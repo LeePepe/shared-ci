@@ -12,7 +12,7 @@ The contract lane runs the same audit as local verification.
 
 | Item | Authoritative surface | Mechanical check |
 | --- | --- | --- |
-| 1 `agents` | AGENTS is a document index: headings and conditional Markdown links only. Rules, commands, bootstrap and dependency details live in their linked sources. | At most 150 lines; link-only content, readable route targets and a link to the declared guide; metadata shape and pin/workflow parity. Semantic quality of the routing still needs review. |
+| 1 `agents` | AGENTS is a document index: headings and conditional Markdown links only. Rules, commands, bootstrap and dependency details live in their linked sources. | At most 150 lines; link-only content, tracked regular route targets with resolving Markdown fragments and a link to the declared guide; metadata shape and pin/workflow parity. Semantic quality of the routing still needs review. |
 | 2 `agent_files` | CLAUDE/GEMINI/copilot/cursor instructions defer to AGENTS and contain only brief tool-specific notes. | Reference to AGENTS, line limit, no duplicate provider pins or required checks from the guide. |
 | 3 `ci` | Caller workflows use one full provider SHA. Review callers read the trusted-base guide, not the index as if it contained all rules. | One SHA across uses; quality job is named `quality`; review `rules-file` equals metadata `guide`. Workflow-lint retains trust/fork checks. |
 | 4 `verify` | Executable `scripts/verify` is shared by hook and CI; layer commands live in leaf contexts. | Tracked executable entry, executable hook invocation and CI invocation. Bootstrap reads metadata, with legacy AGENTS fallback only when metadata is absent. |
@@ -46,6 +46,34 @@ is a tracked, readable repository-relative file and contains Protocol, Verify,
 Required checks, Red lines and Delivery sections. Dependency metadata, layer
 commands and repository rules each have one source; the guide links rather than
 copying them.
+
+### Local index routes
+
+Each index entry is one inline Markdown link, optionally preceded by a list
+marker and a condition ending in `:`, and optionally followed by `.` or `;`.
+Local targets are root-relative paths; fragments alone refer to AGENTS.md.
+Percent-encoded UTF-8 paths/fragments are decoded once. Malformed escapes,
+empty fragments, query strings, parent traversal and absolute paths fail.
+Every local target, the guide and metadata must have an unconflicted regular
+file entry in the Git index (mode `100644` or `100755`) and be readable in the worktree.
+Symlinks at the file or any repository ancestor are rejected before content
+reads. Untracked/ignored local files cannot satisfy a route. This is worktree
+validation, not a concurrent-mutation sandbox or committed-content resolver.
+
+Fragments on `.md`/`.markdown` files resolve to block ATX (`#`) or Setext
+headings, or explicit HTML `id`/`<a name>` anchors. Heading slugs lowercase
+Unicode letters, remove punctuation/inline emphasis and link markup, preserve
+hyphens/underscores, replace spaces with hyphens and suffix duplicate headings
+with `-1`, `-2`, etc. Inline code contributes its displayed text. Explicit
+anchors are case-sensitive. Code examples, comments, frontmatter and headings
+inside raw HTML blocks do not create heading anchors. This bounded reader is
+not a full Markdown renderer: container headings (lists/blockquotes), custom
+heading attributes and renderer extensions are not supported; use a standalone
+explicit anchor for such routes. Fragments on other file types fail instead
+of passing unchecked. HTTPS destinations remain external pointers, not fetched
+or fragment-validated by the local audit.
+
+### Adoption
 
 Update workflow pins, metadata, verification bootstrap and review
 `rules-file` together. Protect the guide in CODEOWNERS and preserve existing
