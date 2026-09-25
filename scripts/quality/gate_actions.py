@@ -2,8 +2,9 @@
 """Actions adapter: build gate input from quality.yml's environment and run it.
 
 Reads NEEDS_JSON (toJSON(needs)), <LANE>_SELECTED flags, EXPECTED_SHA, EVENT and,
-for pull requests, the live PR body through the REST API (so an edited body
-plus re-run is honoured). When NEEDS_JSON has a `select` job (quality.yml
+for pull requests, live head-bound PR metadata through the REST API. The full
+PR size is checked even when body validation is disabled; edited bodies are
+honoured on re-run. When NEEDS_JSON has a `select` job (quality.yml
 v0.2.0+), the selection record (its `selection` output) and each lane's `ran`
 output are passed to the gate. Any missing/malformed input fails closed.
 """
@@ -13,12 +14,15 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import sys
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 LANES = ("verify", "lint", "build", "test", "contract", "workflow-lint")
 LAYER_LANES = ("verify", "lint", "build", "test")
+MAX_PR_LINES = 400
+MAX_PR_FILES = 10
 
 
 def _gate():
@@ -42,19 +46,32 @@ def _flag(name: str) -> bool:
     return value == "true"
 
 
-def _pr_body(env: dict[str, str]) -> str | None:
+def _checked_pr_body(env: dict[str, str]) -> str:
+    """Fetch once, require current-head whole-PR size evidence, then return body."""
     number, repo, token = env.get("PR_NUMBER", ""), env.get("REPO", ""), env.get("GH_TOKEN", "")
     if not number or not repo or not token:
-        return None
+        raise ValueError("PR metadata unavailable: PR_NUMBER, REPO and GH_TOKEN are required")
     request = urllib.request.Request(
         f"https://api.github.com/repos/{repo}/pulls/{number}",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28"})
     with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - fixed https host
         data = json.loads(response.read().decode("utf-8"))
-    head = (data.get("head") or {}).get("sha")
-    if head and head != env.get("EXPECTED_SHA"):
-        raise ValueError(f"PR head moved to {head}; this run's evidence is stale")
+    if not isinstance(data, dict):
+        raise ValueError("PR metadata must be an object")
+    head = data.get("head")
+    expected = env.get("EXPECTED_SHA", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", expected) or not isinstance(head, dict) or head.get("sha") != expected:
+        raise ValueError("PR head missing, malformed or moved; this run's evidence is stale")
+    for field in ("additions", "deletions", "changed_files"):
+        value = data.get(field)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"PR {field} must be a nonnegative integer")
+    lines = data["additions"] + data["deletions"]
+    files = data["changed_files"]
+    if lines > MAX_PR_LINES or files > MAX_PR_FILES:
+        raise ValueError(f"PR size exceeds budget: {lines} changed lines (limit {MAX_PR_LINES}), "
+                         f"{files} files (limit {MAX_PR_FILES}); return to TL for reslicing")
     return data.get("body") or ""
 
 
@@ -107,8 +124,8 @@ def main() -> int:
         if not isinstance(needs, dict):
             raise ValueError("NEEDS_JSON is missing")
         body = None
-        if env.get("EVENT") in ("pull_request", "pull_request_target") and env.get("CHECK_PR_BODY") == "true":
-            body = _pr_body(env)
+        if env.get("EVENT") in ("pull_request", "pull_request_target"):
+            body = _checked_pr_body(env)
         result = gate.evaluate(build_input(env, needs, body))
     except (ValueError, OSError, json.JSONDecodeError) as error:
         print(f"::error::aggregate input invalid: {error}", file=sys.stderr)

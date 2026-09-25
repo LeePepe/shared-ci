@@ -24,6 +24,38 @@ and `kind: "contract_<item>"`.
 | 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
 | 8 `identity` | No personal account names, credential-profile paths or local home paths | red line | audit scans every tracked text file for the `forbidden_patterns` | account names in prose that the patterns do not cover |
 
+## Whole-PR size budget
+
+The existing `quality / aggregate` adapter enforces the ceilings defined by
+`MAX_PR_LINES` and `MAX_PR_FILES` in
+[`gate_actions.py`](../scripts/quality/gate_actions.py). Both must hold:
+`additions + deletions <= MAX_PR_LINES` and `changed_files <= MAX_PR_FILES`.
+These are whole-PR totals at the current head, including tests, docs, lockfiles
+and generated text. Binary changes count toward files; line totals do not
+measure binary complexity. No label, body explanation or caller flag exempts
+a PR. Scope/size overflow returns to the implementer/TL for reslicing under
+the [protocol](agent-protocol.md#4-pull-request).
+
+For `pull_request` and `pull_request_target`, the adapter reuses its single
+fixed-host GitHub PR API read for body, head and counters. It requires a full
+expected SHA matching the returned head and nonnegative integer counters
+(booleans are invalid). Missing, malformed, unreadable or moved-head evidence
+fails closed, including when body validation is disabled. Lane and enabled
+body checks still apply. Non-PR runs supply no PR-size evidence.
+
+Before pushing, preview the full proposed PR against its base merge-base:
+
+```sh
+git diff --shortstat origin/main...HEAD
+git diff --numstat origin/main...HEAD
+```
+
+Use the actual PR base instead of `origin/main` where different, and include
+all pending changes before the final preview. Do not measure only the last
+commit or push. Local Git output is a preview; CI uses live PR metadata.
+Consumers gain enforcement only after reviewed provider release and full-SHA
+pin adoption; this source change does not update existing consumers or pins.
+
 ## Changed-layer selection (optional)
 
 A caller may set `changed-only: true` on `quality.yml`, and may call

@@ -20,10 +20,14 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 2. Scope
 
-- Resolve every path you plan to change:
-  `scripts/context/resolve <path> --format layer`. Change only paths owned by
-  the layers your task names. If a change needs another layer, say so in the
-  PR and keep that edit minimal. Do not refactor across layers along the way.
+- Freeze one independently mergeable purpose, one owned layer, planned paths
+  and non-goals before editing. Resolve every planned path with
+  `scripts/context/resolve <path> --format layer`. Essential tests and support
+  documentation travel with the implementation; support edits serve only
+  that purpose.
+- New independent concerns go to follow-up work, even in the same repository
+  or layer. Fix defects introduced by the current patch here. If the necessary
+  fix crosses the scope or size bound, return to the implementer/TL to reslice.
 - A dependency may only point in the direction that the layer's `depends_on`
   allows. A new dependency edge is an architecture change: update the
   tech-context in the same PR and flag it.
@@ -59,15 +63,25 @@ What a PR must be:
 
 - **Base is the default branch.** A PR must be mergeable on its own. Do not
   make it depend on another open PR being merged first.
-- **One purpose.** Split unrelated fixes, refactors and features.
-- **One layer scope where possible.** If a PR crosses layers, say why in
-  Intent.
+- **Bounded purpose.** Keep the frozen scope from §2 and the
+  [whole-PR size budget](repo-contract.md#whole-pr-size-budget). Measure the
+  entire PR before every push, not just the last commit or push; CI checks
+  the current head too.
+- **Overflow returns to the implementer/TL for reslicing**, not automatically
+  to Owner. Same repository/layer, an already reviewed plan, a label or a
+  written explanation is not a waiver. Separate policy/permission protections
+  still apply.
+- **Keep viable slices.** Never drop tests, minify, mislabel generated files
+  or create uncompilable code/test-only shards to fit the budget. Each slice
+  carries its essential tests/docs and passes its checks.
 - **Stacked PRs** are allowed only as a temporary queue. Once the base PR
   merges, retarget the next PR to the default branch and rebase it onto that
   branch, dropping the base PR's pre-squash commits
   (`git rebase --onto origin/main <old-base-tip>`), before it merges. A squash
   merge rewrites the base commits, so a stacked branch that is not rebased
   will conflict or carry duplicate changes.
+  Dependent slices wait for prerequisites to merge in order; this queue never
+  bypasses approvals or CI.
 
 Fill in every section of the repository's PR template:
 
