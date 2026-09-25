@@ -1,5 +1,8 @@
 # AI usage: task entry map
 
+For versioned adoption, compatibility and rollback, start at the
+[AI documentation bundle](../ai/USAGE.md). Existing entry paths below remain valid.
+
 Use this map with the shared-ci checkout actually selected by the caller's full
 commit pin. These pages are task reference material, not agent-role instructions
 or execution permission. Runtime and delivery limits in the API contracts remain

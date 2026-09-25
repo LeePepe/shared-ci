@@ -1,5 +1,8 @@
 # Integration and migration
 
+For versioned adoption, compatibility and rollback, start at the
+[AI documentation bundle](../ai/USAGE.md). Existing entry paths below remain valid.
+
 This development candidate exposes fixed-checkout source surfaces and, since
 the repository-contract slice, reusable workflows (`quality.yml`,
 `codex-review.yml`, `kimi-review.yml`, `workflow-lint.yml`) plus templates;

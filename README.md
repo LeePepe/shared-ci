@@ -1,5 +1,8 @@
 # shared-ci
 
+For versioned adoption, compatibility and rollback, start at the
+[AI documentation bundle](ai/USAGE.md). Existing entry paths below remain valid.
+
 The shared CI for LeePepe repositories. Every consumer pins it by a **full
 40-character commit SHA**. Branch and tag refs are rejected. At any pinned SHA,
 the docs, schemas, templates and engines all come from that same commit.
