@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "guide": "docs/repository-guide.md",
+  "shared_ci": "<40-char-sha>",
+  "dependencies": {}
+}

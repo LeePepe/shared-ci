@@ -7,44 +7,127 @@
 #                             $CI_SELECTION_FULL is exactly "false"
 # Layer selection and gates come from the tech-context layer map via the
 # shared-ci resolver at the pinned SHA ($SHARED_CI, default .shared-ci).
-# Unmapped paths fail; any gate failure fails; no layers selected = full run.
+# Unmapped paths and gate failures fail; an explicit empty CI selection runs no gates.
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 shared_ci="${SHARED_CI:-$root/.shared-ci}"
-pin="$(sed -n 's|.*LeePepe/shared-ci@\([0-9a-f]\{40\}\)/ai/agent-protocol\.md.*|\1|p' AGENTS.md | head -1)"
-if [ ! -d "$shared_ci/.git" ] || [ "$(git -C "$shared_ci" rev-parse HEAD 2>/dev/null)" != "$pin" ]; then
-    rm -rf "$shared_ci"
-    git init -q "$shared_ci"
-    git -C "$shared_ci" fetch -q --depth=1 https://github.com/LeePepe/shared-ci.git "$pin"
-    git -C "$shared_ci" checkout -q --detach FETCH_HEAD
-fi
-context="python3 $shared_ci/scripts/context/_context.py"
+# Bootstrap reads only the pin envelope; the pinned audit validates the complete
+# metadata/guide/workflow contract before any caller gate runs.
+pin="$(python3 -I -B - <<'PY_PIN'
+import json
+import pathlib
+import re
+import subprocess
 
-$context audit >/dev/null
+metadata = pathlib.Path('.github/repo-contract.json')
+if metadata.is_symlink() or metadata.parent.is_symlink():
+    raise SystemExit('repository metadata must not traverse a symlink')
+if metadata.exists():
+    if not metadata.is_file():
+        raise SystemExit('repository metadata must be a regular file')
+    rows = subprocess.check_output(['git', 'ls-files', '--stage', '--', str(metadata)], text=True).splitlines()
+    if len(rows) != 1 or not re.fullmatch(r'100(?:644|755) [0-9a-f]+ 0\t\.github/repo-contract\.json', rows[0]):
+        raise SystemExit('repository metadata must be tracked and unconflicted')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate metadata key: ' + key)
+            result[key] = value
+        return result
+    data = json.loads(metadata.read_text(encoding='utf-8'), object_pairs_hook=unique)
+    if not isinstance(data, dict) or set(data) != {'schema', 'guide', 'shared_ci', 'dependencies'}:
+        raise SystemExit('invalid repository metadata fields')
+    if type(data['schema']) is not int or data['schema'] != 1:
+        raise SystemExit('unsupported repository metadata schema')
+    if not isinstance(data['guide'], str) or not isinstance(data['dependencies'], dict):
+        raise SystemExit('invalid repository metadata types')
+    pin = data['shared_ci']
+else:
+    text = pathlib.Path('AGENTS.md').read_text(encoding='utf-8')
+    pins = set(re.findall(r'(?:LeePepe/shared-ci@|github\.com/LeePepe/shared-ci/blob/)([0-9a-f]{40})/ai/agent-protocol\.md', text))
+    if len(pins) != 1:
+        raise SystemExit('expected one legacy shared-ci pin or .github/repo-contract.json')
+    pin = pins.pop()
+if not isinstance(pin, str) or not re.fullmatch(r'[0-9a-f]{40}', pin):
+    raise SystemExit('shared_ci must be a full lowercase 40-char SHA')
+print(pin)
+PY_PIN
+)"
+
+# Hook-local Git variables belong to the caller, never the provider. Keep the
+# caller environment unchanged for its index/audit and verification commands.
+provider_git() (
+    for name in $(git rev-parse --local-env-vars); do unset "$name"; done
+    git -C "$shared_ci" "$@"
+)
+# Normalize the parent (including platform temp aliases), reject a symlink cache. Never
+# delete, reset, fetch into or checkout an existing caller-owned cache.
+shared_ci="$(python3 -I -B - "$shared_ci" <<'PY_PATH'
+import os
+import pathlib
+import sys
+path = pathlib.Path(os.path.abspath(sys.argv[1]))
+if path.is_symlink():
+    raise SystemExit('provider path must not traverse a symlink')
+print(path.parent.resolve() / path.name)
+PY_PATH
+)"
+if [ ! -e "$shared_ci" ]; then
+    if [ -n "${SHARED_CI:-}" ]; then
+        echo "[verify] supplied SHARED_CI must already exist at the declared pin" >&2; exit 1
+    fi
+    mkdir "$shared_ci"
+    provider_git init -q
+    provider_git fetch -q --depth=1 https://github.com/LeePepe/shared-ci.git "$pin"
+    provider_git checkout -q --detach FETCH_HEAD
+fi
+if [ ! -d "$shared_ci" ] ||
+   [ "$(provider_git rev-parse --show-toplevel 2>/dev/null || true)" != "$shared_ci" ] ||
+   [ "$(provider_git rev-parse HEAD 2>/dev/null || true)" != "$pin" ]; then
+    echo "[verify] preserve existing provider path; require a checkout at the declared pin" >&2; exit 1
+fi
+# Git status can hide modified code behind assume-unchanged / skip-worktree
+# flags. Reject these (including sparse layouts) rather than altering the index.
+provider_git ls-files -v -z | python3 -I -B -c '
+import sys
+if any(not row.startswith(b"H ") for row in sys.stdin.buffer.read().split(b"\0") if row):
+    raise SystemExit("[verify] preserve provider index flags; require an ordinary clean checkout")
+'
+status="$(provider_git status --porcelain --untracked-files=all --ignored)" || {
+    echo "[verify] cannot inspect provider checkout; refusing to execute it" >&2; exit 1
+}
+if [ -n "$status" ]; then
+    echo "[verify] preserve dirty provider checkout; supply a separate clean pinned checkout" >&2; exit 1
+fi
+context() { python3 -I -B "$shared_ci/scripts/context/_context.py" "$@"; }
+
+context audit >/dev/null
 
 if [ "${1:-}" = "--all" ]; then
-    layers="$($context layers --all)"
+    layers="$(context layers --all)"
 elif [ "${1:-}" = "--selected" ]; then
     if [ "${CI_SELECTION_FULL:-true}" = "false" ]; then
         layers="${CI_SELECTED_LAYERS:-}"
-        known=" $(echo $($context layers --all)) "
+        known_layers="$(context layers --all)"
+        known=" $(printf '%s\n' "$known_layers" | tr '\n' ' ') "
         for layer in $layers; do
             case "$known" in *" $layer "*) ;; *) echo "[verify] unknown selected layer: $layer" >&2; exit 1 ;; esac
         done
     else
-        layers="$($context layers --all)"
+        layers="$(context layers --all)"
     fi
 else
     base="${VERIFY_BASE:-origin/main}"
     changed="$(git diff --name-only "$(git merge-base "$base" HEAD)" HEAD)"
     if [ -z "$changed" ]; then echo "[verify] no changes"; exit 0; fi
-    layers="$(printf '%s\n' "$changed" | $context layers --stdin)"
+    layers="$(printf '%s\n' "$changed" | context layers --stdin)"
 fi
 
 for layer in $layers; do
     mode="local"; [ "${VERIFY_MODE:-}" = "ci" ] && mode="ci"
-    $context run "$layer" --mode "$mode"
+    context run "$layer" --mode "$mode"
 done
 echo "[verify] ok: ${layers:-no layer gates}"
