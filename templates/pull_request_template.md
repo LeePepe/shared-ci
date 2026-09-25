@@ -1,6 +1,7 @@
 <!--
-PR goals: base = default branch; one purpose; one layer scope where possible;
-independently mergeable. Stacked PR? After its base merges, retarget to main and
+PR goals: base = default branch; one purpose in a repository-defined work unit;
+independently mergeable. Read the development guide indexed by AGENTS.md.
+Stacked PR? After its base merges, retarget to main and
 `git rebase --onto origin/main <old-base-tip>` before merging (squash merges
 otherwise make the stacked branch conflict).
 -->
@@ -11,7 +12,7 @@ otherwise make the stacked branch conflict).
 
 ## Intent
 
-<!-- What changes and why. Link the task/issue/spec. -->
+<!-- What changes and why. Name the repository-defined PR unit and link the requirement/spec/task when present. Dev Team work also identifies its Planner task; other sources need no Dev Team task. -->
 
 ## Compatibility
 
@@ -19,7 +20,7 @@ otherwise make the stacked branch conflict).
 
 ## Removed or weakened tests or policy
 
-<!-- Every removed/skipped/weakened test or assertion and every policy/gate/ruleset change, each with its reason and approver. Write "none" if none. Non-empty → add the owner-review label. -->
+<!-- List removed/skipped/weakened tests/assertions and policy/gate/ruleset changes with reasons, or "none". Approval and review routing follow the pinned agent protocol; ordinary test-code changes do not themselves require Owner approval. -->
 
 ## Test evidence
 

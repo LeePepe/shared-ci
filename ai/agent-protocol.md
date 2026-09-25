@@ -8,9 +8,10 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 1. Before you edit
 
-1. Read in this order: the constitution (if present), then the root
-   `tech-context.md`, then the leaf `tech-context.md` of every layer you will
-   touch. `AGENTS.md` lists the paths.
+1. Use `AGENTS.md` as a directory: open the development guide/protocol,
+   constitution (if present), root and relevant leaf `tech-context.md`, and
+   verification/review documents it points to for this task. Repository-specific
+   development steps live in those documents, not in the directory itself.
 2. Use a dedicated branch **and** a dedicated worktree for the task. Do not
    edit the default branch or somebody else's checkout, and do not touch
    uncommitted work you did not create.
@@ -18,12 +19,24 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
    writer appears (unexpected commits or a dirty tree you did not make),
    stop and report. Do not merge over it or reset it.
 
-## 2. Scope
+## 2. Develop against the repository contract
 
-- Resolve every path you plan to change:
-  `scripts/context/resolve <path> --format layer`. Change only paths owned by
-  the layers your task names. If a change needs another layer, say so in the
-  PR and keep that edit minimal. Do not refactor across layers along the way.
+- Read the repository's layer map and development/PR guide under the
+  [repository development contract](repo-contract.md#repository-development-contract).
+  Choose its existing PR unit for the requested outcome. Layer boundaries and
+  PR conventions belong to the repository, not to the agent's role.
+- **Dev Team:** Planner maps requirements/spec acceptance to tasks within those
+  units, passes the existing spec/plan gate, and TL dispatches FS. FS implements
+  the assigned task; a gap returns through TL to Planner. A task cannot redefine
+  the repository's architecture or PR policy.
+- **Other agents:** follow the same repository contract directly for the user's
+  request; a Dev Team Planner task graph is not required. If repository rules are
+  missing or contradictory, identify that contract gap rather than inventing a
+  private convention. Existing authorization and review protections still apply.
+- Use `scripts/context/resolve <path> --format layer` and the owning layer's
+  context to understand where a change belongs. Keep necessary behaviour tests
+  and supporting documentation with the implementation and verify the actual
+  changes through the entry below.
 - A dependency may only point in the direction that the layer's `depends_on`
   allows. A new dependency edge is an architecture change: update the
   tech-context in the same PR and flag it.
@@ -40,8 +53,9 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
   - edit policy, gate, schema, ruleset or CI files in order to pass;
   - pin shared-ci, or any shared library, by branch or tag instead of a full
     SHA or exact version.
-- If a check is wrong, fix it in its own PR that states the reason and needs
-  Owner review. Do not work around it in a feature PR.
+- If a check is wrong, fix it in its own scoped PR with the reason. Ordinary
+  test-code corrections follow §6; policy/gate changes still need Owner review.
+  Do not work around the check in a feature PR.
 - With changed-layer selection (`changed-only: true`, see
   `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
   touches plus their dependents. A lane that prints `not selected: <reason>`
@@ -59,24 +73,31 @@ What a PR must be:
 
 - **Base is the default branch.** A PR must be mergeable on its own. Do not
   make it depend on another open PR being merged first.
-- **One purpose.** Split unrelated fixes, refactors and features.
-- **One layer scope where possible.** If a PR crosses layers, say why in
-  Intent.
+- **Repository-defined unit.** Follow the repository guide's PR conventions:
+  one purpose, an existing unit and its necessary tests/companion documentation.
+  Link the relevant requirement/spec and, for FS, the Planner task. Other sources
+  do not need to create a Dev Team task to submit a PR.
+- **PR Manager handles lifecycle.** Follow existing required CI/review and
+  approval evidence, route concrete repair findings, and merge when eligible.
+  Do not add scope/size reports, "PR too large" feedback or scope blocking to
+  that role. This does not waive any existing required check or review.
 - **Stacked PRs** are allowed only as a temporary queue. Once the base PR
   merges, retarget the next PR to the default branch and rebase it onto that
   branch, dropping the base PR's pre-squash commits
   (`git rebase --onto origin/main <old-base-tip>`), before it merges. A squash
   merge rewrites the base commits, so a stacked branch that is not rebased
   will conflict or carry duplicate changes.
+  Dependent slices wait for prerequisites to merge in order; this queue never
+  bypasses approvals or CI.
 
 Fill in every section of the repository's PR template:
 
 | Section | Content |
 | --- | --- |
 | Existing behaviour | What the code does today, including behaviour that must be kept |
-| Intent | What changes and why; the task or issue link |
+| Intent | What changes and why; repository PR unit and requirement/spec/task link when present |
 | Compatibility | API/data/config compatibility, migrations, rollback |
-| Removed or weakened tests or policy | Each item with its reason and who approved it, or `none` |
+| Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
 
 The `quality / aggregate` check rejects empty or placeholder sections.
@@ -94,10 +115,14 @@ The `quality / aggregate` check rejects empty or placeholder sections.
 
 Changes under `CODEOWNERS` paths need Owner approval (for example
 `.github/**`, policy, schemas, gates, `AGENTS.md`, the constitution,
-dependency pins, credentials, privacy and data migrations). The same applies
-to any PR that removes or weakens a test, or changes existing behaviour
-without an approved spec. Until the repository enforces CODEOWNERS review,
-add the `owner-review` label and wait.
+dependency pins, credentials, privacy and data migrations). Ordinary test-code
+edits or deletions require a stated reason, CI and AI review, not separate
+Owner approval merely because tests changed. Changes to actual gate/policy
+semantics or permissions remain important even when placed in a test or Markdown
+file. Existing behaviour changes without an approved spec also need the Owner.
+Use trusted policy and effective CODEOWNERS protections, not an author's label,
+to route review. Until CODEOWNERS review is enforced, add `owner-review` for
+important PRs and wait; do not bypass existing protections.
 
 Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
 
