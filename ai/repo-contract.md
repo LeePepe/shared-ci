@@ -15,7 +15,7 @@ and `kind: "contract_<item>"`.
 
 | # | Item | Type | Machine check | Doc-only remainder |
 | --- | --- | --- | --- | --- |
-| 1 `agents` | `AGENTS.md` of at most 150 lines. Required sections: `Read first`, `Protocol`, `Verify`, `Required checks`, `Red lines`, `Delivery`. The protocol pointer is `LeePepe/shared-ci@<40-char SHA>/ai/agent-protocol.md` | guidance | audit checks that the file exists, the line count, the sections, that the pointer is a full SHA, and that the pointer SHA matches every `uses: LeePepe/shared-ci/...@` pin | whether the content is accurate |
+| 1 `agents` | `AGENTS.md` is a directory of at most 150 lines. Required sections: `Read first`, `Protocol`, `Verify`, `Required checks`, `Red lines`, `Delivery`; these point to authoritative documents/configuration. The protocol pointer is `LeePepe/shared-ci@<40-char SHA>/ai/agent-protocol.md` | guidance | audit checks that the file exists, the line count, the sections, that the pointer is a full SHA, and that the pointer SHA matches every `uses: LeePepe/shared-ci/...@` pin | pointer accuracy and directory-only content |
 | 2 `agent_files` | `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.cursorrules` only say "read AGENTS.md first", plus 1–2 notes specific to that tool | guidance | audit checks that each file refers to AGENTS.md, has at most 12 non-empty lines, does not repeat the shared-ci pin, and does not repeat any required-check name listed in AGENTS.md | whether the notes contradict AGENTS.md |
 | 3 `ci` | `.github/workflows/ci.yml` calls `LeePepe/shared-ci/.github/workflows/quality.yml@<40-char SHA>` and passes this repository's commands | enforced | audit checks that ci.yml calls quality.yml, that every pin is a full SHA, and that all pins are the same SHA. workflow-lint also rejects tag and branch refs and self-hosted jobs without a fork guard | — |
 | 4 `verify` | `.githooks/pre-push` (or pre-commit) and CI call the same executable `scripts/verify`. With `changed-only: true` CI calls `scripts/verify --selected`, which runs the layers the `select` job chose, or every layer on a full run | enforced | audit checks that `scripts/verify` is tracked with mode 100755, that the hook exists, is executable and calls it, and that ci.yml calls it | whether `core.hooksPath` is set locally (it cannot be seen in the tree) |
@@ -24,25 +24,81 @@ and `kind: "contract_<item>"`.
 | 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
 | 8 `identity` | No personal account names, credential-profile paths or local home paths | red line | audit scans every tracked text file for the `forbidden_patterns` | account names in prose that the patterns do not cover |
 
-## Development entry points
+## Repository development contract
 
-Use `AGENTS.md` as a task-oriented directory to the repository's development
-guide, pinned [agent protocol](agent-protocol.md), architecture/layer documents,
-verification/CI and review policy. Put development instructions in those
-targets, not in the directory. This protocol supplies the shared steps;
-repository guides supply their own build setup and project-specific practices.
+The repository defines its architecture and PR boundaries before a task is
+planned. They apply to every contributor, independently of the agent or workflow.
+Shared-ci supplies the format, reusable checks and templates; repo-kit adapts
+them to the repository's actual structure. Planner and implementers consume this
+contract, not invent a new layer model or PR policy for each assignment.
 
-Dev Team task boundaries are produced by Planner before FS implementation and
-reviewed in the existing spec/plan gate. Other agents use the indexed development
-documents without a Planner-task or formal scope-declaration prerequisite.
-PRM follows the existing PR lifecycle; scope/size policing is not an added duty.
-There is no new range or size gate, nor a scope field added to the PR schema.
-Layer selection continues to choose verification from the actual diff and
-dependencies; it is not a reason to waive existing checks or approvals.
+| Repository artifact | Owns |
+| --- | --- |
+| Root `tech-context.md` | Layer inventory, dependency graph and reasoned support paths |
+| Each layer's `tech-context.md` | Responsibility, owned implementation/tests, interfaces, allowed dependencies and verification |
+| Development guide (normally `docs/development.md`) | PR work units, permitted companion changes, development/verification entry points and review routing |
+| Scripts, caller CI and CODEOWNERS | Executable project checks and effective review protection |
+| `AGENTS.md` | Task-oriented pointers to those sources, not copies of their rules |
 
-Consumers follow their pinned protocol version. Updating these source documents
-does not deploy them to existing consumers or installed roles; directory-only
-template/audit migration is separate from this development-guidance change.
+### Define layers by responsibility
+
+- A layer is a stable code responsibility with explicit interfaces and allowed
+  dependencies. Packages/targets are evidence, not an automatic one-to-one rule:
+  one package may contain domain, state and presentation layers. Do not create
+  temporary layers just to fit a task or PR, or impose one stack's layer names
+  on every repository.
+- Use the existing [tech-context format](../docs/context-cli-contract.md#simplified-tech-context-layer-map-repo-kit-format):
+  unique layer ID, root-relative `owns`, `depends_on`, verification `gate` and
+  `red_lines`. Put tests under the layer they exercise even when stored elsewhere.
+  Explain responsibilities, public interfaces and excluded concerns in the leaf.
+- Every tracked path resolves to one layer or one explicit support declaration;
+  the root table and leaf dependencies agree and form an acyclic graph. Support
+  means non-layer material, not unverified material: name its purpose and checks.
+  Broad script/source exclusions must not hide executable modules from ownership.
+- Actual import/API boundaries need the repository's own lint/build/tests,
+  wired through its verification commands. The shared resolver checks declared
+  ownership/dependencies, not arbitrary language imports. Record missing checks
+  as gaps rather than claiming the declarations prove the implementation.
+
+### Define PR work units in the repository
+
+The development guide names the repository's PR units and, for each, references
+its layer/path source, allowed companion changes, verification and review policy.
+Use [the guide template](../templates/development.md) with actual repository paths.
+Code units refer to existing layer IDs; CI wiring, documentation/spec work and
+review/policy changes use their own supporting responsibilities, not fake layers.
+
+- One PR delivers one independently acceptable purpose within one such unit.
+  Independent requirements/spec work stay separate even within the same layer.
+  Required tests and implementation documentation travel with their code;
+  unrelated docs cleanup, CI changes or review-policy changes do not.
+- Cross-layer features become dependency-ordered PRs using the repository's
+  interfaces and permitted companion paths. Keep every step buildable/testable;
+  redesign the sequence if it cannot stand alone. A needed architecture or PR
+  boundary change is an explicit contract change under existing review policy,
+  not an implementer widening a label or a Planner inventing another layer.
+- The PR's existing `Intent` names the repository unit and the requirement/spec
+  or task when present. A direct agent needs no Dev Team task graph to follow
+  this contract. There is no separate author-defined path-allowlist form.
+- There is no universal line/file ceiling. Markdown, tests and support paths
+  do not determine approval by extension; actual policy/gate/permission changes
+  remain protected under the [protocol](agent-protocol.md#6-important-prs-need-the-owner).
+
+### Checks and review have distinct jobs
+
+| Responsibility | Enforcement |
+| --- | --- |
+| Tracked-path coverage, overlaps, declared dependencies/cycles and table drift | Existing context audit / CI contract lane |
+| Real import boundaries, builds and behaviour | Repository-declared lint/build/test commands; local hooks and CI use the same entry |
+| Check selection and current-head evidence | Existing layer selection and aggregate; retain forced full runs and all required checks |
+| One purpose, appropriate PR unit and necessary companion changes | Existing planning/code review using the repository guide; not a new PRM scope report |
+
+Record `enforced`, `manual`, `planned` or `N/A` with the actual command/evidence
+for each repository rule. The current aggregate does not infer PR purpose or
+validate the guide's PR-unit table; do not claim those are mechanical checks.
+PRM consumes existing CI/review outcomes and manages delivery, not PR size.
+Updating this source does not deploy consumer pins, roles, directory-only
+schema/audit migrations or server protections.
 
 ## Changed-layer selection (optional)
 
@@ -77,6 +133,6 @@ map.
 ## Exceptions
 
 This contract has no self-service exceptions. The Owner must approve a
-deviation, and it is recorded under `Red lines` in AGENTS.md, which is covered
-by CODEOWNERS. Any change to this file, the schema or the checker is an
-important PR.
+deviation; record it in an existing CODEOWNERS-protected policy document and
+keep only its pointer under `Red lines` in AGENTS.md. Any change to this file,
+the schema or the checker is an important PR.

@@ -19,18 +19,20 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
    writer appears (unexpected commits or a dirty tree you did not make),
    stop and report. Do not merge over it or reset it.
 
-## 2. Development modes
+## 2. Develop against the repository contract
 
-- **Dev Team FS:** execute the ready task produced by Planner and dispatched
-  by TL after the spec/plan gate. Use its requirement/spec revision, acceptance,
-  layer, paths and exclusions; one implementation task has its own branch/PR.
-  If another layer, spec or requirement is needed, return the gap through TL
-  to Planner before continuing. Task decomposition is a planning-stage duty,
-  not a PR Manager scope/size check.
-- **Other agents:** follow the user's request and the development documents
-  indexed by `AGENTS.md`. No Planner task graph, formal scope declaration or
-  PR-size/scope gate is required by this protocol. Existing authorization,
-  architecture, verification and review rules still apply.
+- Read the repository's layer map and development/PR guide under the
+  [repository development contract](repo-contract.md#repository-development-contract).
+  Choose its existing PR unit for the requested outcome. Layer boundaries and
+  PR conventions belong to the repository, not to the agent's role.
+- **Dev Team:** Planner maps requirements/spec acceptance to tasks within those
+  units, passes the existing spec/plan gate, and TL dispatches FS. FS implements
+  the assigned task; a gap returns through TL to Planner. A task cannot redefine
+  the repository's architecture or PR policy.
+- **Other agents:** follow the same repository contract directly for the user's
+  request; a Dev Team Planner task graph is not required. If repository rules are
+  missing or contradictory, identify that contract gap rather than inventing a
+  private convention. Existing authorization and review protections still apply.
 - Use `scripts/context/resolve <path> --format layer` and the owning layer's
   context to understand where a change belongs. Keep necessary behaviour tests
   and supporting documentation with the implementation and verify the actual
@@ -71,9 +73,10 @@ What a PR must be:
 
 - **Base is the default branch.** A PR must be mergeable on its own. Do not
   make it depend on another open PR being merged first.
-- **Dev Team task link.** An FS PR identifies the Planner task it implements;
-  its boundary was set before implementation under §2. Other sources do not
-  need to create a Planner task or a scope declaration to submit a PR.
+- **Repository-defined unit.** Follow the repository guide's PR conventions:
+  one purpose, an existing unit and its necessary tests/companion documentation.
+  Link the relevant requirement/spec and, for FS, the Planner task. Other sources
+  do not need to create a Dev Team task to submit a PR.
 - **PR Manager handles lifecycle.** Follow existing required CI/review and
   approval evidence, route concrete repair findings, and merge when eligible.
   Do not add scope/size reports, "PR too large" feedback or scope blocking to
@@ -92,7 +95,7 @@ Fill in every section of the repository's PR template:
 | Section | Content |
 | --- | --- |
 | Existing behaviour | What the code does today, including behaviour that must be kept |
-| Intent | What changes and why; task/issue link (Dev Team: the Planner task) |
+| Intent | What changes and why; repository PR unit and requirement/spec/task link when present |
 | Compatibility | API/data/config compatibility, migrations, rollback |
 | Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |

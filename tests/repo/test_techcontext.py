@@ -2,7 +2,7 @@
 import json
 import unittest
 
-from fixture import APP, ContractRepo, CORE, ROOT_CONTEXT
+from fixture import APP, ContractRepo, CORE, PIN, REPO, ROOT_CONTEXT
 
 
 class TechContextResolverTests(unittest.TestCase):
@@ -81,6 +81,41 @@ class TechContextResolverTests(unittest.TestCase):
     def test_root_without_table_is_an_error(self):
         self.repo.write("docs/architecture/tech-context.md", "---\nlayer: _root\n---\n# nothing\n")
         self.assertIn("invalid_context", self.repo.kinds())
+
+    def use_published_templates(self):
+        agents = (REPO / "templates/AGENTS.md").read_text(encoding="utf-8")
+        self.repo.write("AGENTS.md", agents.replace("<40-char-sha>", PIN)
+                        .replace("<Repository>", "Synthetic"))
+        root = (REPO / "templates/tech-context.root.md").read_text(encoding="utf-8")
+        root = root.replace("Packages/Core", "src/core").replace("Packages/App", "src/app")
+        self.repo.write("docs/architecture/tech-context.md", root)
+        core = (REPO / "templates/tech-context.leaf.md").read_text(encoding="utf-8")
+        self.repo.write("src/core/tech-context.md", core.replace("Packages/Core", "src/core"))
+        self.repo.write("docs/development.md",
+                        (REPO / "templates/development.md").read_text(encoding="utf-8"))
+
+    def test_published_templates_keep_tests_with_implementation(self):
+        self.use_published_templates()
+        self.repo.write("src/core/tests/test_model.py", "assert 1 == 1\n")
+        self.assertEqual(set(), self.repo.kinds())
+        result = self.run_cli("resolve", "src/core/model.py", "src/core/tests/test_model.py",
+                              "docs/development.md", ".github/workflows/ci.yml")
+        self.assertEqual(0, result.returncode, result.stderr)
+        rows = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(["Core", "Core"], [row["layer"] for row in rows[:2]])
+        self.assertEqual(["excluded", "excluded"], [row["classification"] for row in rows[2:]])
+
+    def test_published_root_requires_an_owner_for_new_script(self):
+        self.use_published_templates()
+        self.repo.write("scripts/new_tool.py", "VALUE = 1\n")
+        self.assertIn("unmapped_path", self.repo.kinds())
+        core = (self.repo.root / "src/core/tech-context.md").read_text(encoding="utf-8")
+        self.repo.write("src/core/tech-context.md",
+                        core.replace("owns: [src/core/**]",
+                                     "owns: [src/core/**, scripts/new_tool.py]"))
+        self.assertEqual(set(), self.repo.kinds())
+        self.assertEqual("Core\n", self.run_cli("resolve", "scripts/new_tool.py",
+                                               "--format", "layer").stdout)
 
 
 if __name__ == "__main__":

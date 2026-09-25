@@ -1,5 +1,6 @@
 <!--
-PR goals: base = default branch; independently mergeable.
+PR goals: base = default branch; one purpose in a repository-defined work unit;
+independently mergeable. Read the development guide indexed by AGENTS.md.
 Stacked PR? After its base merges, retarget to main and
 `git rebase --onto origin/main <old-base-tip>` before merging (squash merges
 otherwise make the stacked branch conflict).
@@ -11,7 +12,7 @@ otherwise make the stacked branch conflict).
 
 ## Intent
 
-<!-- What changes and why. Link the task/issue/spec; for Dev Team work, identify the Planner task. No additional scope declaration is required for other sources. -->
+<!-- What changes and why. Name the repository-defined PR unit and link the requirement/spec/task when present. Dev Team work also identifies its Planner task; other sources need no Dev Team task. -->
 
 ## Compatibility
 
