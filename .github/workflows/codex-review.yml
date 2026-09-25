@@ -28,6 +28,7 @@ on:
         type: string
         default: ""
       max-diff-bytes:
+        description: Positive integer byte budget for the complete diff; review fails closed if exceeded.
         type: number
         default: 200000
       timeout-minutes:
