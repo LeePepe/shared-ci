@@ -285,6 +285,20 @@ title: Metadata
                 self.repo.git("add", path)
                 self.audit(0)
 
+    def test_unsafe_lockfile_cannot_hide_dependency_pin_mismatch(self):
+        metadata = json.loads((self.repo.root / ".github/repo-contract.json").read_text())
+        metadata["dependencies"] = {"shared-telemetry": {
+            "version": "1.2.0", "ai": "https://example.invalid/1.2.0/ai/"}}
+        self.repo.write(".github/repo-contract.json", json.dumps(metadata))
+        self.repo.write("docs/pins/package-lock.json", json.dumps({"packages": {
+            "node_modules/shared-telemetry": {"version": "1.3.0"}}}))
+        self.repo.git("add", "docs/pins/package-lock.json")
+        self.assertTrue(any(f["kind"] == "contract_dependencies" for f in self.audit(1)))
+        directory = self.repo.root / "docs/pins"
+        directory.rename(self.repo.root / "docs/saved-pins")
+        directory.symlink_to("saved-pins", target_is_directory=True)
+        self.assertTrue(any(f["kind"] == "contract_dependencies" for f in self.audit(1)))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -504,11 +504,17 @@ def _pr_template(report: _Report, root: pathlib.Path, files: dict, contract: dic
             report.add("pr_template", names[0], f"missing required section '## {title}'")
 
 
-def _resolved_pins(root: pathlib.Path, files: dict) -> dict[str, set[str]]:
+def _resolved_pins(report: _Report, root: pathlib.Path, files: dict) -> dict[str, set[str]]:
     pins: dict[str, set[str]] = {}
     for path in files:
         name = pathlib.PurePosixPath(path).name
-        text = _text(root, path) if name in ("Package.resolved", "package-lock.json") else None
+        if name not in ("Package.resolved", "package-lock.json"):
+            continue
+        text = _text(root, path)
+        if text is None:
+            # A denied alias/read must not erase a dependency pin from parity.
+            report.add("dependencies", path, "cannot safely read tracked dependency lockfile")
+            continue
         if not text:
             continue
         try:
@@ -544,7 +550,7 @@ def _dependencies(report: _Report, root: pathlib.Path, files: dict, contract: di
         declared[name] = version
         if not re.search(r"[@/]" + re.escape(version) + r"/ai/", rest):
             report.add("dependencies", source, f"{name} {version} must point to that version's ai/ docs")
-    pins = _resolved_pins(root, files)
+    pins = _resolved_pins(report, root, files)
     for name in contract["shared_libraries"]:
         observed = pins.get(name, set())
         if name in declared and observed and declared[name] not in observed:
