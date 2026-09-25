@@ -306,10 +306,26 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
         self.repo.git("add", "re.py")
         self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base module")
         self.base = self.repo.git("rev-parse", "HEAD").stdout.strip()
-        # Include the base on PYTHONPATH to expose poison even when site startup
-        # preloads re before Python inserts the stdin cwd into its import path.
+        # Poison only the new stdin validator, not unrelated script-path
+        # launchers (such as immutable rules admission before this step).
+        dispatcher = self.tools / "python3"
+        dispatcher.write_text("""#!/bin/sh
+for arg in "$@"; do
+    if [ "$arg" = "-" ]; then
+        printf '%s\\n' "$@" > "$STUB_OUT/budget-python-argv"
+        export PYTHONPATH="$STUB_POISON_PATH"
+        break
+    fi
+done
+exec "$STUB_PYTHON" "$@"
+""")
+        dispatcher.chmod(0o755)
         result, comment = self.run_script(
-            "codex-review.sh", json.dumps(PASS), HEAD_SHA=self.base, PYTHONPATH=str(self.repo.root))
+            "codex-review.sh", json.dumps(PASS), HEAD_SHA=self.base,
+            STUB_POISON_PATH=str(self.repo.root), STUB_PYTHON=sys.executable)
+        invocation = self.out / "budget-python-argv"
+        self.assertTrue(invocation.exists(), "actual stdin validator must be invoked")
+        self.assertIn("-", invocation.read_text().splitlines())
         self.assertFalse((self.repo.root / "poison-imported").exists(), result.stderr)
         self.assertFalse((self.repo.root / "__pycache__").exists())
         self.assertEqual(0, result.returncode, result.stderr)
