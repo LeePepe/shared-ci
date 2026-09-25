@@ -265,6 +265,28 @@ title: Metadata
         self.repo.git("rm", "--cached", ".github/repo-contract.json")
         self.audit(1, ".github/repo-contract.json")
 
+    def test_generic_git_filenames_do_not_relax_route_syntax(self):
+        for name, encoded in (("tab\tname.md", "tab%09name.md"),
+                              ("newline\nname.md", "newline%0Aname.md"),
+                              ("back\\slash.md", "back%5Cslash.md")):
+            with self.subTest(name=name):
+                path = "docs/" + name
+                self.repo.write(path, "# Document\n")
+                self.repo.git("add", path)
+                self.route("docs/" + encoded)
+                self.audit(1, "AGENTS.md:4")
+
+    def test_generic_git_filenames_do_not_relax_metadata_guide_syntax(self):
+        metadata = json.loads((self.repo.root / ".github/repo-contract.json").read_text())
+        for name in ("tab\tname.md", "newline\nname.md", "back\\slash.md"):
+            with self.subTest(name=name):
+                path = "docs/" + name
+                self.repo.write(path, AGENTS)
+                self.repo.git("add", path)
+                metadata["guide"] = path
+                self.repo.write(".github/repo-contract.json", json.dumps(metadata))
+                self.audit(1, ".github/repo-contract.json")
+
     def test_dangling_metadata_symlink_does_not_fall_back_to_legacy(self):
         self.repo.write("AGENTS.md", AGENTS)
         self.repo.remove(".github/repo-contract.json")

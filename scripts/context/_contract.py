@@ -54,13 +54,15 @@ def _git_files(root: pathlib.Path) -> dict[str, str]:
 
 
 def _text(root: pathlib.Path, path: str, limit: int = 2_000_000) -> str | None:
-    if not _local_path(path):
+    # Git filenames allow controls and literal backslashes; route URL syntax
+    # is narrower. Keep containment here without filtering legitimate names.
+    parts = path.split("/")
+    if "\0" in path or any(part in ("", ".", "..") for part in parts):
         return None
     target = root
     try:
         # Check each component before reading: even an internal ancestor alias
         # can turn a tracked pathname into unrelated local or outside content.
-        parts = path.split("/")
         for index, part in enumerate(parts):
             target = target / part
             info = target.lstat()
@@ -78,7 +80,7 @@ def _text(root: pathlib.Path, path: str, limit: int = 2_000_000) -> str | None:
 
 
 def _tracked_text(root: pathlib.Path, path: str, files: dict) -> str | None:
-    if files.get(path) not in ("100644", "100755"):
+    if not _local_path(path) or files.get(path) not in ("100644", "100755"):
         return None
     return _text(root, path)
 
