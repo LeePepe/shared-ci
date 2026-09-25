@@ -2,9 +2,11 @@ name: review
 
 # AI review for shared-ci's own PRs (dogfood; pinned to an earlier commit).
 # pull_request_target evaluates this file from main, so it takes effect after merge.
-# shared-ci has no self-hosted review runner by design. The jobs run only when the
-# repository variable SHARED_CI_REVIEW_RUNNER is 'true'; otherwise they are skipped
-# (not required) instead of leaving runs queued forever on every PR.
+# shared-ci has no self-hosted review runner by design. Review callers run when the
+# repository variable SHARED_CI_REVIEW_RUNNER is 'true'; otherwise the callers
+# skip rather than queue forever. The hosted Codex completion gate fails closed
+# on that skip. Kimi remains advisory and does not delay the gate.
+# Requiring the new check needs separate approved settings and live readback.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -22,6 +24,30 @@ jobs:
   codex-review-target:
     if: vars.SHARED_CI_REVIEW_RUNNER == 'true'
     uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@9ff304e317a5ff924a4c488515ead5a607d28236
+
+  codex-review-gate:
+    if: ${{ always() }}
+    needs: [codex-review-target]
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: Require completed Codex review
+        shell: sh
+        env:
+          CODEX_RESULT: ${{ needs.codex-review-target.result }}
+        run: |
+          case "${CODEX_RESULT:-}" in
+            success)
+              echo "Codex review completed successfully."
+              ;;
+            *)
+              echo "::error::Codex review must complete with success; skipped, failed, cancelled or unavailable review cannot pass."
+              echo "Check SHARED_CI_REVIEW_RUNNER and trusted runner availability, inspect the Codex review job, then re-run review for this PR head."
+              echo "Owner approval and Kimi success do not substitute for completed Codex review."
+              exit 1
+              ;;
+          esac
 
   kimi-review:
     if: vars.SHARED_CI_REVIEW_RUNNER == 'true'
