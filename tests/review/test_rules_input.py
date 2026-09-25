@@ -188,6 +188,42 @@ class RulesInputTests(unittest.TestCase):
             self.assertIn("BASE POLICY", rules)
             self.assertNotIn("REPLACEMENT POLICY", rules)
 
+    def assert_provider_stays_clean(self, tool):
+        self.revisions()
+        self.provider = self.tools / "clean provider"
+        subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(REPO), str(self.provider)],
+                       env=self.repo.env, check=True, capture_output=True)
+        # Include the current review implementation, even before an author commit.
+        paths = subprocess.check_output(["git", "ls-files", "scripts/review"], cwd=REPO,
+                                        env=self.repo.env, text=True).splitlines()
+        for path in paths:
+            shutil.copy2(REPO / path, self.provider / path)
+        def provider_git(*args):
+            return subprocess.check_output(["git", "-C", str(self.provider), *args],
+                                           env=self.repo.env, text=True)
+        provider_git("add", "scripts/review")
+        provider_git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit",
+                     "--allow-empty", "-qm", "review fixture")
+        for key in ("PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX"):
+            self.repo.env.pop(key, None)
+        before = self.repo.git("status", "--porcelain").stdout
+        self.assertEqual("", provider_git("status", "--porcelain", "--ignored"))
+        result, comment, prompt = self.run_wrapper(tool)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("unavailable", comment)
+        self.assertIn("BASE POLICY\nEND POLICY\n\n", prompt)
+        self.assertIn("src/app/main.py -> App", prompt)
+        self.assertEqual("", provider_git("status", "--porcelain", "--ignored"))
+        self.assertFalse(list(self.provider.rglob("__pycache__")))
+        self.assertEqual(before, self.repo.git("status", "--porcelain").stdout)
+        self.assertEqual(self.base, self.repo.git("rev-parse", "HEAD").stdout.strip())
+
+    def test_codex_does_not_dirty_clean_provider(self):
+        self.assert_provider_stays_clean("codex")
+
+    def test_kimi_does_not_dirty_clean_provider(self):
+        self.assert_provider_stays_clean("kimi")
+
     def test_rules_placeholder_required(self):
         template = (REVIEW / "review-prompt.md").read_text().replace("{{REPO_RULES}}", "")
         with self.assertRaises(ValueError):

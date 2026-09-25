@@ -31,7 +31,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 fail_closed() {
     local body
-    body="$(python3 "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
+    body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
         --head "$HEAD_SHA" --unavailable "$1")"
     post_sticky "$MARKER" "$body"
     echo "[codex-review] fail closed: $1" >&2
@@ -47,7 +47,7 @@ git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null && git cat-file -e "$HEAD_SHA^{
     || fail_closed "PR revisions are missing after fetch."
 
 # Read the immutable base blob, never mutable worktree or PR-head instructions.
-python3 "$REVIEW_DIR/rules_input.py" "$BASE_SHA" "${REVIEW_RULES_FILE:-AGENTS.md}" >"$WORK/rules" \
+python3 -B "$REVIEW_DIR/rules_input.py" "$BASE_SHA" "${REVIEW_RULES_FILE:-AGENTS.md}" >"$WORK/rules" \
     || fail_closed "Trusted-base repository rules are missing or invalid."
 
 git diff --no-ext-diff "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
@@ -72,11 +72,12 @@ if [ "$(wc -c <"$WORK/diff")" -gt "$MAX_BYTES" ]; then
     TRUNCATED="(diff truncated to $MAX_BYTES bytes; review the rest manually)"
 fi
 
-ARCH="$(python3 "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
+# Review must leave a clean provider cache reusable by caller verification.
+ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
 
 PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
     TRUNCATED="$TRUNCATED" DIFF="$(cat "$WORK/diff")" \
-    python3 "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" --rules-file "$WORK/rules")" \
+    python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" --rules-file "$WORK/rules")" \
     || fail_closed "Prompt rendering failed."
 
 EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
@@ -96,7 +97,7 @@ if [ "$RC" -ne 0 ] || [ ! -s "$WORK/verdict.json" ]; then
     fail_closed "codex CLI failed (rc=$RC)."
 fi
 
-BODY="$(python3 "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
+BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
     --head "$HEAD_SHA" "$WORK/verdict.json")"
 STATUS=$?
 post_sticky "$MARKER" "$BODY"
