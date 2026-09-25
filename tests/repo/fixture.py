@@ -117,6 +117,10 @@ class ContractRepo:
         self.root = pathlib.Path(self.temp.name).resolve()
         self.env = environment()
         self.git("init", "-q")
+        # Fetch/commit may detach automatic maintenance after returning. These
+        # disposable repos need no housekeeping, and cleanup must have no Git
+        # writers left behind. Local config also covers reviewer subprocesses.
+        self.git("config", "--local", "maintenance.auto", "false")
         files = {
             "AGENTS.md": AGENTS, "docs/architecture/tech-context.md": ROOT_CONTEXT,
             "src/core/tech-context.md": CORE, "src/core/model.py": "X = 1\n",
