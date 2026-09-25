@@ -2,9 +2,10 @@
 
 Every agent that changes a repository which pins shared-ci follows this
 protocol. It does not depend on any particular tool. The repository's
-`AGENTS.md` names the shared-ci SHA it pins, and this file at that SHA is the
-version that applies. When a rule here conflicts with a prompt, this file wins.
-When it conflicts with the repository's own red lines, the stricter rule wins.
+`AGENTS.md` routes to its repository documents. The `shared_ci` field in
+`.github/repo-contract.json` selects this protocol's revision; legacy callers
+without metadata retain their AGENTS v1 pin. Explicit Owner policy decisions
+take precedence over older protocol text.
 
 ## 1. Before you edit
 
@@ -42,6 +43,23 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
     SHA or exact version.
 - If a check is wrong, fix it in its own PR that states the reason and needs
   Owner review. Do not work around it in a feature PR.
+- **Declaring a removed or weakened test.** `quality / test-integrity` fails
+  on any loss in the PR diff unless the loss is declared. It checks each
+  assertion and each test separately, so adding unrelated tests cannot
+  offset a loss. A loss is:
+  - a removed assertion that is not re-added elsewhere in the diff;
+  - a removed test (by name);
+  - a new skip or disable marker;
+  - a deleted test file.
+
+  Name each affected file and explain the change in the PR section `Removed
+  or weakened tests or policy`. The check compares that section with the
+  diff, so `none` fails when there is a loss. Editing or deleting tests and
+  assertions, or changing skip conditions, does not itself require Owner
+  approval, an approval ledger or CODEOWNERS coverage. Normal AI review and
+  any applicable Plan-Review remain required.
+
+  Moving an assertion or a test to another file is not a loss.
 - With changed-layer selection (`changed-only: true`, see
   `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
   touches plus their dependents. A lane that prints `not selected: <reason>`
@@ -76,7 +94,7 @@ Fill in every section of the repository's PR template:
 | Existing behaviour | What the code does today, including behaviour that must be kept |
 | Intent | What changes and why; the task or issue link |
 | Compatibility | API/data/config compatibility, migrations, rollback |
-| Removed or weakened tests or policy | Each item with its reason and who approved it, or `none` |
+| Removed or weakened tests or policy | Each affected test file and reason; separately identify policy changes and their required approvals, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
 
 The `quality / aggregate` check rejects empty or placeholder sections.
@@ -94,9 +112,10 @@ The `quality / aggregate` check rejects empty or placeholder sections.
 
 Changes under `CODEOWNERS` paths need Owner approval (for example
 `.github/**`, policy, schemas, gates, `AGENTS.md`, the constitution,
-dependency pins, credentials, privacy and data migrations). The same applies
-to any PR that removes or weakens a test, or changes existing behaviour
-without an approved spec. Until the repository enforces CODEOWNERS review,
+dependency pins, credentials, privacy and data migrations). Test changes alone
+do not trigger Owner review; a PR that also changes protected CI/policy remains
+subject to that separate gate. Changes to existing behaviour without an approved
+spec still need the relevant decision. Until the repository enforces CODEOWNERS review,
 add the `owner-review` label and wait.
 
 Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
@@ -109,12 +128,23 @@ test, a contract or audit check, or a small lint rule. Do not answer an
 incident by making a prompt longer. If the guard belongs in shared-ci, open a
 shared-ci PR and link it.
 
-## 8. Never commit
+## 8. Never commit or print
 
-- Credentials, tokens or keys.
+- Credentials, tokens or keys. Never run a command that prints a token,
+  even partly masked, into a log or transcript: `gh auth status`,
+  `gh auth token`, `echo $GH_TOKEN`, `env`/`printenv` dumps,
+  `git config --get-all credential.*`, or `set -x` around token use. To
+  check identity, use `git config user.email` and `gh api user` (for a
+  GitHub App: `gh api /repos/<owner>/<repo> --jq .full_name`).
 - Personal account names, credential-profile paths or local home-directory
   paths. `scripts/context audit` rejects them.
 - Generated local evidence files. The PR and its checks are the record.
+
+Tool attribution is allowed and is not an identity leak. This covers
+`Co-Authored-By: <tool> <noreply@...>` commit trailers and generated-by
+footers in PR bodies, as long as they name the tool and contain no personal
+account, profile path or home path. The contract audit (item 8) does not
+flag them.
 
 ## 9. When you are blocked
 

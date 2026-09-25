@@ -13,9 +13,12 @@ or a new policy. The repository contains no product ownership table or root
 | [Policy evaluator](../scripts/policy/validate.py) | `evaluate_policy` validates native baseline/candidate/approval/observation data, compares rules and checks complete exception records. | Eligibility, first finding and applied IDs; only `datetime` and `re`. No I/O or issuer. |
 | [Quality aggregator](../scripts/quality/aggregate.py) | `aggregate_6dq` validates expectation/evidence, calls the public policy evaluator, checks mappings and reconciles receipts. | Six dimension states, required acceptance, findings and fixed assurance; imports policy plus `datetime` and `re`. No workload execution. |
 | [Layer selector](../scripts/select/layers.py) | PR diff (merge-base..head), event and caller force-full patterns; loads the context engine to resolve each path and read `depends_on`. | JSON selection (layers + dependents, or a fail-closed full run) and Actions outputs; stdlib and Git. See [changed-layer selection](changed-layer-selection.md). |
+| [Integrity detector](../scripts/quality/test_integrity.py) | Reads base/head Git blobs and added diff lines; cross-checks a supplied PR explanation without an approval ledger. | Losses/explanation problems and pass/fail JSON; stdlib and Git, no test-source execution. See [test integrity](test-integrity.md). |
+| [Actions gate](../scripts/quality/gate_actions.py) / [lane evaluator](../scripts/quality/gate.py) | The reusable quality workflow supplies selection, lane results, tested SHAs and the live PR body. | Fail-closed aggregate and a tested-SHA output on success; separate from pure `aggregate_6dq`. |
 | [Registry resolver](../scripts/contracts/resolve.py) | One CLI takes admitted Git, full revision and entry ID; validates the provider's committed registry, resources and public interfaces. | Selected closure with blob/mode/digest identities; stdlib and Git; static AST inspection without context/policy/quality imports. |
 
-The only cross-module runtime import is aggregation → policy. Context does not
+The pure-function dependency is aggregation → policy; selection separately
+loads Context, and the Actions adapter loads its lane evaluator. Context does not
 invoke either pure function, and aggregation does not invoke the context runner.
 A caller adapter connecting these surfaces is not supplied. JSON schemas describe
 data, not runtime imports or a general schema-validation engine.
@@ -75,8 +78,21 @@ is authoritative for precedence, advisory results and fallback behavior.
   evidence production and remote enforcement. Restoring this source alone cannot
   restore those assets; see [recovery boundaries](disaster-recovery.md#assets-and-recovery-boundaries).
 
-No installed caller, reusable workflow, package release or full quality
-certification follows from these modules or this descriptive architecture.
+Reusable workflows exist in this tree; no installed consumer, candidate release
+or full quality certification follows from this descriptive architecture.
+
+## Selection and integrity boundaries
+
+These [candidate features](../ai/README.md) serve different obligations:
+selection can narrow eligible command work, while integrity inspects test
+changes independently of the selected layers. The Actions aggregate requires
+selected lanes to succeed on the caller head. None of these results is Owner
+policy approval or the pure-quality function's receipt reconciliation.
+
+Feature contracts own [selection/fallback semantics](changed-layer-selection.md)
+and [loss/declaration semantics](test-integrity.md); wiring and upgrade evidence
+belong in [integration](integration-and-migration.md#selection-and-integrity-workflows).
+Keep provider code/docs at one SHA and caller base/head identities separate.
 
 ## Registry: provider commit to selected contracts
 

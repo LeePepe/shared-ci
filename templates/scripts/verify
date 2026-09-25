@@ -13,12 +13,52 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 shared_ci="${SHARED_CI:-$root/.shared-ci}"
-pin="$(sed -n 's|.*LeePepe/shared-ci@\([0-9a-f]\{40\}\)/ai/agent-protocol\.md.*|\1|p' AGENTS.md | head -1)"
-if [ ! -d "$shared_ci/.git" ] || [ "$(git -C "$shared_ci" rev-parse HEAD 2>/dev/null)" != "$pin" ]; then
-    rm -rf "$shared_ci"
-    git init -q "$shared_ci"
-    git -C "$shared_ci" fetch -q --depth=1 https://github.com/LeePepe/shared-ci.git "$pin"
-    git -C "$shared_ci" checkout -q --detach FETCH_HEAD
+pin="$(python3 - <<'PY'
+import json, pathlib, re
+metadata = pathlib.Path('.github/repo-contract.json')
+if metadata.is_symlink():
+    raise SystemExit('repository metadata must be a regular repository file')
+if metadata.exists():
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate metadata key: ' + key)
+            result[key] = value
+        return result
+    data = json.loads(metadata.read_text(), object_pairs_hook=unique)
+    if type(data.get('schema')) is not int or data['schema'] != 1:
+        raise SystemExit('unsupported repository metadata schema')
+    pin = data.get('shared_ci', '')
+else:
+    text = pathlib.Path('AGENTS.md').read_text()
+    pins = set(re.findall(r'(?:LeePepe/shared-ci@|github\.com/LeePepe/shared-ci/blob/)([0-9a-f]{40})/ai/agent-protocol\.md', text))
+    if len(pins) != 1:
+        raise SystemExit('expected one legacy shared-ci pin or .github/repo-contract.json')
+    pin = pins.pop()
+if not isinstance(pin, str) or not re.fullmatch(r'[0-9a-f]{40}', pin):
+    raise SystemExit('shared_ci must be a full 40-char SHA')
+print(pin)
+PY
+)"
+provider_git() {
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+        -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES git -C "$shared_ci" "$@"
+}
+if [ "$(provider_git rev-parse HEAD 2>/dev/null || true)" != "$pin" ]; then
+    if [ -n "${SHARED_CI:-}" ]; then
+        echo "[verify] supplied SHARED_CI must already be at the declared pin" >&2; exit 1
+    fi
+    if [ -e "$shared_ci" ]; then
+        [ ! -L "$shared_ci" ] && [ -d "$shared_ci/.git" ] && [ -z "$(provider_git status --porcelain)" ] || {
+            echo "[verify] preserve the existing provider directory; expected a clean Git cache" >&2; exit 1;
+        }
+    else
+        mkdir -p "$shared_ci"
+        provider_git init -q
+    fi
+    provider_git fetch -q --depth=1 https://github.com/LeePepe/shared-ci.git "$pin"
+    provider_git checkout -q --detach FETCH_HEAD
 fi
 context="python3 $shared_ci/scripts/context/_context.py"
 

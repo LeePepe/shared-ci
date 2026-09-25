@@ -1,5 +1,5 @@
 # Caller workflow. Copy to .github/workflows/ci.yml. Replace every
-# <40-char-sha> with ONE shared-ci commit SHA (the same one AGENTS.md points to).
+# <40-char-sha> with ONE shared-ci commit SHA (metadata shared_ci must match).
 name: ci
 
 on:

@@ -3,6 +3,7 @@
 /.github/                         @OWNER
 /.githooks/                       @OWNER
 /AGENTS.md                        @OWNER
+/docs/repository-guide.md         @OWNER
 /CLAUDE.md                        @OWNER
 /.specify/memory/constitution.md  @OWNER
 /docs/architecture/               @OWNER

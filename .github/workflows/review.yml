@@ -22,7 +22,11 @@ jobs:
   codex-review-target:
     if: vars.SHARED_CI_REVIEW_RUNNER == 'true'
     uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@9ff304e317a5ff924a4c488515ead5a607d28236
+    with:
+      rules-file: docs/repository-guide.md
 
   kimi-review:
     if: vars.SHARED_CI_REVIEW_RUNNER == 'true'
     uses: LeePepe/shared-ci/.github/workflows/kimi-review.yml@9ff304e317a5ff924a4c488515ead5a607d28236
+    with:
+      rules-file: docs/repository-guide.md

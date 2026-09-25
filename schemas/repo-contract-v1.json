@@ -44,6 +44,11 @@
       {"id": "identity", "number": 8, "kind": "red_line", "enforcement": ["audit"]}
     ],
     "agents_max_lines": 150,
+    "agents_default_mode": "index-only",
+    "metadata_file": ".github/repo-contract.json",
+    "metadata_schema": "repo-metadata-v1.json",
+    "legacy_agents_without_metadata": true,
+    "guide_sections": ["Protocol", "Verify", "Required checks", "Red lines", "Delivery"],
     "agents_sections": ["Read first", "Protocol", "Verify", "Required checks", "Red lines", "Delivery"],
     "agent_files": ["CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".cursorrules"],
     "agent_file_max_lines": 12,

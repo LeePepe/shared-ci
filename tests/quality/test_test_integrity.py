@@ -1,0 +1,579 @@
+"""Test-integrity: per-assertion/per-test evidence and PR-body explanations."""
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+SCRIPT = REPO / "scripts" / "quality" / "test_integrity.py"
+SPEC = importlib.util.spec_from_file_location("shared_ci_test_integrity", SCRIPT)
+ti = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(ti)
+
+SWIFT = """import XCTest
+
+final class ParserTests: XCTestCase {
+    func testRejectsTraversal() {
+        XCTAssertThrowsError(try parse("../etc"))
+        XCTAssertEqual(parse("a"), "a")
+    }
+
+    func testLength() {
+        XCTAssertLessThan(limit, 100)
+    }
+}
+"""
+PY = """import unittest
+
+
+class T(unittest.TestCase):
+    def test_one(self):
+        self.assertEqual(1, 1)
+"""
+BODY = """## Existing behaviour
+x
+
+## Removed or weakened tests or policy
+{section}
+
+## Test evidence
+y
+"""
+
+
+def environment() -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PYTHON"))}
+    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@example.invalid", "LC_ALL": "C.UTF-8"})
+    return env
+
+
+class Repo:
+    def __init__(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="shared-ci-ti-")
+        self.root = pathlib.Path(self.temp.name).resolve()
+        self.env = environment()
+        self.git("init", "-q", "-b", "main")
+        self.write("Tests/ParserTests.swift", SWIFT)
+        self.write("pytests/test_t.py", PY)
+        self.write("src/parser.swift", "let x = 1\n")
+        self.base = self.commit()
+
+    def close(self) -> None:
+        self.temp.cleanup()
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(["git", *args], cwd=self.root, env=self.env, check=True,
+                              capture_output=True, text=True, timeout=20).stdout
+
+    def write(self, path: str, text: str) -> None:
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+    def edit(self, path: str, old: str, new: str) -> None:
+        text = (self.root / path).read_text(encoding="utf-8")
+        assert old in text, old
+        self.write(path, text.replace(old, new))
+
+    def commit(self) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", "c")
+        return self.git("rev-parse", "HEAD").strip()
+
+    def check(self, body: str | None = BODY.format(section="none")) -> dict:
+        head = self.commit()
+        return ti.evaluate(str(self.root), base=self.base, head=head, body=body)
+
+
+class TestIntegrityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Direct evaluator calls need the same Git isolation as subprocess
+        # fixtures, including when verify is launched from pre-push.
+        isolated = mock.patch.dict(os.environ, environment(), clear=True)
+        isolated.start()
+        self.addCleanup(isolated.stop)
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+
+    def kinds(self, result: dict) -> set[str]:
+        return {loss["kind"] for loss in result["losses"]}
+
+    def test_no_test_change_passes(self):
+        self.repo.write("src/parser.swift", "let x = 2\n")
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual(("pass", []), (result["verdict"], result["losses"]))
+
+    def test_added_tests_pass(self):
+        self.repo.edit("pytests/test_t.py", "        self.assertEqual(1, 1)\n",
+                       "        self.assertEqual(1, 1)\n\n    def test_two(self):\n        self.assertTrue(True)\n")
+        self.assertEqual("pass", self.repo.check(BODY.format(section="none"))["verdict"])
+
+    def test_removed_assertion_fails(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        result = self.repo.check()
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual({"assertion_removed"}, self.kinds(result))
+        self.assertEqual(["Tests/ParserTests.swift"], result["undeclared"])
+
+    def test_block_commented_swift_suite_requires_declaration(self):
+        self.repo.write("Tests/ParserTests.swift", "/*\n" + SWIFT + "*/\n")
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual(["Tests/ParserTests.swift"], result["undeclared"])
+        self.assertEqual({"assertion_removed", "test_removed"}, self.kinds(result))
+        self.assertEqual(3, sum(loss["kind"] == "assertion_removed" for loss in result["losses"]))
+        self.assertEqual({"testRejectsTraversal", "testLength"},
+                         {loss["detail"] for loss in result["losses"] if loss["kind"] == "test_removed"})
+        body = self.repo.root / "pr-body.md"
+        body.write_text(BODY.format(section="none"))
+        failed = subprocess.run(
+            [sys.executable, str(SCRIPT), "--base", self.repo.base, "--head", self.repo.git("rev-parse", "HEAD").strip(),
+             "--body-file", str(body)],
+            cwd=self.repo.root, env=self.repo.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(1, failed.returncode)
+        self.assertEqual(["Tests/ParserTests.swift"], json.loads(failed.stdout)["undeclared"])
+
+    def test_documentation_comments_and_reformatting_pass(self):
+        self.repo.write("Tests/ParserTests.swift", '/*\n' + SWIFT + '\n/* nested */\n*/\n' + SWIFT)
+        self.repo.base = self.repo.commit()
+        self.repo.write("Tests/ParserTests.swift", SWIFT.replace(
+            'XCTAssertEqual(parse("a"), "a")',
+            'XCTAssertEqual(\n            parse("a"), /* explanation */\n            "a"\n        ) // retained'))
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual(("pass", []), (result["verdict"], result["losses"]))
+
+    def test_swift_literal_suite_cannot_replace_executable_tests(self):
+        for opening, closing in (('let example = """\n', '\n"""\n'),
+                                 ('let example = #"""\n', '\n"""#\n')):
+            with self.subTest(opening=opening):
+                self.repo.write("Tests/ParserTests.swift", opening + SWIFT + closing)
+                result = self.repo.check(BODY.format(section="none"))
+                self.assertEqual("fail", result["verdict"])
+                self.assertEqual({"assertion_removed", "test_removed"}, self.kinds(result))
+
+    def test_python_docstring_cannot_replace_executable_tests(self):
+        self.repo.write("pytests/test_t.py", '"""\n' + PY + '"""\n')
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual(["pytests/test_t.py"], result["undeclared"])
+        self.assertEqual({"assertion_removed", "test_removed"}, self.kinds(result))
+
+    def test_removing_literal_test_snippets_passes(self):
+        snippets = {"Tests/DocsTests.swift": 'let example = #"""\n' + SWIFT + '"""#\n',
+                    "pytests/test_docs.py": '"""\n' + PY + '"""\n',
+                    "web/docs.test.js": 'const example = `\ntest("sample", () => {\n'
+                                        '  expect(value).toBe("/* sample */");\n});\n`;\n'}
+        for path, text in snippets.items():
+            self.repo.write(path, text)
+        self.repo.base = self.repo.commit()
+        for path in snippets:
+            self.repo.write(path, "\n")
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual(("pass", []), (result["verdict"], result["losses"]))
+
+    def test_multiline_documentation_skip_snippets_pass(self):
+        self.repo.write("Tests/DocsTests.swift", '/*\nXCTSkip("example")\n*/\n'
+                        'let example = #"""\n.disabled()\n"""#\n')
+        self.repo.write("pytests/test_docs.py", '"""\n@unittest.skip("example")\n"""\n')
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual(("pass", []), (result["verdict"], result["losses"]))
+
+    def test_multiline_and_raw_assertion_literal_changes_are_losses(self):
+        for before, after in (('"""\na\nb\n"""', '"""\na b\n"""'),
+                              ('#"a"  "b"#', '#"a" "b"#')):
+            with self.subTest(before=before):
+                path = "Tests/LiteralTests.swift"
+                self.repo.write(path, "XCTAssertEqual(value, " + before + ")\n")
+                self.repo.base = self.repo.commit()
+                self.repo.write(path, "XCTAssertEqual(value, " + after + ")\n")
+                result = self.repo.check(BODY.format(section="none"))
+                self.assertEqual("fail", result["verdict"])
+                self.assertEqual([path], result["undeclared"])
+
+    def test_comment_delimiters_inside_assertion_literals_remain_data(self):
+        for path, before, after in (
+                ("Tests/LiteralTests.swift", 'XCTAssertEqual(value, "https://a/*b*/")',
+                 'XCTAssertEqual(value, "https://a/*c*/")'),
+                ("pytests/test_literal.py", 'assert value == "#a//b"', 'assert value == "#a//c"')):
+            with self.subTest(path=path):
+                self.repo.write(path, before + "\n")
+                self.repo.base = self.repo.commit()
+                self.repo.write(path, after + "\n")
+                result = self.repo.check(BODY.format(section="none"))
+                self.assertEqual("fail", result["verdict"])
+                self.assertEqual([path], result["undeclared"])
+
+    def test_jest_literal_name_remains_a_test_name(self):
+        path = "web/parser.test.js"
+        self.repo.write(path, 'test("rejects input", () => {\n  expect(valid).toBe(false);\n});\n')
+        self.repo.base = self.repo.commit()
+        self.repo.edit(path, '"rejects input"', '"other input"')
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual([{"kind": "test_removed", "file": path, "detail": "rejects input"}], result["losses"])
+
+    def test_unrelated_added_tests_do_not_net_out_a_deletion(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.repo.edit("pytests/test_t.py", "        self.assertEqual(1, 1)\n",
+                       "        self.assertEqual(1, 1)\n        self.assertTrue(1)\n        self.assertTrue(2)\n")
+        result = self.repo.check()
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual(["Tests/ParserTests.swift"], result["undeclared"])
+
+    def test_moved_or_reindented_assertion_is_not_a_loss(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.repo.write("Tests/TraversalTests.swift",
+                        'import XCTest\nfinal class TraversalTests: XCTestCase {\n    func testRejectsTraversal2() {\n'
+                        '            XCTAssertThrowsError(try parse("../etc"))\n    }\n}\n')
+        self.assertEqual("pass", self.repo.check()["verdict"])
+
+    def test_removed_test_function_fails_even_when_moved_name_absent(self):
+        self.repo.edit("Tests/ParserTests.swift", "    func testLength() {\n        XCTAssertLessThan(limit, 100)\n    }\n", "")
+        result = self.repo.check()
+        self.assertIn("test_removed", self.kinds(result))
+        self.assertTrue(any(l["detail"] == "testLength" for l in result["losses"]))
+
+    def test_test_moved_to_another_file_is_not_removed(self):
+        block = "    func testLength() {\n        XCTAssertLessThan(limit, 100)\n    }\n"
+        self.repo.edit("Tests/ParserTests.swift", block, "")
+        self.repo.write("Tests/LimitTests.swift", "import XCTest\nfinal class LimitTests: XCTestCase {\n" + block + "}\n")
+        self.assertEqual("pass", self.repo.check()["verdict"])
+
+    def test_skip_marker_fails(self):
+        for old, new in (("    func testLength() {\n", "    func testLength() throws {\n        throw XC" + "TSkip(\"later\")\n"),):
+            self.repo.edit("Tests/ParserTests.swift", old, new)
+        self.assertIn("skip_added", self.kinds(self.repo.check()))
+
+    def test_skip_in_git_quoted_unicode_path_requires_declaration(self):
+        path = "Tests/验证Tests.swift"
+        self.repo.write(path, SWIFT)
+        self.repo.base = self.repo.commit()
+        self.repo.edit(path, "func testLength() {",
+                       'func testLength() throws {\n        throw XCTSkip("temporarily skipped")')
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual([path], result["undeclared"])
+        self.assertEqual([{"kind": "skip_added", "file": path,
+                           "detail": 'throw XCTSkip("temporarily skipped")'}], result["losses"])
+
+    def test_skip_paths_preserve_quoted_and_literal_filename_identity(self):
+        paths = ["Tests/验证Tests.swift", "Tests/space nameTests.swift", "Tests/tab\tTests.swift",
+                 'Tests/quote"Tests.swift', "Tests/back\\slashTests.swift", "Tests/[ab]Tests.swift"]
+        for path in paths + ["Tests/aTests.swift"]:
+            self.repo.write(path, SWIFT)
+        self.repo.base = self.repo.commit()
+        for path in paths:
+            self.repo.edit(path, "func testLength() {",
+                           'func testLength() throws {\n        throw XCTSkip("later")')
+        # A glob-shaped path must not also read these unrelated hunks.
+        self.repo.edit("Tests/aTests.swift", 'parse("a")', 'parse("b")')
+        for quote_path in ("true", "false"):
+            with self.subTest(quote_path=quote_path):
+                self.repo.git("config", "core.quotepath", quote_path)
+                result = self.repo.check(BODY.format(section="none"))
+                self.assertEqual("fail", result["verdict"])
+                skips = [loss for loss in result["losses"] if loss["kind"] == "skip_added"]
+                self.assertEqual(sorted(paths), sorted(loss["file"] for loss in skips))
+                self.assertTrue(set(paths) <= set(result["undeclared"]))
+
+    def test_quoted_paths_keep_multiline_skip_snippets_non_executable(self):
+        for path in ("Tests/验证Tests.swift", 'Tests/tab\tquote"Tests.swift'):
+            self.repo.write(path, SWIFT)
+        self.repo.base = self.repo.commit()
+        for path in ("Tests/验证Tests.swift", 'Tests/tab\tquote"Tests.swift'):
+            self.repo.write(path, '/*\nXCTSkip("example")\n*/\n'
+                            'let example = """\nXCTSkip("example")\n"""\n' + SWIFT)
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual(("pass", []), (result["verdict"], result["losses"]))
+
+    def test_unlocatable_skip_hunks_fail_closed(self):
+        self.repo.edit("Tests/ParserTests.swift", "func testLength() {",
+                       'func testLength() throws {\n        throw XCTSkip("later")')
+        head = self.repo.commit()
+        git = ti._git
+        for hunk in ("@@ malformed @@", "@@ -1 +999999 @@"):
+            with self.subTest(hunk=hunk):
+                def broken_diff(root, *args):
+                    if "--unified=0" in args and "Tests/ParserTests.swift" in args:
+                        return hunk + '\n+throw XCTSkip("later")\n'
+                    return git(root, *args)
+                with mock.patch.object(ti, "_git", side_effect=broken_diff):
+                    result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=head, body=None)
+                self.assertEqual("fail", result["verdict"])
+                self.assertTrue(any("fail-closed" in problem for problem in result["problems"]), result)
+
+    def test_python_skip_and_deleted_file(self):
+        self.repo.edit("pytests/test_t.py", "    def test_one(self):\n", "    @unittest." + "skip('x')\n    def test_one(self):\n")
+        self.assertIn("skip_added", self.kinds(self.repo.check()))
+        repo = Repo()
+        self.addCleanup(repo.close)
+        repo.git("rm", "-q", "pytests/test_t.py")
+        result = repo.check()
+        self.assertTrue({"test_file_deleted", "test_removed", "assertion_removed"} <= self.kinds(result))
+
+    def test_skip_markers_in_comments_or_literals_are_not_code(self):
+        self.repo.write("tests/test_documentation.py", '# .enabled(if: false) is a disabled trait\n'
+                        'example = "@unittest.skip(\'example\')"\n')
+        self.repo.write("Tests/DocsTests.swift", '// .disabled() is a disabled trait\n'
+                        'let example = "XCTSkip(\\\"example\\\")"\n')
+        self.assertEqual("pass", self.repo.check(BODY.format(section="none"))["verdict"])
+
+    def test_body_none_with_loss_fails_without_an_explanation(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        for section in ("none", "None.", "", "- n/a"):
+            with self.subTest(section=section):
+                result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=self.repo.commit(),
+                                     body=BODY.format(section=section))
+                self.assertTrue(any("says none" in p for p in result["problems"]), result["problems"])
+
+    def test_body_must_name_each_file(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.repo.edit("pytests/test_t.py", "        self.assertEqual(1, 1)\n", "        pass\n")
+        result = self.repo.check(BODY.format(section="Tests/ParserTests.swift: removed"))
+        self.assertTrue(any("does not name: pytests/test_t.py" in p for p in result["problems"]), result["problems"])
+
+    def test_missing_section_with_loss_fails(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.assertEqual("fail", self.repo.check("## Intent\nx\n")["verdict"])
+
+    def test_bad_revisions_fail_closed(self):
+        result = ti.evaluate(str(self.repo.root), base="f" * 40, head=self.repo.base, body=None)
+        self.assertEqual("fail", result["verdict"])
+        self.assertIn("fail-closed", result["problems"][0])
+        self.assertEqual("fail", ti.evaluate(str(self.repo.root), base="", head="", body=None)["verdict"])
+
+    def test_unreadable_base_test_fails_closed(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        head = self.repo.commit()
+        git = ti._git
+
+        def fail_base_read(root, *args):
+            if args == ("show", f"{self.repo.base}:Tests/ParserTests.swift"):
+                raise ti.IntegrityError("test blob unavailable")
+            return git(root, *args)
+
+        with mock.patch.object(ti, "_git", side_effect=fail_base_read):
+            result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=head, body=None)
+        self.assertEqual("fail", result["verdict"])
+        self.assertTrue(any("test blob unavailable" in problem and "fail-closed" in problem
+                            for problem in result["problems"]), result)
+
+    def test_cli(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        head = self.repo.commit()
+        body = self.repo.root.parent / (self.repo.root.name + ".body")
+        body.write_text(BODY.format(section="none"))
+        self.addCleanup(body.unlink)
+        run = lambda *a: subprocess.run([sys.executable, str(SCRIPT), *a], cwd=self.repo.root, env=self.repo.env,
+                                        capture_output=True, text=True, timeout=30)
+        failed = run("--base", self.repo.base, "--head", head, "--body-file", str(body))
+        self.assertEqual(1, failed.returncode)
+        self.assertEqual("fail", json.loads(failed.stdout)["verdict"])
+        self.assertEqual(0, run("--base", self.repo.base, "--head", self.repo.base).returncode)
+        self.assertEqual(1, run("--base", "nope", "--head", head).returncode)
+        self.assertEqual(2, run().returncode)
+
+    def test_duplicate_assertions_are_a_multiset(self):
+        line = "        XCTAssertLessThan(limit, 100)\n"
+        self.repo.edit("Tests/ParserTests.swift", line, line + line)
+        self.repo.base = self.repo.commit()
+        self.repo.edit("Tests/ParserTests.swift", line + line, "")
+        self.repo.write("Tests/Moved.swift", "import XCTest\n" + line)
+        result = self.repo.check()
+        self.assertEqual(1, sum(l["kind"] == "assertion_removed" for l in result["losses"]), result["losses"])
+
+    def test_duplicate_test_names_are_a_multiset(self):
+        self.repo.write("Tests/OtherTests.swift", "import XCTest\nfinal class O: XCTestCase {\n"
+                        "    func testLength() {\n        XCTAssertTrue(true)\n    }\n}\n")
+        self.repo.base = self.repo.commit()
+        self.repo.git("rm", "-q", "Tests/OtherTests.swift")
+        result = self.repo.check()
+        self.assertTrue(any(l["kind"] == "test_removed" and l["detail"] == "testLength" for l in result["losses"]))
+
+    def test_test_path_classification(self):
+        for path in ("Tests/A.swift", "Packages/X/Tests/Y/ZTests.swift", "scripts/tests/test_app.py",
+                     "tests/test_x.py", "pkg/a_test.go", "web/a.test.ts", "src/test_util.py"):
+            self.assertTrue(ti.is_test_path(path), path)
+        for path in ("scripts/quality/test_integrity.py", ".github/test-weakening.md", "src/parser.swift"):
+            self.assertFalse(ti.is_test_path(path), path)
+
+    # ---- parity with VoxPocket #65 (Swift Testing fixtures) ------------------
+    SWIFT_TESTING = ('import Testing\n\n@Test func accepts() {\n    #expect(valid("a"))\n}\n\n'
+                     '@Test func rejects() {\n    #expect(!valid("../secret"))\n    #expect(!valid("bad\\n"))\n}\n')
+
+    def swift_testing_base(self):
+        self.repo.write("Packages/F/Tests/FTests/ValidTests.swift", self.SWIFT_TESTING)
+        self.repo.base = self.repo.commit()
+        return "Packages/F/Tests/FTests/ValidTests.swift"
+
+    def test_parity_weakened_in_place_blocks(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, '#expect(!valid("../secret"))', "#expect(true)")
+        self.assertIn("assertion_removed", self.kinds(self.repo.check()))
+
+    def test_parity_removed_swift_testing_function_blocks(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, '@Test func accepts() {\n    #expect(valid("a"))\n}\n', "")
+        self.repo.write("Packages/F/Tests/FTests/Other.swift",
+                        'import Testing\n\n@Test func replacement() {\n    #expect(valid("a"))\n}\n')
+        result = self.repo.check()
+        self.assertTrue(any(l["kind"] == "test_removed" and l["detail"] == "accepts" for l in result["losses"]))
+
+    def test_parity_split_file_passes(self):
+        path = self.swift_testing_base()
+        head, tail = self.SWIFT_TESTING.split("@Test func rejects")
+        self.repo.write(path, head)
+        self.repo.write("Packages/F/Tests/FTests/Other.swift", "import Testing\n\n@Test func rejects" + tail)
+        self.assertEqual("pass", self.repo.check()["verdict"])
+
+    def test_parity_disabled_marker_blocks(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, "@Test func rejects", "@Test(." + "disabled()) func rejects")
+        self.assertIn("skip_added", self.kinds(self.repo.check()))
+
+    def test_parity_offset_by_unrelated_swift_testing_addition_blocks(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, '    #expect(!valid("../secret"))\n', "")
+        self.repo.write("Packages/F/Tests/FTests/Other.swift",
+                        'import Testing\n\n@Test func unrelated() {\n    #expect(valid("zzz"))\n}\n')
+        self.assertEqual([path], self.repo.check()["undeclared"])
+
+    def test_parity_enabled_if_marker_blocks(self):
+        # VoxPocket #65 codex round 2: `.enabled(if: false)` disabled a test undetected.
+        for trait in ("@Test(." + "enabled(if: false)) func rejects",
+                      "@Test(\n    .en" + "abled( if : Env.never)\n)\nfunc rejects",
+                      "@Test(\n    .en" + "abled(if: false)\n)\nfunc rejects"):  # #65 fixture
+            with self.subTest(trait=trait):
+                repo = Repo()
+                self.addCleanup(repo.close)
+                self.repo = repo
+                path = self.swift_testing_base()
+                repo.edit(path, "@Test func rejects", trait)
+                self.assertIn("skip_added", self.kinds(repo.check()))
+
+    def test_retagging_a_test_is_not_a_loss(self):
+        path = self.swift_testing_base()
+        self.repo.edit(path, "@Test func accepts", "@Test(.tags(.fast)) func accepts")
+        self.assertEqual("pass", self.repo.check()["verdict"])
+
+    def test_unwrap_and_raises_are_assertions(self):
+        self.repo.write("Tests/UnwrapTests.swift", "import XCTest\nfinal class U: XCTestCase {\n"
+                        "    func testU() throws {\n        _ = try XCTUnwrap(value)\n        XCTAssertTrue(true)\n    }\n}\n")
+        self.repo.write("pytests/test_r.py", "import pytest\n\ndef test_r():\n    with pytest.raises(ValueError):\n        f()\n")
+        self.repo.base = self.repo.commit()
+        self.repo.edit("Tests/UnwrapTests.swift", "        _ = try XCTUnwrap(value)\n", "")
+        self.repo.edit("pytests/test_r.py", "    with pytest.raises(ValueError):\n        f()\n", "    f()\n")
+        result = self.repo.check()
+        self.assertEqual({"Tests/UnwrapTests.swift", "pytests/test_r.py"},
+                         {l["file"] for l in result["losses"] if l["kind"] == "assertion_removed"})
+
+    def test_multiline_swift_testing_name_is_tracked(self):
+        multi = 'import Testing\n\n@Test(\n    .tags(.fast)\n)\nfunc multi() {\n    #expect(true)\n}\n'
+        self.repo.write("Tests/MultiTests.swift", multi)
+        self.repo.base = self.repo.commit()
+        self.assertEqual({"multi": 1}, dict(ti._names(multi)))
+        self.repo.write("Tests/MultiTests.swift", "import Testing\n")
+        result = self.repo.check()
+        self.assertTrue(any(l["kind"] == "test_removed" and l["detail"] == "multi" for l in result["losses"]))
+
+    # ---- multiline assertions (VoxPocket #65 codex round 4) ------------------
+    MULTI = ('import XCTest\nimport Testing\n\n@Test func rejects() {\n    #expect(\n        !valid("../secret")\n    )\n}\n\n'
+             'final class E: XCTestCase {\n    func testEq() {\n        XCTAssertEqual(\n            parse("a"),\n'
+             '            "a",\n            "parses (plain) input"\n        )\n    }\n}\n')
+
+    def multi_base(self):
+        self.repo.write("Tests/MultiAssertTests.swift", self.MULTI)
+        self.repo.base = self.repo.commit()
+        return "Tests/MultiAssertTests.swift"
+
+    def test_multiline_expect_condition_change_fails(self):
+        path = self.multi_base()
+        self.repo.edit(path, '        !valid("../secret")\n', "        true\n")
+        result = self.repo.check()
+        self.assertEqual([path], result["undeclared"])
+        self.assertIn("assertion_removed", self.kinds(result))
+
+    def test_multiline_xctassert_argument_deleted_fails(self):
+        path = self.multi_base()
+        self.repo.edit(path, '            "a",\n', "")
+        self.assertIn("assertion_removed", self.kinds(self.repo.check()))
+
+    def test_multiline_assertion_moved_to_another_file_passes(self):
+        path = self.multi_base()
+        block = '        XCTAssertEqual(\n            parse("a"),\n            "a",\n            "parses (plain) input"\n        )\n'
+        self.repo.edit(path, block, "")
+        self.repo.write("Tests/MovedTests.swift", "import XCTest\nfinal class M: XCTestCase {\n    func testEq() {\n"
+                        + block.replace("        ", "      ") + "    }\n}\n")
+        self.assertEqual("pass", self.repo.check()["verdict"])
+
+    def test_multiline_assertion_reformatted_in_place_passes(self):
+        path = self.multi_base()
+        self.repo.edit(path, '    #expect(\n        !valid("../secret")\n    )\n', '    #expect(!valid("../secret"))\n')
+        result = self.repo.check()
+        self.assertTrue(all(l["kind"] != "assertion_removed" or "secret" not in l["detail"] for l in result["losses"]),
+                        result["losses"])
+
+    def test_assertions_statement_joining(self):
+        self.assertEqual(['#expect(!valid("../secret"))',
+                          'XCTAssertEqual(parse("a"),"a","parses (plain) input")'], ti.assertions(self.MULTI))
+
+    def test_string_literal_whitespace_change_is_a_loss(self):
+        path = self.multi_base()
+        self.repo.edit(path, '            "parses (plain) input"', '            "parses  (plain) input"')
+        result = self.repo.check()
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual([path], result["undeclared"])
+
+    def test_single_quoted_and_template_literal_contents_are_preserved(self):
+        for before, after in (("expect(value).toBe('a, b')", "expect(value).toBe('a,b')"),
+                              ('expect(value).toBe(`a  b`)', 'expect(value).toBe(`a b`)')):
+            with self.subTest(before=before):
+                self.assertNotEqual(ti.assertions(before), ti.assertions(after))
+
+    def test_s5_probe_shape_is_blocked(self):
+        # S5 G1 replay: one assertion deleted from an input-validation test, template says "none".
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual(1, len(result["problems"]))
+
+    def test_explained_loss_needs_no_ledger_codeowners_or_owner(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        result = self.repo.check(BODY.format(section="- Tests/ParserTests.swift: replaced obsolete parser behavior"))
+        self.assertEqual("pass", result["verdict"])
+        self.assertEqual({"assertion_removed"}, self.kinds(result))
+        self.assertEqual([], result["undeclared"])
+        self.assertTrue(result["body_checked"])
+
+    def test_local_detection_without_body_reports_losses_without_approval(self):
+        self.repo.git("rm", "-q", "pytests/test_t.py")
+        result = self.repo.check(body=None)
+        self.assertEqual("pass", result["verdict"])
+        self.assertIn("test_file_deleted", self.kinds(result))
+        self.assertFalse(result["body_checked"])
+
+    def test_legacy_owner_ledger_does_not_replace_pr_explanation(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.repo.write(".github/test-weakening.md",
+                        "- Tests/ParserTests.swift: old declaration (approved: @owner)\n")
+        self.assertEqual("fail", self.repo.check(BODY.format(section="none"))["verdict"])
+
+    def test_explained_skip_needs_no_owner(self):
+        self.repo.edit("pytests/test_t.py", "    def test_one(self):\n",
+                       "    @unittest.skip('unsupported platform')\n    def test_one(self):\n")
+        result = self.repo.check(BODY.format(section="pytests/test_t.py: skip unsupported platform"))
+        self.assertEqual("pass", result["verdict"])
+        self.assertIn("skip_added", self.kinds(result))
+
+
+if __name__ == "__main__":
+    unittest.main()

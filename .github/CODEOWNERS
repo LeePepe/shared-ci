@@ -2,11 +2,13 @@
 /.github/            @LeePepe
 /.githooks/          @LeePepe
 /AGENTS.md           @LeePepe
+/docs/repository-guide.md @LeePepe
 /ai/                 @LeePepe
 /schemas/            @LeePepe
 /docs/architecture/  @LeePepe
 **/tech-context.md   @LeePepe
 /scripts/verify      @LeePepe
+/scripts/context/_contract.py @LeePepe
 /scripts/quality/    @LeePepe
 /scripts/select/     @LeePepe
 /scripts/lint/       @LeePepe
