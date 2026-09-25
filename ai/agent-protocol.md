@@ -2,9 +2,10 @@
 
 Every agent that changes a repository which pins shared-ci follows this
 protocol. It does not depend on any particular tool. The repository's
-`AGENTS.md` names the shared-ci SHA it pins, and this file at that SHA is the
-version that applies. When a rule here conflicts with a prompt, this file wins.
-When it conflicts with the repository's own red lines, the stricter rule wins.
+`AGENTS.md` routes to its repository documents. The `shared_ci` field in
+`.github/repo-contract.json` selects this protocol's revision; legacy callers
+without metadata retain their AGENTS v1 pin. Explicit Owner policy decisions
+take precedence over older protocol text.
 
 ## 1. Before you edit
 
@@ -51,14 +52,12 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
   - a new skip or disable marker;
   - a deleted test file.
 
-  To declare a loss, the Owner must approve it, and then you:
-  1. add one line per affected test file to `.github/test-weakening.md` in
-     the same PR: `- <test file path>: <reason> (approved: @<owner>)`.
-     That file is under `/.github/`, which CODEOWNERS covers, so the PR
-     cannot merge without the Owner's code-owner review;
-  2. name every affected file in the PR section `Removed or weakened tests
-     or policy`. The check compares that section with the diff, so `none`
-     fails when there is a loss.
+  Name each affected file and explain the change in the PR section `Removed
+  or weakened tests or policy`. The check compares that section with the
+  diff, so `none` fails when there is a loss. Editing or deleting tests and
+  assertions, or changing skip conditions, does not itself require Owner
+  approval, an approval ledger or CODEOWNERS coverage. Normal AI review and
+  any applicable Plan-Review remain required.
 
   Moving an assertion or a test to another file is not a loss.
 - With changed-layer selection (`changed-only: true`, see
@@ -95,7 +94,7 @@ Fill in every section of the repository's PR template:
 | Existing behaviour | What the code does today, including behaviour that must be kept |
 | Intent | What changes and why; the task or issue link |
 | Compatibility | API/data/config compatibility, migrations, rollback |
-| Removed or weakened tests or policy | Each item with its reason and who approved it, or `none` |
+| Removed or weakened tests or policy | Each affected test file and reason; separately identify policy changes and their required approvals, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
 
 The `quality / aggregate` check rejects empty or placeholder sections.
@@ -113,9 +112,10 @@ The `quality / aggregate` check rejects empty or placeholder sections.
 
 Changes under `CODEOWNERS` paths need Owner approval (for example
 `.github/**`, policy, schemas, gates, `AGENTS.md`, the constitution,
-dependency pins, credentials, privacy and data migrations). The same applies
-to any PR that removes or weakens a test, or changes existing behaviour
-without an approved spec. Until the repository enforces CODEOWNERS review,
+dependency pins, credentials, privacy and data migrations). Test changes alone
+do not trigger Owner review; a PR that also changes protected CI/policy remains
+subject to that separate gate. Changes to existing behaviour without an approved
+spec still need the relevant decision. Until the repository enforces CODEOWNERS review,
 add the `owner-review` label and wait.
 
 Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.

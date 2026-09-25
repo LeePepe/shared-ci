@@ -4,14 +4,13 @@ Read this directory from the same full provider commit SHA as the code and
 workflows you are considering. Relative links stay within that candidate;
 branch/tag names and the version labels below do not select an approved release.
 
-The v0.2.0 selection and v0.2.1 integrity slices are development candidates.
-Owner policy approval and release sequencing remain pending. In particular,
-strict A (declare assertion changes as well as removed tests/files and added
-skips) is implemented; choosing A versus B (test-function/file removals only)
-is still Owner-owned. No release or real-consumer adoption evidence is supplied
-by these pages.
+The selection slice is merged; the integrity and index-only contract changes
+remain development candidates until reviewed and released. The Owner decided
+that test edits/deletions need no Owner approval; automatic detection, PR
+explanations and ordinary AI review remain. Release sequencing and actual
+consumer evidence are separate from that policy decision.
 
-- Work in a repository: follow the existing pin in its AGENTS.md. This
+- Work in a repository: follow its metadata pin (legacy: AGENTS v1 pin). This
   candidate's [agent protocol](agent-protocol.md) and
   [repository contract](repo-contract.md) are review material, not authority
   to upgrade that pin.

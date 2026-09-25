@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test-integrity check: removed or weakened tests must be declared and Owner-gated.
+"""Test-integrity evidence: report losses and require an accurate PR explanation.
 
 Compares the PR head with merge-base(base, head); stdlib only, fail-closed.
 
@@ -12,16 +12,12 @@ Losses (no netting: adding unrelated tests never offsets a loss):
   skip_added         a new skip/disable marker in a test file
   test_file_deleted  a deleted test file (its tests and assertions are losses too)
 
-Declaration (all required when there is any loss):
-  * the ledger `.github/test-weakening.md` gains, in this diff, a line
-    `- <test file path>: <reason> (approved: @<owner>)` for every affected file.
-    The ledger lives under /.github/, which the repository contract requires
-    CODEOWNERS to cover, so every declared loss needs Owner code-owner review
-    (the check fails if CODEOWNERS at head does not cover it; the approver text
-    is informational, the ruleset's code-owner review is the approval);
-  * for pull requests, the PR body section "Removed or weakened tests or policy"
+Explanation (when a PR body is supplied):
+  * the PR body section "Removed or weakened tests or policy"
     is not "none" and names every affected file (G6: cross-checked against the diff);
     conversely a body that says "none" never passes with a loss.
+  * test changes need ordinary AI review, not an Owner approval or ledger.
+    CI/gate/policy changes retain their separate protected-path review.
 
 Output: JSON {"verdict", "losses", "undeclared", "problems"}; exit 0 pass,
 1 fail, 2 usage. Heuristic by design: it recognizes common XCTest, Swift
@@ -45,7 +41,6 @@ import sys
 from typing import Any
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
-LEDGER = ".github/test-weakening.md"
 SECTION = "removed or weakened tests or policy"
 TEST_PATH = re.compile(
     r"(^|/)(Tests?|tests?|__tests__|spec|specs)/|(^|/)test_[^/]+\.py$|_test\.(py|go)$|"
@@ -125,7 +120,7 @@ TEST_DIR = re.compile(r"(^|/)(Tests?|tests?|__tests__|spec|specs)/")
 
 def is_test_path(path: str) -> bool:
     """Test sources; a `test_*.py` tool under scripts/ outside a test directory is not a test."""
-    if path == LEDGER or not TEST_PATH.search(path):
+    if not TEST_PATH.search(path):
         return False
     return not (path.startswith("scripts/") and not TEST_DIR.search(path))
 
@@ -299,76 +294,6 @@ def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
     return found
 
 
-def ledger_entries(root: str, base: str, head: str) -> dict[str, str]:
-    """Test file -> ledger line, for ledger lines ADDED in this diff with an approver."""
-    merge_base = _git(root, "merge-base", base, head).strip()
-    diff = _git(root, "diff", "--unified=0", "--no-color", merge_base, head, "--", LEDGER)
-    entries = {}
-    for line in diff.splitlines():
-        if not line.startswith("+") or line.startswith("+++"):
-            continue
-        match = re.match(r"^\+\s*[-*]\s*`?([^`:\s][^`:]*?)`?\s*:\s*(\S.*?)\s*\(approved:\s*@[\w.-]+\)\s*$", line)
-        if match:
-            entries[match.group(1).strip()] = line[1:].strip()
-    return entries
-
-
-CODEOWNERS_FILES = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
-
-
-def _codeowners_match(pattern: str, path: str) -> bool:
-    """Supported CODEOWNERS globs; ambiguous/unsupported syntax fails closed."""
-    if pattern.startswith("!") or any(char in pattern for char in "\\[]"):
-        raise IntegrityError("unsupported CODEOWNERS pattern syntax")
-    anchored = pattern.startswith("/") or "/" in pattern.rstrip("/")
-    body = pattern.strip("/")
-    directory = pattern.endswith("/")
-    regex = ""
-    index = 0
-    while index < len(body):
-        if body.startswith("**/", index) and (index == 0 or body[index - 1] == "/"):
-            # A complete **/ component includes zero directories, at the root
-            # or between path components; its slash is optional with it.
-            regex += "(?:[^/]+/)*"
-            index += 3
-        elif body[index:] == "**" and (index == 0 or body[index - 1] == "/"):
-            regex += ".*"
-            index += 2
-        elif body[index] == "*":
-            regex += "[^/]*"
-            while index < len(body) and body[index] == "*":
-                index += 1
-        elif body[index] == "?":
-            regex += "[^/]"
-            index += 1
-        else:
-            regex += re.escape(body[index])
-            index += 1
-    regex = ("^" if anchored else "^(?:.*/)?") + regex + ("/.*$" if directory else "(?:/.*)?$")
-    return re.match(regex, path) is not None
-
-
-def ledger_is_owner_gated(root: str, head: str) -> bool:
-    """True when the LAST matching CODEOWNERS rule for the ledger at head names an owner.
-
-    GitHub uses the first CODEOWNERS file found and last-match-wins; a later
-    ownerless rule on the ledger removes the Owner gate, so this fails closed.
-    """
-    for path in CODEOWNERS_FILES:
-        if not _git(root, "ls-tree", "--name-only", head, "--", path).strip():
-            continue
-        # The first existing file wins even when it is empty. Its existence,
-        # not its content, prevents fallback to a lower-priority CODEOWNERS.
-        text = _show(root, head, path)
-        owners = None
-        for line in text.splitlines():
-            parts = line.split("#", 1)[0].split()
-            if parts and _codeowners_match(parts[0], LEDGER):
-                owners = parts[1:]
-        return bool(owners)
-    return False
-
-
 def section_text(body: str) -> str | None:
     text = re.sub(r"<!--.*?-->", "", body.replace("\r\n", "\n"), flags=re.DOTALL)
     parts = re.split(r"(?m)^#{2,3}\s+", text)
@@ -393,29 +318,21 @@ def evaluate(root: str, *, base: str, head: str, body: str | None) -> dict[str, 
             raise IntegrityError("base/head must be full 40-char SHAs")
         found = losses(root, base, head)
         files = sorted({loss["file"] for loss in found})
-        if files:
-            if not ledger_is_owner_gated(root, head):
-                problems.append(f"CODEOWNERS does not cover {LEDGER} (e.g. `/.github/ @owner`); "
-                                "a declared loss would not need Owner approval")
-            entries = ledger_entries(root, base, head)
-            undeclared = [path for path in files if path not in entries]
-            for path in undeclared:
-                problems.append(f"{path}: removed or weakened tests are not declared in {LEDGER} "
-                                f"(add `- {path}: <reason> (approved: @<owner>)`; CODEOWNERS makes the Owner approve)")
-            if body is not None:
-                section = section_text(body)
-                if section is None or says_none(section):
-                    problems.append("PR body section 'Removed or weakened tests or policy' says none, "
-                                    f"but the diff removes or weakens tests in: {', '.join(files)}")
-                else:
-                    missing = [path for path in files if path not in section]
-                    if missing:
-                        problems.append("PR body section 'Removed or weakened tests or policy' does not "
-                                        f"name: {', '.join(missing)}")
+        if files and body is not None:
+            section = section_text(body)
+            if section is None or says_none(section):
+                undeclared = files
+                problems.append("PR body section 'Removed or weakened tests or policy' says none, "
+                                f"but the diff removes or weakens tests in: {', '.join(files)}")
+            else:
+                undeclared = [path for path in files if path not in section]
+                if undeclared:
+                    problems.append("PR body section 'Removed or weakened tests or policy' does not "
+                                    f"name: {', '.join(undeclared)}")
     except IntegrityError as error:
         problems.append(f"test-integrity cannot read the diff (fail-closed): {error}")
     return {"verdict": "fail" if problems else "pass", "losses": found,
-            "undeclared": undeclared, "problems": problems}
+            "undeclared": undeclared, "problems": problems, "body_checked": body is not None}
 
 
 def _pr_body(args: argparse.Namespace) -> str | None:

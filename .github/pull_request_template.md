@@ -19,7 +19,7 @@ otherwise make the stacked branch conflict).
 
 ## Removed or weakened tests or policy
 
-<!-- Every removed/skipped/weakened test or assertion (name each test file) and every policy/gate/ruleset change, each with its reason and approver. Write "none" if none. `quality / test-integrity` cross-checks this against the diff: removed tests also need a line in .github/test-weakening.md (Owner-gated by CODEOWNERS). -->
+<!-- Name each affected test file and explain removals/assertion/skip changes for normal AI review; test changes alone need no Owner approval or ledger. Separately identify policy/gate/ruleset changes and their required approvals. Write "none" only when there are none; test-integrity checks the explanation against the diff. -->
 
 ## Test evidence
 

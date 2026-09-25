@@ -1,79 +1,86 @@
-# Minimum repository contract (v1)
+# Minimum repository contract
 
-Every repository that consumes shared-ci satisfies these eight items. An agent
-that knows nothing else about the repository can still follow them. The
-machine-readable form, including the section names, limits and forbidden
-patterns that the checker uses, is
-[`schemas/repo-contract-v1.json`](../schemas/repo-contract-v1.json) (`x-contract`).
+The eight checks remain report schema v1. New adopters use an index-only
+AGENTS with [repository metadata](../schemas/repo-metadata-v1.json).
+Existing consumers without metadata retain the v1 AGENTS/pin checks at this
+provider revision; adopting the new layout is an explicit migration, not a
+silent reinterpretation of a pinned old contract.
 
-`scripts/context/audit` runs these checks whenever the repository uses the
-repo-kit layer map (a root `docs/architecture/tech-context.md` or
-`tech-context.md`, and no legacy root `CONTEXT.md`). The `contract` lane of
-`quality.yml` runs the same audit in CI. Findings use the
-[finding schema](../schemas/finding-v1.schema.json), with `layer: "contract"`
-and `kind: "contract_<item>"`.
+The [report schema and audit parameters](../schemas/repo-contract-v1.json)
+and `scripts/context/_contract.py` come from the same pinned provider.
+The contract lane runs the same audit as local verification.
 
-| # | Item | Type | Machine check | Doc-only remainder |
-| --- | --- | --- | --- | --- |
-| 1 `agents` | `AGENTS.md` of at most 150 lines. Required sections: `Read first`, `Protocol`, `Verify`, `Required checks`, `Red lines`, `Delivery`. The protocol pointer is `LeePepe/shared-ci@<40-char SHA>/ai/agent-protocol.md` | guidance | audit checks that the file exists, the line count, the sections, that the pointer is a full SHA, and that the pointer SHA matches every `uses: LeePepe/shared-ci/...@` pin | whether the content is accurate |
-| 2 `agent_files` | `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.cursorrules` only say "read AGENTS.md first", plus 1–2 notes specific to that tool | guidance | audit checks that each file refers to AGENTS.md, has at most 12 non-empty lines, does not repeat the shared-ci pin, and does not repeat any required-check name listed in AGENTS.md | whether the notes contradict AGENTS.md |
-| 3 `ci` | `.github/workflows/ci.yml` calls `LeePepe/shared-ci/.github/workflows/quality.yml@<40-char SHA>` and passes this repository's commands | enforced | audit checks that ci.yml calls quality.yml, that every pin is a full SHA, and that all pins are the same SHA. workflow-lint also rejects tag and branch refs and self-hosted jobs without a fork guard | — |
-| 4 `verify` | `.githooks/pre-push` (or pre-commit) and CI call the same executable `scripts/verify`. With `changed-only: true` CI calls `scripts/verify --selected`, which runs the layers the `select` job chose, or every layer on a full run | enforced | audit checks that `scripts/verify` is tracked with mode 100755, that the hook exists, is executable and calls it, and that ci.yml calls it | whether `core.hooksPath` is set locally (it cannot be seen in the tree) |
-| 5 `ruleset` | The default-branch ruleset is code: [`templates/ruleset.json`](../templates/ruleset.json). It blocks deletion and non-fast-forward, requires a PR, requires `quality / aggregate` and `codex-review-target / codex-review` plus caller extras, requires code-owner review, allows no bypass actors, and uses strict=false unless the caller opts in. CODEOWNERS covers the important paths | enforced | audit checks that CODEOWNERS exists and covers `/.github/` and `/AGENTS.md`. [`scripts/ruleset/plan.py`](../scripts/ruleset/plan.py) computes old → new from the API dumps and keeps every existing required check unless `--map OLD=NEW` says otherwise. [`scripts/ruleset/apply.sh`](../scripts/ruleset/apply.sh) is a dry run by default; with `--apply` it applies the change and reads it back | the ruleset step itself: dry run, then Owner approval, then `--apply`, then readback (it needs admin API access) |
-| 6 `pr_template` | `.github/pull_request_template.md` with the sections `Existing behaviour`, `Intent`, `Compatibility`, `Removed or weakened tests or policy`, `Test evidence` | guidance + enforced | audit checks that the template has every section. The `quality / aggregate` check fails a PR whose body is missing a section, leaves one empty or placeholder-only, or names a tested SHA other than the head | the Owner label for removed tests |
-| 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
-| 8 `identity` | No personal account names, credential-profile paths or local home paths. Tool attribution (`Co-Authored-By: <tool> <noreply@…>` trailers, generated-by PR footers) is allowed | red line | audit scans every tracked text file for the `forbidden_patterns`, which never match tool attribution | account names in prose that the patterns do not cover |
+| Item | Authoritative surface | Mechanical check |
+| --- | --- | --- |
+| 1 `agents` | AGENTS is a document index: headings and conditional Markdown links only. Rules, commands, bootstrap and dependency details live in their linked sources. | At most 150 lines; link-only content, readable route targets and a link to the declared guide; metadata shape and pin/workflow parity. Semantic quality of the routing still needs review. |
+| 2 `agent_files` | CLAUDE/GEMINI/copilot/cursor instructions defer to AGENTS and contain only brief tool-specific notes. | Reference to AGENTS, line limit, no duplicate provider pins or required checks from the guide. |
+| 3 `ci` | Caller workflows use one full provider SHA. Review callers read the trusted-base guide, not the index as if it contained all rules. | One SHA across uses; quality job is named `quality`; review `rules-file` equals metadata `guide`. Workflow-lint retains trust/fork checks. |
+| 4 `verify` | Executable `scripts/verify` is shared by hook and CI; layer commands live in leaf contexts. | Tracked executable entry, executable hook invocation and CI invocation. Bootstrap reads metadata, with legacy AGENTS fallback only when metadata is absent. |
+| 5 `ruleset` | Rulesets and CODEOWNERS protect important surfaces. The guide carries repository policy and therefore remains protected after moving it out of AGENTS. | CODEOWNERS covers `/.github/`, `/AGENTS.md` and the exact `/<guide>` path for metadata callers. Live rules still require separate readback. |
+| 6 `pr_template` | The repository template records behavior, intent, compatibility, test/policy changes and current-head verification. | Required nonempty sections and tested SHA; test losses are cross-checked with the explanation, not Owner approval. |
+| 7 `dependencies` | Metadata declares exact shared-library versions and same-version `ai/` links. | Exact metadata versions, versioned links and supported lockfile parity. The provider has one field, `shared_ci`, not a duplicate dependency entry. |
+| 8 `identity` | Credentials, private identity configuration and local home paths stay outside Git. | Existing tracked-text forbidden-pattern checks; tool attribution remains allowed. |
+
+## Metadata and migration
+
+Copy [metadata](../templates/repo-contract.json) to
+`.github/repo-contract.json`, [the guide](../templates/repository-guide.md) to
+`docs/repository-guide.md`, and use the [index](../templates/AGENTS.md).
+
+```json
+{
+  "schema": 1,
+  "guide": "docs/repository-guide.md",
+  "shared_ci": "<full-40-character-provider-SHA>",
+  "dependencies": {
+    "shared-telemetry": {
+      "version": "1.2.3",
+      "ai": "https://example.invalid/shared-telemetry/1.2.3/ai/"
+    }
+  }
+}
+```
+
+The example is a shape, not a valid pin or an executed integration. The guide
+is a tracked, readable repository-relative file and contains Protocol, Verify,
+Required checks, Red lines and Delivery sections. Dependency metadata, layer
+commands and repository rules each have one source; the guide links rather than
+copying them.
+
+Update workflow pins, metadata, verification bootstrap and review
+`rules-file` together. Protect the guide in CODEOWNERS and preserve existing
+required checks. A versioned protocol link may remain in the index as a
+compatibility route; its SHA must match metadata. It is not the machine pin
+authority. Invalid metadata fails closed instead of falling back to legacy
+AGENTS. Old consumers without metadata continue through the unchanged legacy
+sections/pointer/dependency checks; no consumer pin is upgraded automatically.
+
+Run the current provider audit and local verification before proposing a pin
+upgrade. For shared-ci dogfood, also check the earlier pinned audit: the index
+template keeps the old headings and versioned protocol route for that purpose.
+A different consumer with lockfile declarations must migrate atomically to the
+new provider; old gates cannot interpret metadata that did not exist in their
+version.
 
 ## Test integrity
 
-`quality.yml`'s `test-integrity` lane is on by default from v0.2.1, and the
-aggregate requires it. On a pull request it fails on any removed or weakened
-test that is not declared. A loss is any of these:
+The default-on integrity lane reports assertion/test removals, added skip
+markers and deleted test files across the whole PR. Each affected file must be
+named and explained in the PR section `Removed or weakened tests or policy`;
+a contradictory `none` fails. See the [detector contract](../docs/test-integrity.md).
 
-- a removed assertion that is not re-added in the diff;
-- a removed test name;
-- a new skip marker;
-- a deleted test file.
+Test-code edits or deletion do not themselves require Owner approval, a
+ledger, approver spelling or CODEOWNERS coverage. Automatic evidence and
+ordinary AI review remain. Applicable Plan-Review is not exempted. A PR that
+also changes protected CI/gate/policy remains subject to that separate review.
 
-Each affected file needs an added line in `.github/test-weakening.md`
-(`- <path>: <reason> (approved: @<owner>)`, Owner-gated through CODEOWNERS
-`/.github/`) and must be named in the PR section `Removed or weakened tests
-or policy`. A section that says "none" while the diff removes a test fails.
-Template: [`templates/test-weakening.md`](../templates/test-weakening.md).
+## Selection, enforcement and exceptions
 
-## Changed-layer selection (optional)
+[Changed-layer selection](../docs/changed-layer-selection.md) is optional.
+Required checks always report; short-circuiting is not execution evidence.
+Metadata lives under `.github/`, so changes select the full validation path.
 
-A caller may set `changed-only: true` on `quality.yml`, and may call
-`select.yml` for its own lanes, to run only the layers a PR touches plus
-their dependents. Required checks must still always report. A lane that is
-not selected runs a step that prints `not selected: <reason>` and succeeds.
-It is never skipped by a job-level `if`. Anything doubtful is a full run.
-[`docs/changed-layer-selection.md`](../docs/changed-layer-selection.md) is
-the contract. The aggregate records the selection. Selection does not change
-any of the eight items.
-
-## Using the checks
-
-```sh
-# from the caller root, with shared-ci checked out at the pinned SHA
-python3 <shared-ci>/scripts/context/_context.py audit      # layer map and contract
-python3 <shared-ci>/scripts/lint/workflows.py --root .     # workflow-lint
-```
-
-```sh
-# item 5: plan (dry run), Owner approves the printed old -> new, then apply + readback
-scripts/ruleset/apply.sh OWNER/REPO --map 'old-check=quality / aggregate'
-scripts/ruleset/apply.sh OWNER/REPO --map 'old-check=quality / aggregate' --apply
-```
-
-Templates for every item are in [`templates/`](../templates/). Repositories
-that still use the legacy recursive `CONTEXT.md` tree keep the earlier audit
-behaviour unchanged. They opt into the contract by moving to the repo-kit layer
-map.
-
-## Exceptions
-
-This contract has no self-service exceptions. The Owner must approve a
-deviation, and it is recorded under `Red lines` in AGENTS.md, which is covered
-by CODEOWNERS. Any change to this file, the schema or the checker is an
-important PR.
+Ruleset planning/apply/readback remains the
+[existing Owner-approved workflow](../templates/ruleset.json). Repository
+exceptions belong in the protected guide, not in AGENTS. This contract does
+not grant self-service permission to change settings, gates or protected policy.

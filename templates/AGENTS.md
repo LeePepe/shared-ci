@@ -1,53 +1,30 @@
-# AGENTS.md — <Repository>
-
-<One sentence: what this repository is.> Every agent that edits it follows the
-protocol below. Tool-specific files (CLAUDE.md etc.) only point here.
+# Repository document index
 
 ## Read first
 
-1. `.specify/memory/constitution.md` — non-negotiable principles (if present)
-2. `docs/architecture/tech-context.md` — layer table: layer → paths → depends_on
-3. The leaf `tech-context.md` of every layer you touch (`scripts/context/contexts <path>`)
+- Before changing files: [Repository guide](docs/repository-guide.md)
+- For ownership and dependency boundaries: [Layer map](docs/architecture/tech-context.md)
 
 ## Protocol
 
-Follow `LeePepe/shared-ci@<40-char-sha>/ai/agent-protocol.md`
-(https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/agent-protocol.md).
-It must be the same SHA as the `uses:` pins in `.github/workflows/`.
+- For the pinned execution contract: [Agent protocol](https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/agent-protocol.md)
 
 ## Verify
 
-```sh
-git config core.hooksPath .githooks   # once per clone
-scripts/verify            # changed layers vs origin/main (what pre-push runs)
-scripts/verify --all      # every layer (what CI runs)
-```
-
-Never `--no-verify`, never weaken or skip tests, never edit policy/gates to pass.
+- Before local validation or push: [Verification](docs/repository-guide.md#verify)
 
 ## Required checks
 
-Merging to `main` requires (must match the ruleset):
-
-- `quality / aggregate`
-- `codex-review-target / codex-review`
-
-`kimi-review` is advisory and never required.
+- Before reviewing or merging a PR: [Merge checks](docs/repository-guide.md#required-checks)
 
 ## Red lines
 
-- <repository-specific red line>
-- No personal account names, credential-profile paths or local home paths in the repo.
-
-Approved exceptions: none.
+- Before changing contracts or behavior: [Repository constraints](docs/repository-guide.md#red-lines)
 
 ## Dependencies
 
-- `shared-ci` `<40-char-sha>` — https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/
+- Before dependency integration or upgrades: [Dependency metadata](.github/repo-contract.json)
 
 ## Delivery
 
-- One task → one branch + worktree → one PR using `.github/pull_request_template.md`.
-- Done = required checks green on the PR head SHA; a new push invalidates old evidence.
-- CODEOWNERS paths (`.github/**`, policy/schemas/gates, AGENTS.md, constitution,
-  dependency pins) need Owner approval; until enforced, add the `owner-review` label.
+- For PR scope and handoff: [Delivery](docs/repository-guide.md#delivery)

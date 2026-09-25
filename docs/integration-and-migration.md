@@ -68,8 +68,8 @@ For a separately approved consumer integration:
    with `select.yml` at the same provider SHA. `select.yml` alone supplies no
    integrity lane or aggregate.
 4. Preserve existing required-check names and trust/fork guards. Review the
-   [repository contract](../ai/repo-contract.md) and [ledger requirements](test-integrity.md#comparison-and-declarations)
-   with the Owner. The workflow fetches the live PR body; a standalone CLI run
+   [repository contract](../ai/repo-contract.md) and [explanation requirements](test-integrity.md#comparison-and-declarations).
+   Test changes alone need no Owner approval. The workflow fetches the live PR body; a standalone CLI run
    without a body does not cover that obligation. No credentials or branch
    settings changes are authorized by this checklist.
 5. Verify positive and negative caller cases, then record provider SHA, caller
@@ -140,7 +140,7 @@ can still require semantics unsupported by aggregation.
 | --- | --- | --- |
 | Context CLI | Python 3.9+, stdlib, Git, POSIX shell; context/finding v1 | Synthetic worktree, routing and subprocess fixtures exist. No cross-platform consumer certification is established here. |
 | Selection | Python 3.9+ stdlib and Git; optional changed-only mode, full-run fallback; workflow/CLI details in the [selection contract](changed-layer-selection.md) | Selector fixtures and provider CI are not caller matrix/required-check certification. |
-| Test integrity | Python 3.9+ stdlib and Git; default-on candidate lane, loss JSON and CLI exit behavior in the [integrity contract](test-integrity.md) | Strict A is implemented but Owner A/B approval is pending; lexical detection is not semantic test-strength proof or approval authentication. |
+| Test integrity | Python 3.9+ stdlib and Git; default-on candidate lane, loss JSON and CLI exit behavior in the [integrity contract](test-integrity.md) | Owner approval is not required merely for test changes; explanations and AI review remain. Lexical evidence does not prove semantic strength. |
 | Policy | Python 3.9+, stdlib; policy input/exception v1 and finding-v1 output shape | The [bounded verification record](policy-validation-contract.md#authored-coverage-and-bounded-verification) covers 38 synthetic tests, not a packaged importer or authentic approvals. |
 | Quality | Stdlib Python source, policy public-function dependency; quality input/result v1; Actions-data semantics only | The [bounded verification record](quality-aggregation-contract.md#synthetic-tests-and-execution-hold) reports Python 3.9.6 and 32 tests using a private loader, not general namespace import, CI or a runtime matrix. |
 | Registry resolution | Python 3.9+ stdlib, admitted Git; standalone detached nonshallow SHA-1 Git-source distribution; registry/result/finding v1 | Isolated parity, negative and bundle-consumer test source authored; NOT RUN. No schema-engine/runtime matrix evidence. |
@@ -167,7 +167,7 @@ These are real test sources to inspect, not executions performed by this guide:
 | [Runner tests](../tests/context/test_runner.py) | Gate selection, empty expansions, containment, invalid UTF-8 and child failures | Fixture-owned probes/sentinels, not product commands or a hostile-code sandbox. |
 | [Fixture-hook regression](../tests/context/test_fixture_hooks.py) | Git honors a fixture-local `post-index-change` hook without changing parent/source state | Not a consumer pre-commit/pre-push installer or required-gate demonstration. |
 | [Selector tests](../tests/select/test_select.py), [gate tests](../tests/quality/test_gate.py) | Whole-PR selection, fallback and aggregate/short-circuit rules | Synthetic callers and supplied lane outcomes, not consumer matrix execution or remote enforcement. |
-| [Integrity tests](../tests/quality/test_test_integrity.py) | Undeclared loss negatives; movement/reformatting positives; comment/literal context, CODEOWNERS and quoted test paths | Isolated Git fixtures, not semantic proof or real Owner approval. |
+| [Integrity tests](../tests/quality/test_test_integrity.py) | Unexplained loss negatives; explanation-without-Owner positives; movement/reformatting, comment/literal context and quoted paths | Isolated Git fixtures, not semantic proof or real-consumer adoption. |
 | [Policy tests](../tests/policy/test_validation.py) | Exact pins and literal paths, weaker rules, complete approvals, expiry and unknown observations | Explicit source read/compile loader; synthetic external records do not establish approval authenticity. |
 | [Quality tests](../tests/quality/test_aggregation.py) | `fixture()` supplies six dimension receipts; tests cover mismatched binding, missing evidence, finite predicates and isolation observations | Private loader calls the actual policy evaluator; synthetic no-I/O records do not execute six workloads or prove isolation. |
 | [Registry isolation](../tests/contracts/test_isolation.py), [behavior](../tests/contracts/test_resolution.py), [schema consistency](../tests/contracts/test_registry_consistency.py) | External-envelope refusal/concurrency/cleanup; all selections/negatives; wrapper/direct parity; bundle consumption/restoration; offline schema validation | Separate stages, NOT RUN. Independent source/D1 review precedes behavior; no ambient dependencies, real caller or pure-function importer. |
@@ -190,22 +190,24 @@ No actual candidate consumer upgrade or rollback is demonstrated here. For a
 separately authorized adoption:
 
 1. Record the old full provider pin, caller head, verification commands and
-   required-check names. Resolve Owner policy A/B and provider merge/release
+   required-check names. Resolve provider implementation review and merge/release
    sequencing before selecting an adoption target. A candidate SHA is not a
    fabricated release revision.
 2. Compare the two feature contracts at old/new pins using the compatibility
-   table above. Inventory expected new failures, ledger coverage and the
+   table above. Inventory expected explanation failures and the
    chosen selection mode. Completion means every behavioral difference is
    accepted by its owner or retained as a blocker.
-3. Change all shared-ci workflow pins, the AGENTS protocol pointer and
-   dependency declaration together in one reviewed consumer PR. Follow the
+3. Change workflow pins and repository metadata together in one reviewed PR.
+   Route AGENTS to its guide; move details out of the index, preserve guide
+   CODEOWNERS protection and set review callers' `rules-file` to that guide.
+   Update verify bootstrap to read metadata (legacy fallback when absent). Follow the
    workflow checklist above, preserving check names. Do not retire a caller
    safeguard based only on the presence of the new lane.
 4. On the actual old/new provider and caller revisions, verify unchanged-test
    and reformatting positives, undeclared assertion/test/skip negatives,
-   CODEOWNERS ownerless override, Unicode-path skips, and selection fallback
+   explanations without Owner/ledger, Unicode-path skips, and selection fallback
    and docs-only required-check reporting. Retain exact-head local/CI evidence;
-   a declared-loss case still requires genuine Owner approval.
+   ordinary AI review still evaluates intended test behavior changes.
 5. Record the compatible rollback pin and configuration. Roll back by a
    reviewed revert of caller references/configuration together, then reverify;
    do not rewrite provider tags or silently disable integrity. Returning to an

@@ -65,7 +65,7 @@ on:
         type: boolean
         default: true
       test-integrity:
-        description: Fail on removed or weakened tests (per assertion and per test, no netting) unless each file is declared in .github/test-weakening.md with an approver and named in the PR body (pull_request events; v0.2.1+).
+        description: Detect test losses (per assertion and test, no netting) and require each affected file in the PR explanation. Test edits/deletions do not require Owner approval (pull_request events; v0.2.1+).
         type: boolean
         default: true
       check-pr-body:

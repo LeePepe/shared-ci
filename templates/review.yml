@@ -20,6 +20,9 @@ jobs:
     uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@<40-char-sha>
     with:
       codex-launcher: ""   # e.g. "python3 scripts/ci/review-raven.py" (base-tree file)
+      rules-file: docs/repository-guide.md
 
   kimi-review:
     uses: LeePepe/shared-ci/.github/workflows/kimi-review.yml@<40-char-sha>
+    with:
+      rules-file: docs/repository-guide.md

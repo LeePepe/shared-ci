@@ -2,8 +2,8 @@
 
 This describes the current [detector](../scripts/quality/test_integrity.py) and
 its lane in [quality.yml](../.github/workflows/quality.yml), not an approved
-release. The [candidate entry](../ai/README.md) records the unresolved Owner
-policy A/B decision. Existing consumers retain their old full-SHA behavior
+release. The Owner decided that test edits/deletions require no Owner approval;
+automatic detection, explanations and AI review remain. Existing consumers retain their old full-SHA behavior
 until a separately reviewed pin change. No real-consumer adoption is claimed.
 
 ## Comparison and declarations
@@ -12,8 +12,7 @@ The detector reads committed Git data from `merge-base(base, head)..head`, not
 the working diff or just the last push. It does not execute test sources.
 The [repository contract](../ai/repo-contract.md#test-integrity) and
 [agent protocol](../ai/agent-protocol.md#3-verify-with-the-same-entry-as-ci)
-define the declaration obligation; the [ledger template](../templates/test-weakening.md)
-provides its format.
+define the PR explanation obligation. There is no Owner-approved ledger.
 
 Loss records have `kind`, `file` (repository-relative path) and `detail`:
 
@@ -33,19 +32,11 @@ a comment or literal is not executable skip code. Git-quoted Unicode, spaces,
 tabs, quotes and backslashes do not hide additions: per-file diffs use literal
 paths from the NUL-delimited inventory, not decoded display headers.
 
-When losses exist, every affected file needs a newly added ledger entry with
-a reason and approver spelling. Pre-existing entries do not authorize new
-losses. A supplied PR body must name those files in `Removed or weakened tests
-or policy`; a missing section or `none` fails even when the ledger is present.
-
-The first existing CODEOWNERS file wins: `.github/CODEOWNERS`, `CODEOWNERS`,
-then `docs/CODEOWNERS`. An empty first file prevents fallback. The last matching
-rule must name an owner for `.github/test-weakening.md`; a later ownerless rule
-removes coverage. Supported glob handling includes a complete `**/` component
-matching zero or more directories. Escapes, negation and bracket syntax are
-unsupported by this detector and fail closed when coverage is evaluated.
-This is a coverage check, not verification of owner identity/access or an
-approval. The protected branch's code-owner review remains the approval gate.
+When losses exist, a supplied PR body must name every affected file and explain
+the changes in `Removed or weakened tests or policy`. A missing section or
+contradictory `none` fails. No ledger, approver spelling or CODEOWNERS rule is
+consulted by this detector. Normal AI review evaluates the explanation and
+behavior; this does not waive Plan-Review or separate CI/gate/policy protection.
 
 ## CLI
 
@@ -64,11 +55,13 @@ python3 "$SHARED_CI_CHECKOUT/scripts/quality/test_integrity.py" \
 evaluation. `--body-file` supplies the body cross-check. Alternatively,
 `--event-body` reads `pull_request.body` from `GITHUB_EVENT_PATH` when present;
 the file option takes precedence. With neither a body file nor an available
-event PR body, the standalone CLI checks losses/ledger/coverage but cannot
-claim the PR-body obligation was checked. The workflow supplies a live body.
+event PR body, the standalone CLI reports losses without an approval gate and
+sets `body_checked: false`; it cannot claim the PR explanation was checked.
+The workflow supplies a live body.
 
 Normal stdout is JSON with `verdict` (`pass` or `fail`), `losses`, `undeclared`
-(file paths) and `problems` (messages). Losses and errors are also written to
+(file paths missing from the supplied explanation), `problems` (messages) and
+`body_checked` (boolean). Losses and errors are also written to
 stderr. Exit 0 means pass, 1 means an unmet declaration requirement or evaluation
 failure, and 2 means argument usage error. Invalid revisions, unreadable test
 blobs and unlocatable/malformed hunks fail closed. Body-file/event read or
@@ -103,10 +96,9 @@ boundary. This lane does not run or replace the test suite.
 
 ## Failure routes and limits
 
-- `undeclared` or a body mismatch: inspect each actual loss; restore accidental
-  changes or obtain Owner approval and follow the declaration contract.
-- CODEOWNERS coverage/syntax error: inspect the first existing file and its
-  last matching rule; do not treat approver text as authorization.
+- `undeclared` or a body mismatch: inspect each actual loss, restore accidental
+  changes or explain the intended change for ordinary AI review. Test edits
+  themselves do not route to Owner approval.
 - `cannot read the diff` / nonzero without JSON: verify caller root, commits,
   history and body input. Repair the input and rerun; do not infer no losses.
 - Aggregate failure: inspect the integrity job result and head SHA as well as
@@ -123,7 +115,7 @@ caller/Owner responsibilities.
 
 [Integrity fixtures](../tests/quality/test_test_integrity.py) cover the
 positive/negative detector boundary, including comment deactivation,
-literal preservation, CODEOWNERS precedence and quoted filenames. They are
+literal preservation, explanation-without-Owner and quoted filenames. They are
 synthetic Git callers, not real-consumer rollout evidence. Release evidence
 and [registry discovery](integration-and-migration.md#selection-and-integrity-discovery-gap)
 remain outstanding.
