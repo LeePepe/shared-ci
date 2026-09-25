@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -230,9 +231,30 @@ class BootstrapTests(unittest.TestCase):
                                 env=env, capture_output=True, text=True, timeout=120)
         self.assert_pass(result)
 
+    def contract_url(self):
+        return (f"https://github.com/LeePepe/shared-ci/blob/{PROVIDER}/ai/"
+                "repo-contract.md#repository-development-contract")
+
+    def test_relocated_protocol_links_resolve_at_selected_provider(self):
+        guide = (self.repo.root / "docs/repository-guide.md").read_text()
+        snapshot = guide.split("## Complete shared protocol snapshot\n", 1)[1]
+        links = re.findall(r"\]\(([^)]+)\)", snapshot)
+        # The selected protocol has exactly one Markdown link. No unresolved
+        # relative links (nor floating provider versions) may survive relocation.
+        self.assertEqual([self.contract_url()], links)
+        contract = self.provider / "ai/repo-contract.md"
+        self.assertTrue(contract.is_file())
+        self.assertIn("\n## Repository development contract\n", contract.read_text())
+        self.assertFalse((self.repo.root / "docs/repo-contract.md").exists())
+
     def test_complete_protected_reviewer_rules(self):
         guide = (self.repo.root / "docs/repository-guide.md").read_text()
         protocol = (self.provider / "ai/agent-protocol.md").read_text()
+        # Only relocate the provider-relative contract link; every policy byte
+        # outside that single URL must remain present in the generated guide.
+        relative = "](repo-contract.md#repository-development-contract)"
+        self.assertEqual(1, protocol.count(relative))
+        protocol = protocol.replace(relative, "](" + self.contract_url() + ")")
         self.assertIn(protocol, guide)
         self.assertLess(len(guide.encode()), 24000)
         result = subprocess.run(["python3", "-I", "-B",

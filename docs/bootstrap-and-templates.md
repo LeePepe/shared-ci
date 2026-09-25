@@ -39,6 +39,10 @@ A tool-free reviewer cannot follow links. Both review callers therefore pass
 `rules-file: docs/repository-guide.md`; CODEOWNERS protects this guide and the
 development source. Keep the **entire** guide below the selected provider's
 24,000-byte input limit and verify rendered prompt contents, not just a link.
+When copying protocol text into a caller guide, rebase provider-relative links
+to immutable URLs at that same selected SHA. Validate the target document and
+fragment in the selected provider; do not silently turn shared-contract links
+into missing caller-local documents. Preserve all protocol policy text.
 
 Before switching review routing, put the protected complete guide on the trusted
 default branch through its own reviewed prerequisite. `pull_request_target`

@@ -105,7 +105,7 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 ## 2. Develop against the repository contract
 
 - Read the repository's layer map and development/PR guide under the
-  [repository development contract](repo-contract.md#repository-development-contract).
+  [repository development contract](https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/repo-contract.md#repository-development-contract).
   Choose its existing PR unit for the requested outcome. Layer boundaries and
   PR conventions belong to the repository, not to the agent's role.
 - **Dev Team:** Planner maps requirements/spec acceptance to tasks within those
