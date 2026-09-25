@@ -56,7 +56,10 @@ TEST_NAME = [
 ]
 SKIP = re.compile(
     r"\.disabled\b|\bXCTSkip\w*\s*\(|withKnownIssue\s*\(|@unittest\.skip|\bpytest\.mark\.(skip|xfail)|"
-    r"\bpytest\.skip\s*\(|\bpytest\.xfail\s*\(|\bself\.skipTest\s*\(|\b(?:it|test|describe)\.(skip|todo)\s*\(|\bx(?:it|describe|test)\s*\(|"
+    r"\bpytest\.skip\s*\(|\bpytest\.xfail\s*\(|\bself\.skipTest\s*\(|"
+    r"\b(?:it|test|describe)(?:\s*\.\s*concurrent)?\s*\.\s*(?:skip|todo)"
+    r"(?:\s*\.\s*(?:each|failing))*\s*\(|"
+    r"\bx(?:it|describe|test)(?:\s*\.\s*(?:each|failing))*\s*\(|"
     r"\bt\.Skip(?:f|Now)?\s*\(|@Disabled\b|@Ignore\b|\.enabled\s*\(\s*if\s*:")
 
 
@@ -331,7 +334,19 @@ def section_text(body: str) -> str | None:
 
 
 def says_none(text: str) -> bool:
-    value = text.strip().strip("-* ").rstrip(".").lower()
+    # Normalize whole-placeholder inline wrappers, not Markdown inside a reason.
+    # Repeat to handle nested emphasis/code spans without parsing general Markdown.
+    value = text
+    while True:
+        previous = value
+        value = re.sub(r"^[-*+]\s+", "", value.strip()).strip("-* ").rstrip(".").strip()
+        for wrapper in ("`", "__", "~~", "_"):
+            if len(value) >= 2 * len(wrapper) and value.startswith(wrapper) and value.endswith(wrapper):
+                value = value[len(wrapper):-len(wrapper)].strip()
+                break
+        if value == previous:
+            break
+    value = value.lower()
     return value in {"", "none", "n/a", "no", "nothing", "tbd", "todo", "...", "…"} or bool(
         re.fullmatch(r"<[^>]*>|\[[ xX]\]", value))
 

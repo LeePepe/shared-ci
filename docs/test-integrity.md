@@ -37,6 +37,9 @@ literal assertion values remain part of identity. Commenting out a suite removes
 its evidence. Uncommenting an existing skip is detected even without an added
 marker line. Moving a skip to another file reports a new skip in the destination.
 Multiple same-line assertions and balanced multiline delimiters are recognized.
+Jest skip chains include `.skip.each` (array/tagged tables), concurrent variants,
+`.skip.failing`, and `xit`/`xtest`/`xdescribe` aliases; examples inside comments
+or literals remain non-executable data.
 The NUL-delimited Git inventory preserves literal Unicode/whitespace/quoted paths;
 malformed records or non-UTF-8 Git data fail closed rather than alias filenames.
 
@@ -55,8 +58,10 @@ immediately by `:` and a reason. JSON quoting safely represents paths containing
 newlines, tabs, quotes or backticks. Paths are exact and case-sensitive;
 `tests/test_a.py.bak` cannot explain `tests/test_a.py`. Comments, fenced examples,
 missing/duplicate/prefix-only headings, bare filenames and placeholder reasons
-are not declarations. `none` is appropriate only when no losses exist. Reasons
-are checked for presence, not truth: ordinary AI review must assess whether the
+are not declarations. Inline code/emphasis/strikethrough around a whole
+placeholder (for example, `` `none` ``) does not make it a reason; substantive
+reasons may still contain or use code formatting. `none` is appropriate only
+when no losses exist. Reasons are checked for presence, not truth: ordinary AI review must assess whether the
 explanation is accurate and whether behavior/coverage remains acceptable.
 
 ## CLI and output

@@ -777,5 +777,113 @@ class LiveBodyTests(unittest.TestCase):
                 ti._live_body("a" * 40, "b" * 40)
 
 
+class ReviewRepairTests(unittest.TestCase):
+    setUp = TestIntegrityTests.setUp
+
+    def cli(self, section):
+        head = self.repo.git("rev-parse", "HEAD").strip()
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md") as body:
+            body.write(BODY.format(section=section))
+            body.flush()
+            result = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "--base", self.repo.base,
+                                     "--head", head, "--body-file", body.name], cwd=self.repo.root,
+                                    env=self.repo.env, capture_output=True, text=True, timeout=30)
+        return result.returncode, json.loads(result.stdout)
+
+    def test_parameterized_skip_chains_and_aliases_require_rationale(self):
+        path = "web/parameterized.test.js"
+        pairs = (("test", "test.skip"), ("it", "it.skip"), ("describe", "describe.skip"),
+                 ("it", "xit"), ("test", "xtest"), ("describe", "xdescribe"),
+                 ("test.concurrent", "test.concurrent.skip"), ("it.concurrent", "it.concurrent.skip"))
+        for original, skipped in pairs:
+            for table in ("([1, 2])", "`value\n${1}\n${2}\n`"):
+                with self.subTest(skipped=skipped, table=table):
+                    tail = '.each' + table + '("positive", value => { expect(value).toBeGreaterThan(0); });\n'
+                    self.repo.write(path, original + tail)
+                    self.repo.base = self.repo.commit()
+                    self.repo.write(path, skipped + tail)
+                    self.repo.commit()
+                    rc, result = self.cli("none")
+                    self.assertEqual(1, rc, result)
+                    self.assertIn("skip_added", {loss["kind"] for loss in result["losses"]})
+                    self.assertEqual([path], result["undeclared"])
+                    rc, result = self.cli('`' + path + '`: skip unsupported data cases pending platform repair')
+                    self.assertEqual(0, rc, result)
+                    self.assertTrue(result["body_checked"])
+
+    def test_skip_failing_forms_require_rationale(self):
+        path = "web/failing.test.js"
+        for skipped in ("test.skip.failing", "it.skip.failing", "xit.failing", "xtest.failing"):
+            with self.subTest(skipped=skipped):
+                tail = '("broken case", () => { expect(value).toBe(true); });\n'
+                self.repo.write(path, "test.failing" + tail)
+                self.repo.base = self.repo.commit()
+                self.repo.write(path, skipped + tail)
+                self.repo.commit()
+                rc, result = self.cli("none")
+                self.assertEqual(1, rc, result)
+                self.assertIn("skip_added", {loss["kind"] for loss in result["losses"]})
+
+    def test_parameterized_skip_examples_are_not_executable_markers(self):
+        path = "web/examples.test.js"
+        active = 'test.each([1])("case", value => { expect(value).toBe(1); });\n'
+        self.repo.write(path, active)
+        self.repo.base = self.repo.commit()
+        examples = ('test.skip.each`value\n${1}`("case", () => {});',
+                    'describe.skip.each([1])("suite", () => {});',
+                    'xit.each([1])("case", () => {});')
+        self.repo.write(path, active + "/*\n" + "\n".join(examples) + "\n*/\n" +
+                        "const examples = " + json.dumps("\n".join(examples)) + ";\n")
+        self.repo.commit()
+        rc, result = self.cli("none")
+        self.assertEqual((0, []), (rc, result["losses"]), result)
+
+    def test_skip_chain_whitespace_comments_and_reformatting(self):
+        path = "web/format.test.js"
+        before = 'test.each([1])("case", value => { expect(value).toBe(1); });\n'
+        after = before.replace("test.each", "test /* note */ . skip . each")
+        self.repo.write(path, before)
+        self.repo.base = self.repo.commit()
+        self.repo.write(path, after)
+        self.repo.commit()
+        rc, result = self.cli("none")
+        self.assertEqual(1, rc, result)
+        self.assertIn("skip_added", {loss["kind"] for loss in result["losses"]})
+        self.repo.base = self.repo.git("rev-parse", "HEAD").strip()
+        self.repo.write(path, after.replace("test /* note */ . skip . each", "test.skip.each"))
+        self.repo.commit()
+        rc, result = self.cli("none")
+        self.assertEqual((0, []), (rc, result["losses"]), result)
+
+    def test_formatted_placeholder_reasons_fail_real_cli(self):
+        path = "pytests/test_reason.py"
+        self.repo.write(path, "def test_case():\n    assert ready\n    assert ready\n")
+        self.repo.base = self.repo.commit()
+        self.repo.write(path, "def test_case():\n    assert ready\n")
+        self.repo.commit()
+        for reason in ("none", "`none`", "``None``", "**`none`**", "_none_", "__TODO__",
+                       "~~n/a~~", "*`TBD`*.", "`<reason>`", "` `", "** **", "`- [ ]`"):
+            with self.subTest(reason=reason):
+                rc, result = self.cli('- `' + path + '`: ' + reason)
+                self.assertEqual(1, rc, result)
+                self.assertEqual([path], result["undeclared"])
+
+    def test_substantive_formatted_reasons_remain_valid(self):
+        path = "pytests/test_reason.py"
+        self.repo.write(path, "def test_case():\n    assert ready\n    assert ready\n")
+        self.repo.base = self.repo.commit()
+        self.repo.write(path, "def test_case():\n    assert ready\n")
+        self.repo.commit()
+        for reason in ("Removed duplicate `assert ready` while retaining equivalent coverage.",
+                       "`Removed redundant duplicate; original case remains`",
+                       "**Replaced the `none` case with boundary coverage**",
+                       "~~Obsolete duplicate removed after consolidation~~"):
+            with self.subTest(reason=reason):
+                rc, result = self.cli('- `' + path + '`: ' + reason)
+                self.assertEqual(0, rc, result)
+                self.assertTrue(result["losses"])
+                self.assertEqual([], result["undeclared"])
+
+
 if __name__ == "__main__":
     unittest.main()
