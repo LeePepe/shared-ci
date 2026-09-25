@@ -38,7 +38,9 @@ one lowercase full 40-character provider SHA matching every workflow pin.
 `guide` names a tracked readable repository-relative document containing
 `Protocol`, `Verify`, `Required checks`, `Red lines` and `Delivery` sections.
 `dependencies` maps library names to exactly `version` and `ai`: an exact semver
-or full SHA, and an HTTPS link containing `/<version>/ai/`. Shared-ci has only
+(optional `v` prefix, ASCII identifiers, prerelease and build metadata; numeric
+core/prerelease identifiers have no leading zeros) or lowercase full SHA, and an
+HTTPS link containing `/<version>/ai/`. Shared-ci has only
 one authority, `shared_ci`, and cannot also appear in `dependencies`. Supported
 lockfiles retain their parity checks; an unreadable tracked lockfile fails.
 
@@ -50,6 +52,14 @@ prose belong in linked authoritative documents instead. Required-check duplicati
 in tool-specific agent files is checked against the guide rather than the index.
 Review callers must pass that guide as `rules-file`; this checks configuration,
 not whether a live runner or required AI review has been enabled.
+
+Workflow pin parity and review routing share one parsed job/step call inventory,
+not a text search. Block mappings, quoted keys/scalars and nested flow mappings
+are supported. Every tracked workflow is read as a regular file and parsed;
+unreadable files, malformed shapes and unsupported YAML fail the audit explicitly.
+The stdlib YAML subset rejects anchors/aliases, tags, multi-document streams,
+complex or escaped mapping keys and multiline flow collections. Shell text is
+not interpreted as workflow configuration.
 
 ### Directory routes and protection
 
@@ -78,8 +88,12 @@ CODEOWNERS must retain the existing required patterns and an exact `/<guide>`
 pattern. The highest-priority tracked CODEOWNERS file is authoritative, even
 when empty. Effective last-match ownership of AGENTS, metadata and the guide is
 checked, so later ownerless overrides fail. Unsupported ownership patterns fail
-closed rather than claiming complete GitHub pattern support. Live server
-protection still needs independent readback.
+closed rather than claiming complete GitHub pattern support. Owner tokens must
+be supported `@user`, `@organization/team` or email forms; malformed tokens fail
+explicitly, even alongside a valid owner. Email support is ASCII dot-atom local
+parts and DNS-style domains; exotic forms are rejected rather than guessed.
+Syntactic admission does not prove identity existence, visibility or write access;
+live server protection still needs independent readback.
 
 ### Adoption boundary
 

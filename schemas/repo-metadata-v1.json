@@ -16,7 +16,7 @@
         "additionalProperties": false,
         "required": ["version", "ai"],
         "properties": {
-          "version": {"type": "string", "pattern": "^([0-9a-f]{40}|v?[0-9]+\\.[0-9]+\\.[0-9]+([-+][A-Za-z0-9_.-]+)?)$"},
+          "version": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|v?(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)(?![\\s\\S])"},
           "ai": {"type": "string", "pattern": "^https://", "description": "Version-specific /<version>/ai/ URL."}
         }
       }

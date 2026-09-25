@@ -1,8 +1,9 @@
 """Metadata/index contract adoption through the real audit CLI."""
 import json
+import re
 import unittest
 
-from fixture import AGENTS, ContractRepo, OTHER, PIN
+from fixture import AGENTS, ContractRepo, OTHER, PIN, REPO
 
 
 class IndexContractTests(unittest.TestCase):
@@ -94,6 +95,102 @@ class IndexContractTests(unittest.TestCase):
         self.finding("review rules-file")
         self.repo.write(".github/workflows/review.yml", workflow + "    with:\n      rules-file: docs/repository-guide.md\n")
         self.assertEqual([], self.repo.audit()[1])
+
+    def test_review_call_spellings_enforce_guide_and_pin(self):
+        for reviewer in ("codex", "kimi"):
+            for spelling in ("plain", "quoted", "flow"):
+                for guide, pin, expected in ((None, PIN, "review rules-file"),
+                                              ("AGENTS.md", PIN, "review rules-file"),
+                                              (self.metadata["guide"], OTHER, "mixed shared-ci pins"),
+                                              (self.metadata["guide"], "main", "not pinned"),
+                                              (self.metadata["guide"], PIN, None)):
+                    with self.subTest(reviewer=reviewer, spelling=spelling, guide=guide, pin=pin):
+                        uses = f"LeePepe/shared-ci/.github/workflows/{reviewer}-review.yml@{pin}"
+                        if spelling == "flow":
+                            inputs = f", with: {{rules-file: {guide}}}" if guide else ""
+                            job = f"  review: {{uses: {uses}{inputs}}}\n"
+                        else:
+                            key = '"uses"' if spelling == "quoted" else "uses"
+                            job = f"  review:\n    {key}: {uses}\n"
+                            if guide:
+                                job += f"    with:\n      rules-file: {guide}\n"
+                        self.repo.write(".github/workflows/review.yml", "on: pull_request_target\njobs:\n" + job)
+                        if expected:
+                            self.finding(expected)
+                        else:
+                            self.assertEqual([], self.repo.audit()[1])
+
+    def test_uninterpretable_workflows_fail_closed(self):
+        for jobs in ("[]", "{review: []}", "{review: {uses: []}}", "{review: &call {uses: ignored}}",
+                     '{review: {"uses": "x", with: []}}', '{review: {steps: {}}}',
+                     '{review: {steps: [null]}}', '{review: {uses: x, uses: y}}',
+                     '{review: {uses: LeePepe/shared-ci/invalid}}', '{review.bad: {uses: x}}'):
+            with self.subTest(jobs=jobs):
+                self.repo.write(".github/workflows/review.yml", "on: pull_request_target\njobs: " + jobs + "\n")
+                self.finding("cannot resolve workflow calls")
+
+    def test_quality_job_is_discovered_from_structure(self):
+        for job_id in ("quality", "gate"):
+            with self.subTest(job_id=job_id):
+                self.repo.write(".github/workflows/ci.yml", f"""on: pull_request
+jobs:
+  {job_id}: {{"uses": "LeePepe/shared-ci/.github/workflows/quality.yml@{PIN}", with: {{verify-command: scripts/verify --all}}}}
+""")
+                if job_id == "quality":
+                    self.assertEqual([], self.repo.audit()[1])
+                else:
+                    self.finding("quality / aggregate")
+
+    def test_workflow_symlink_is_not_silently_ignored(self):
+        self.repo.write("docs/review.yml", "jobs: {review: {uses: ignored}}\n")
+        (self.repo.root / ".github/workflows/review.yml").symlink_to("../../docs/review.yml")
+        self.finding("cannot resolve workflow calls")
+
+    def test_script_text_is_not_a_workflow_call(self):
+        self.repo.write(".github/workflows/review.yml", """on: pull_request_target
+jobs:
+  script:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@main
+""")
+        self.assertEqual([], self.repo.audit()[1])
+
+    def test_invalid_owner_tokens_fail_closed(self):
+        for token in ("not-an-owner", "@", "@org/", "@org/team/extra", "owner@", "@bad_name",
+                      "@bad--name", "@" + "a" * 40, "a..b@example.invalid", "@owner invalid"):
+            with self.subTest(token=token):
+                self.repo.write(".github/CODEOWNERS", "".join(
+                    f"{path} {token}\n" for path in ("/.github/", "/AGENTS.md", "/docs/repository-guide.md")))
+                self.finding("invalid CODEOWNERS owner")
+
+    def test_supported_owners_and_ownerless_override(self):
+        for token in ("@owner", "@org/team-name", "owner@example.invalid", "a.b@foo--bar.invalid"):
+            with self.subTest(token=token):
+                owners = "".join(f"{path} {token}\n" for path in (
+                    "/.github/", "/AGENTS.md", "/docs/repository-guide.md"))
+                self.repo.write(".github/CODEOWNERS", owners)
+                self.assertEqual([], self.repo.audit()[1])
+                self.repo.write(".github/CODEOWNERS", owners + "**/repository-guide.md\n")
+                self.finding("unowned")
+
+    def test_exact_versions_agree_with_schema(self):
+        schema = json.loads((REPO / "schemas/repo-metadata-v1.json").read_text())
+        pattern = schema["properties"]["dependencies"]["additionalProperties"]["properties"]["version"]["pattern"]
+        valid = ("0.0.0", "v1.2.3", "1.2.3-rc.1+build.7", "1.2.3+001", "1.2.3-0.a-1", PIN)
+        invalid = ("01.2.3", "1.02.3", "1.2.03", "1.2.3-bad_identifier", "1.2.3-é",
+                   "1.2.3-01", "1.2.3-a..b", "1.2.3+", "1.2.3+a..b", "1.2.3\n", "１.2.3", "A" * 40, "main")
+        for version in valid + invalid:
+            with self.subTest(version=version):
+                expected = version in valid
+                self.metadata["dependencies"] = {"shared-telemetry": {
+                    "version": version, "ai": f"https://example.invalid/{version}/ai/"}}
+                self.write_metadata()
+                findings = self.repo.audit()[1]
+                accepted = not any("version must be exact semver" in f["detail"] for f in findings)
+                self.assertEqual(expected, accepted, findings)
+                self.assertEqual(expected, re.search(pattern, version) is not None)
 
 
 if __name__ == "__main__":
