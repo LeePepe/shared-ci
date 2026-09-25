@@ -8,9 +8,10 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 1. Before you edit
 
-1. Read in this order: the constitution (if present), then the root
-   `tech-context.md`, then the leaf `tech-context.md` of every layer you will
-   touch. `AGENTS.md` lists the paths.
+1. Use `AGENTS.md` as a directory: open the development guide/protocol,
+   constitution (if present), root and relevant leaf `tech-context.md`, and
+   verification/review documents it points to for this task. Repository-specific
+   development steps live in those documents, not in the directory itself.
 2. Use a dedicated branch **and** a dedicated worktree for the task. Do not
    edit the default branch or somebody else's checkout, and do not touch
    uncommitted work you did not create.
@@ -18,25 +19,22 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
    writer appears (unexpected commits or a dirty tree you did not make),
    stop and report. Do not merge over it or reset it.
 
-## 2. Scope
+## 2. Development modes
 
-- Before editing, agree the task's [scope declaration](repo-contract.md#pr-scope):
-  one independently acceptable purpose, one primary responsibility area,
-  allowed paths and non-goals, layer ownership, CI verification and reviewers.
-  Areas may be a code layer, CI wiring, documentation or reviewer rules; use
-  the repository's existing ownership and review boundaries, not file extensions.
-  Resolve planned paths with `scripts/context/resolve <path> --format layer`.
-- Include essential tests and documentation with their implementation. Split
-  independently mergeable CI, docs, review-policy and feature work, even within
-  the same layer or reviewer assignment. For an inseparable cross-area change,
-  name the minimal companion paths, why they cannot merge separately, and all
-  verification/review responsibilities before dispatch. A support path is not
-  permission to add unrelated work.
-- New independent concerns go to follow-up tasks. An insufficient scope returns
-  to the task owner/TL for revision or reslicing before further edits; the
-  implementer cannot widen the declaration to legitimize an out-of-scope diff.
-  Fix defects introduced by this patch; if that requires crossing its scope,
-  resolve the scope first and keep each resulting slice buildable and testable.
+- **Dev Team FS:** execute the ready task produced by Planner and dispatched
+  by TL after the spec/plan gate. Use its requirement/spec revision, acceptance,
+  layer, paths and exclusions; one implementation task has its own branch/PR.
+  If another layer, spec or requirement is needed, return the gap through TL
+  to Planner before continuing. Task decomposition is a planning-stage duty,
+  not a PR Manager scope/size check.
+- **Other agents:** follow the user's request and the development documents
+  indexed by `AGENTS.md`. No Planner task graph, formal scope declaration or
+  PR-size/scope gate is required by this protocol. Existing authorization,
+  architecture, verification and review rules still apply.
+- Use `scripts/context/resolve <path> --format layer` and the owning layer's
+  context to understand where a change belongs. Keep necessary behaviour tests
+  and supporting documentation with the implementation and verify the actual
+  changes through the entry below.
 - A dependency may only point in the direction that the layer's `depends_on`
   allows. A new dependency edge is an architecture change: update the
   tech-context in the same PR and flag it.
@@ -73,18 +71,13 @@ What a PR must be:
 
 - **Base is the default branch.** A PR must be mergeable on its own. Do not
   make it depend on another open PR being merged first.
-- **Bounded scope.** Compare the whole PR diff with the original task scope
-  from §2 before every push, not just the last commit. Every change must be
-  within the allowed paths and necessary for the declared purpose. Line and
-  file counts are diagnostic signals, not a substitute for that decision.
-- **Scope review.** The assigned Reviewer checks the actual diff against that
-  scope; PRM verifies head-bound review, required CI and approval evidence,
-  without repeating code review. Scope drift returns to the implementer/TL,
-  not automatically to Owner. A label or an approved broad plan cannot widen
-  the task; preserve separate policy/permission protections.
-- **Keep viable slices.** Each slice carries its essential tests/docs and
-  passes its checks. Split by responsibility and purpose, not by deleting
-  coverage or creating uncompilable shards to reduce line counts.
+- **Dev Team task link.** An FS PR identifies the Planner task it implements;
+  its boundary was set before implementation under §2. Other sources do not
+  need to create a Planner task or a scope declaration to submit a PR.
+- **PR Manager handles lifecycle.** Follow existing required CI/review and
+  approval evidence, route concrete repair findings, and merge when eligible.
+  Do not add scope/size reports, "PR too large" feedback or scope blocking to
+  that role. This does not waive any existing required check or review.
 - **Stacked PRs** are allowed only as a temporary queue. Once the base PR
   merges, retarget the next PR to the default branch and rebase it onto that
   branch, dropping the base PR's pre-squash commits
@@ -99,7 +92,7 @@ Fill in every section of the repository's PR template:
 | Section | Content |
 | --- | --- |
 | Existing behaviour | What the code does today, including behaviour that must be kept |
-| Intent | What changes and why; task/issue link and scope declaration from §2 |
+| Intent | What changes and why; task/issue link (Dev Team: the Planner task) |
 | Compatibility | API/data/config compatibility, migrations, rollback |
 | Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
@@ -125,8 +118,7 @@ Owner approval merely because tests changed. Changes to actual gate/policy
 semantics or permissions remain important even when placed in a test or Markdown
 file. Existing behaviour changes without an approved spec also need the Owner.
 Use trusted policy and effective CODEOWNERS protections, not an author's label,
-to route review. Keep independently mergeable ordinary work separate from
-important changes. Until CODEOWNERS review is enforced, add `owner-review` for
+to route review. Until CODEOWNERS review is enforced, add `owner-review` for
 important PRs and wait; do not bypass existing protections.
 
 Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.

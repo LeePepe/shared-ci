@@ -20,42 +20,29 @@ and `kind: "contract_<item>"`.
 | 3 `ci` | `.github/workflows/ci.yml` calls `LeePepe/shared-ci/.github/workflows/quality.yml@<40-char SHA>` and passes this repository's commands | enforced | audit checks that ci.yml calls quality.yml, that every pin is a full SHA, and that all pins are the same SHA. workflow-lint also rejects tag and branch refs and self-hosted jobs without a fork guard | — |
 | 4 `verify` | `.githooks/pre-push` (or pre-commit) and CI call the same executable `scripts/verify`. With `changed-only: true` CI calls `scripts/verify --selected`, which runs the layers the `select` job chose, or every layer on a full run | enforced | audit checks that `scripts/verify` is tracked with mode 100755, that the hook exists, is executable and calls it, and that ci.yml calls it | whether `core.hooksPath` is set locally (it cannot be seen in the tree) |
 | 5 `ruleset` | The default-branch ruleset is code: [`templates/ruleset.json`](../templates/ruleset.json). It blocks deletion and non-fast-forward, requires a PR, requires `quality / aggregate` and `codex-review-target / codex-review` plus caller extras, requires code-owner review, allows no bypass actors, and uses strict=false unless the caller opts in. CODEOWNERS covers the important paths | enforced | audit checks that CODEOWNERS exists and covers `/.github/` and `/AGENTS.md`. [`scripts/ruleset/plan.py`](../scripts/ruleset/plan.py) computes old → new from the API dumps and keeps every existing required check unless `--map OLD=NEW` says otherwise. [`scripts/ruleset/apply.sh`](../scripts/ruleset/apply.sh) is a dry run by default; with `--apply` it applies the change and reads it back | the ruleset step itself: dry run, then Owner approval, then `--apply`, then readback (it needs admin API access) |
-| 6 `pr_template` | `.github/pull_request_template.md` with the sections `Existing behaviour`, `Intent`, `Compatibility`, `Removed or weakened tests or policy`, `Test evidence` | guidance + enforced | audit checks that the template has every section. The `quality / aggregate` check fails a PR whose body is missing a section, leaves one empty or placeholder-only, or names a tested SHA other than the head | scope and review routing under the agent protocol; ordinary test-code changes do not themselves require Owner approval |
+| 6 `pr_template` | `.github/pull_request_template.md` with the sections `Existing behaviour`, `Intent`, `Compatibility`, `Removed or weakened tests or policy`, `Test evidence` | guidance + enforced | audit checks that the template has every section. The `quality / aggregate` check fails a PR whose body is missing a section, leaves one empty or placeholder-only, or names a tested SHA other than the head | review routing under the agent protocol; ordinary test-code changes do not themselves require Owner approval |
 | 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
 | 8 `identity` | No personal account names, credential-profile paths or local home paths | red line | audit scans every tracked text file for the `forbidden_patterns` | account names in prose that the patterns do not cover |
 
-## PR scope
+## Development entry points
 
-PR size is controlled by a bounded responsibility area, not a universal line
-or file ceiling. The task and PR's existing `Intent` section carry the scope
-used by the [agent protocol](agent-protocol.md#2-scope):
+Use `AGENTS.md` as a task-oriented directory to the repository's development
+guide, pinned [agent protocol](agent-protocol.md), architecture/layer documents,
+verification/CI and review policy. Put development instructions in those
+targets, not in the directory. This protocol supplies the shared steps;
+repository guides supply their own build setup and project-specific practices.
 
-| Field | Evidence |
-| --- | --- |
-| Purpose and primary area | One acceptance result; a code layer, CI, docs, reviewer rules or another existing ownership area |
-| Allowed paths and non-goals | Specific files or bounded directories, including necessary tests/docs; no repository-wide catch-all |
-| Layer ownership and dependencies | Existing layer map, support-path purpose and any inseparable cross-area companions |
-| CI verification | Required checks and dependency-affected verification from the actual diff, retaining forced full runs |
-| Review responsibilities | Assigned Reviewer responsibilities and any Owner-only matters under trusted policy/CODEOWNERS |
+Dev Team task boundaries are produced by Planner before FS implementation and
+reviewed in the existing spec/plan gate. Other agents use the indexed development
+documents without a Planner-task or formal scope-declaration prerequisite.
+PRM follows the existing PR lifecycle; scope/size policing is not an added duty.
+There is no new range or size gate, nor a scope field added to the PR schema.
+Layer selection continues to choose verification from the actual diff and
+dependencies; it is not a reason to waive existing checks or approvals.
 
-Compare the complete diff against the original task, including both paths of
-a rename (`git diff --name-status --no-renames origin/main...HEAD`; use the
-actual base). Inspect pending changes too before the final push. An allowed
-path alone does not justify an unrelated change within it. Files, lines and
-labels cannot establish scope or reduce required review.
-
-**Enforcement boundary:** the current resolver classifies paths, changed-layer
-selection chooses affected tests, and the aggregate validates enabled lanes
-and PR-body evidence. None compares the diff to a task path allowlist or proves
-single-purpose scope. That check currently belongs to workflow/diff review;
-a mechanical scope-admission check is separate implementation work, not supplied
-by this documentation change. CI running dependent layers does not authorize
-editing them. A support-only selection is not approval to mix arbitrary docs
-or to treat Markdown policy as ordinary documentation.
-
-No workflow, schema, pin or server protection changes here. Consumers follow
-the protocol version they pin; publishing these rules does not deploy them to
-existing consumers or installed roles.
+Consumers follow their pinned protocol version. Updating these source documents
+does not deploy them to existing consumers or installed roles; directory-only
+template/audit migration is separate from this development-guidance change.
 
 ## Changed-layer selection (optional)
 

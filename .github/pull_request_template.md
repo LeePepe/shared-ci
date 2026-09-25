@@ -1,6 +1,6 @@
 <!--
-PR goals: base = default branch; one purpose; bounded responsibility scope;
-independently mergeable. Stacked PR? After its base merges, retarget to main and
+PR goals: base = default branch; independently mergeable.
+Stacked PR? After its base merges, retarget to main and
 `git rebase --onto origin/main <old-base-tip>` before merging (squash merges
 otherwise make the stacked branch conflict).
 -->
@@ -11,7 +11,7 @@ otherwise make the stacked branch conflict).
 
 ## Intent
 
-<!-- What changes and why. Link the task/issue/spec and include its scope declaration per the pinned agent protocol named by AGENTS.md. -->
+<!-- What changes and why. Link the task/issue/spec; for Dev Team work, identify the Planner task. No additional scope declaration is required for other sources. -->
 
 ## Compatibility
 
