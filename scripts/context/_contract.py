@@ -9,11 +9,16 @@ Items 3 and 5 are partly enforced elsewhere (workflow-lint, ruleset readback).
 
 from __future__ import annotations
 
+import html
 import json
 import pathlib
 import re
+import stat
 import subprocess
+import unicodedata
+from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import unquote
 
 HERE = pathlib.Path(__file__).resolve().parent
 CONTRACT_FILE = HERE.parents[1] / "schemas" / "repo-contract-v1.json"
@@ -22,6 +27,9 @@ USES = re.compile(r"""^\s*-?\s*uses:\s*["']?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/
 POINTER = re.compile(
     r"(?:github\.com/LeePepe/shared-ci/blob/|LeePepe/shared-ci@)([0-9A-Za-z._/-]+?)/ai/agent-protocol\.md",
     re.IGNORECASE)
+METADATA = ".github/repo-contract.json"
+ROUTE = re.compile(r"^\s*(?:(?:[-*]|\d+\.)\s+)?(?:[^`\[\]<>:]+:\s*)?\[[^\[\]]+\]\(([^\s)]+)\)[.;]?\s*$")
+INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 
 
 def load_contract() -> dict[str, Any]:
@@ -40,14 +48,28 @@ def _git_files(root: pathlib.Path) -> dict[str, str]:
         if not item:
             continue
         meta, _, path = item.partition(b"\t")
-        files[path.decode("utf-8", errors="surrogateescape")] = meta.split(b" ")[0].decode()
+        mode, _, stage = meta.split(b" ")
+        files[path.decode("utf-8", errors="surrogateescape")] = mode.decode() if stage == b"0" else ""
     return files
 
 
 def _text(root: pathlib.Path, path: str, limit: int = 2_000_000) -> str | None:
-    target = root / path
+    # Git filenames allow controls and literal backslashes; route URL syntax
+    # is narrower. Keep containment here without filtering legitimate names.
+    parts = path.split("/")
+    if "\0" in path or any(part in ("", ".", "..") for part in parts):
+        return None
+    target = root
     try:
-        if target.is_symlink() or not target.is_file() or target.stat().st_size > limit:
+        # Check each component before reading: even an internal ancestor alias
+        # can turn a tracked pathname into unrelated local or outside content.
+        for index, part in enumerate(parts):
+            target = target / part
+            info = target.lstat()
+            regular = stat.S_ISREG(info.st_mode) if index == len(parts) - 1 else stat.S_ISDIR(info.st_mode)
+            if not regular:
+                return None
+        if info.st_size > limit:
             return None
         raw = target.read_bytes()
     except OSError:
@@ -55,6 +77,12 @@ def _text(root: pathlib.Path, path: str, limit: int = 2_000_000) -> str | None:
     if b"\0" in raw[:8192]:
         return None
     return raw.decode("utf-8", errors="replace")
+
+
+def _tracked_text(root: pathlib.Path, path: str, files: dict) -> str | None:
+    if not _local_path(path) or files.get(path) not in ("100644", "100755"):
+        return None
+    return _text(root, path)
 
 
 def section(markdown: str, title: str) -> str | None:
@@ -98,8 +126,196 @@ class _Report:
         self.findings.append(self.ctx.Finding("contract", path, "contract_" + item, detail))
 
 
-def _agents(report: _Report, root: pathlib.Path, contract: dict, refs: list) -> str:
-    text = _text(root, "AGENTS.md")
+def _local_path(value: Any) -> bool:
+    return isinstance(value, str) and bool(value) and not value.startswith("/") and "\\" not in value and not any(
+        ord(char) < 32 or ord(char) == 127 for char in value) and all(
+        part not in ("", ".", "..") for part in value.split("/"))
+
+
+def _metadata(report: _Report, root: pathlib.Path, files: dict) -> dict | None:
+    if (METADATA not in files and not (root / METADATA).exists()
+            and not (root / METADATA).is_symlink() and not (root / ".github").is_symlink()):
+        return None  # Legacy v1 callers retain their pinned AGENTS contract.
+    if METADATA not in files:
+        report.add("agents", METADATA, "repository metadata must be tracked")
+    try:
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate key {key!r}")
+                result[key] = value
+            return result
+        data = json.loads(_tracked_text(root, METADATA, files) or "", object_pairs_hook=unique)
+        if not isinstance(data, dict) or set(data) != {"schema", "guide", "shared_ci", "dependencies"}:
+            raise ValueError("expected schema, guide, shared_ci and dependencies")
+        if type(data["schema"]) is not int or data["schema"] != 1:
+            raise ValueError("metadata schema must be 1")
+        if not isinstance(data["shared_ci"], str) or not SHA.fullmatch(data["shared_ci"]):
+            raise ValueError("shared_ci must be a full 40-char SHA")
+        if not _local_path(data["guide"]):
+            raise ValueError("guide must be a repository-relative file path")
+        if _tracked_text(root, data["guide"], files) is None:
+            raise ValueError("guide must name a tracked readable regular file without symlinks")
+        if not isinstance(data["dependencies"], dict):
+            raise ValueError("dependencies must be an object")
+        for name, item in data["dependencies"].items():
+            if name.lower() == "shared-ci":
+                raise ValueError("shared-ci is declared only by shared_ci, not duplicated in dependencies")
+            if not isinstance(item, dict) or set(item) != {"version", "ai"}:
+                raise ValueError(f"{name}: expected version and ai")
+            version, url = item["version"], item["ai"]
+            if not isinstance(version, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?)", version):
+                raise ValueError(f"{name}: version must be exact semver or a full SHA")
+            if not isinstance(url, str) or not url.startswith("https://") or not re.search(
+                    r"/" + re.escape(version) + r"/ai/", url):
+                raise ValueError(f"{name}: ai must point to that version's ai/ docs")
+        return data
+    except (ValueError, TypeError) as error:
+        report.add("agents", METADATA, f"invalid repository metadata: {error}")
+        return {}  # Invalid new metadata never silently falls back to AGENTS.
+
+
+class _ExplicitAnchors(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.anchors: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        for name, value in attrs:
+            if value and (name == "id" or (tag == "a" and name == "name")):
+                self.anchors.add(value)
+
+
+def _markdown_anchors(text: str) -> set[str]:
+    """Block ATX/Setext headings and explicit HTML anchors, not a Markdown renderer."""
+    headings: set[str] = set()
+    explicit = _ExplicitAnchors()
+    paragraph: list[str] = []
+    visible: list[str] = []
+    fence = ""
+    html_block = False
+    comment = False
+
+    def heading(value: str) -> None:
+        value = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", value)
+        value = re.sub(r"<[^>]*>", "", value)
+        value = re.sub(r"(?<!\w)(_+)(?=\S)(.+?)(?<=\S)\1(?!\w)", r"\2", value)
+        value = html.unescape(value).lower()
+        slug = "".join("-" if char.isspace() else char for char in value
+                       if char.isspace() or char in "_-" or unicodedata.category(char)[0] in "LNM")
+        unique, suffix = slug, 0
+        while unique in headings:
+            suffix += 1
+            unique = f"{slug}-{suffix}"
+        headings.add(unique)
+
+    text = re.sub(r"\A---[^\S\n]*\n.*?\n(?:---|\.\.\.)[^\S\n]*(?:\n|$)", "", text, flags=re.DOTALL)
+    for line in text.splitlines():
+        if fence:
+            if re.fullmatch(r" {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*", line):
+                fence = ""
+            continue
+        if not comment and line.startswith(("    ", "\t")):
+            paragraph = []
+            continue
+        # Code examples and escaped HTML are displayed text, not HTML syntax.
+        # Encode before comment/markup processing and decode only for the slug.
+        line = INLINE_CODE.sub(lambda match: "".join(f"&#{ord(char)};" for char in match.group(2)), line)
+        line = re.sub(r"\\([<>])", lambda match: html.escape(match.group(1)), line)
+        if comment:
+            _, end, line = line.partition("-->")
+            if not end:
+                continue
+            comment = False
+        line = re.sub(r"<!--.*?-->", "", line)
+        if "<!--" in line:
+            line = line.partition("<!--")[0]
+            comment = True
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if opening:
+            fence = opening.group(1)
+            paragraph = []
+            continue
+        visible.append(line)
+        if re.match(r"^ {0,3}</?[A-Za-z][\w-]*(?:\s|/?>)", line):
+            html_block = True
+        if html_block:
+            html_block = bool(line.strip())
+            paragraph = []
+            continue
+        atx = re.match(r"^ {0,3}#{1,6}(?:[ \t]+(.*?)|)[ \t]*$", line)
+        if atx:
+            heading(re.sub(r"[ \t]+#+[ \t]*$", "", atx.group(1) or "").strip())
+            paragraph = []
+        elif paragraph and re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*", line):
+            heading(" ".join(paragraph))
+            paragraph = []
+        elif not line.strip() or re.match(r"^ {0,3}(?:<|>|[-*+]\s|\d+[.)]\s)", line):
+            paragraph = []
+        else:
+            paragraph.append(line.strip())
+    explicit.feed("\n".join(visible))
+    explicit.close()
+    return headings | explicit.anchors
+
+
+def _local_route(target: str) -> tuple[str, str | None]:
+    """Decode once, then validate repository path syntax before any file access."""
+    path, marker, fragment = target.partition("#")
+    if "?" in path or ":" in path or re.search(r"%(?![0-9A-Fa-f]{2})", target):
+        raise ValueError("malformed local route")
+    path = unquote(path, errors="strict") if path else "AGENTS.md"
+    fragment = unquote(fragment, errors="strict") if marker else None
+    if not _local_path(path) or (fragment is not None and (not fragment or any(
+            ord(char) < 32 or ord(char) == 127 for char in fragment))):
+        raise ValueError("malformed local route")
+    return path, fragment
+
+
+def _index_agents(report: _Report, root: pathlib.Path, text: str, metadata: dict, refs: list, files: dict) -> None:
+    routes = []
+    local_paths = set()
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or re.match(r"^#{1,6}\s+", line):
+            continue
+        match = ROUTE.fullmatch(line)
+        if not match:
+            report.add("agents", f"AGENTS.md:{number}", "index-only AGENTS permits headings and conditional Markdown links, not inline instructions")
+            continue
+        target = match.group(1)
+        routes.append(target)
+        if target.startswith("https://"):
+            continue
+        try:
+            path, fragment = _local_route(target)
+        except ValueError:
+            report.add("agents", f"AGENTS.md:{number}", f"malformed local route: {target}")
+            continue
+        document = _tracked_text(root, path, files)
+        if document is None:
+            report.add("agents", f"AGENTS.md:{number}", f"route target is not a tracked readable regular repository file without symlinks: {target}")
+            continue
+        local_paths.add(path)
+        if fragment is not None and (pathlib.PurePosixPath(path).suffix.lower() not in (".md", ".markdown")
+                                     or fragment not in _markdown_anchors(document)):
+            report.add("agents", f"AGENTS.md:{number}", f"route fragment does not resolve to a Markdown anchor: {target}")
+    if not routes:
+        report.add("agents", "AGENTS.md", "index must route to repository documents")
+    guide = metadata.get("guide")
+    if guide and guide not in local_paths:
+        report.add("agents", "AGENTS.md", f"index must route to the repository guide: {guide}")
+    pin = metadata.get("shared_ci")
+    caller = {ref for _, _, _, ref in refs}
+    if pin and caller and caller != {pin}:
+        report.add("agents", METADATA, f"shared_ci {pin} differs from workflow pins {sorted(caller)}")
+    pointers = set(POINTER.findall(text))
+    if pointers and pin and pointers != {pin}:
+        report.add("agents", "AGENTS.md", "versioned protocol route differs from metadata shared_ci pin")
+
+
+def _agents(report: _Report, root: pathlib.Path, contract: dict, refs: list, metadata: dict | None, files: dict) -> str:
+    text = _tracked_text(root, "AGENTS.md", files) if metadata is not None else _text(root, "AGENTS.md")
     if text is None:
         report.add("agents", "AGENTS.md", "AGENTS.md is missing")
         return ""
@@ -107,6 +323,9 @@ def _agents(report: _Report, root: pathlib.Path, contract: dict, refs: list) -> 
     count = len(text.splitlines())
     if count > limit:
         report.add("agents", "AGENTS.md", f"{count} lines exceeds {limit}")
+    if metadata is not None:
+        _index_agents(report, root, text, metadata, refs, files)
+        return text
     pointers = POINTER.findall(text)
     if not pointers:
         report.add("agents", "AGENTS.md", "missing protocol pointer to shared-ci@<40-char SHA>/ai/agent-protocol.md")
@@ -140,7 +359,7 @@ def _agent_files(report: _Report, root: pathlib.Path, contract: dict, agents: st
         if count > contract["agent_file_max_lines"]:
             report.add("agent_files", path, f"{count} non-empty lines; keep tool-specific notes only")
         if POINTER.search(text) or re.search(r"shared-ci[^\n]*@[0-9a-f]{40}", text):
-            report.add("agent_files", path, "duplicates the shared-ci pin; it belongs in AGENTS.md only")
+            report.add("agent_files", path, "duplicates the shared-ci pin; use repository metadata (legacy: AGENTS.md)")
         for name in checks:
             if f"`{name}`" in text:
                 report.add("agent_files", path, f"duplicates required check {name!r} from AGENTS.md")
@@ -178,6 +397,24 @@ def _quality_job(root: pathlib.Path, path: str) -> str | None:
     return None
 
 
+def _review_rules(report: _Report, root: pathlib.Path, refs: list, metadata: dict | None) -> None:
+    if not metadata:
+        return
+    paths = {path for path, _, workflow, _ in refs
+             if workflow in (".github/workflows/codex-review.yml", ".github/workflows/kimi-review.yml")}
+    for path in paths:
+        try:
+            data = _frontmatter().parse(_text(root, path) or "")
+            jobs = data.get("jobs", {})
+            for job in jobs.values():
+                uses = job.get("uses", "") if isinstance(job, dict) else ""
+                if re.search(r"(?i)^LeePepe/shared-ci/\.github/workflows/(codex|kimi)-review\.yml@", str(uses)):
+                    if (job.get("with") or {}).get("rules-file") != metadata["guide"]:
+                        report.add("ci", path, "index-only callers must set review rules-file to the repository guide")
+        except (ValueError, AttributeError, TypeError):
+            report.add("ci", path, "cannot resolve review rules-file from workflow")
+
+
 def _frontmatter() -> Any:
     import importlib.util
     spec = importlib.util.spec_from_file_location("shared_ci_frontmatter", HERE / "_frontmatter.py")
@@ -203,16 +440,57 @@ def _verify(report: _Report, root: pathlib.Path, files: dict) -> None:
         report.add("verify", workflows[0], "CI does not invoke scripts/verify")
 
 
-def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict) -> None:
-    owners = [p for p in ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS") if p in files]
+def _owner_pattern(pattern: str, path: str) -> bool:
+    if pattern.startswith("!") or any(char in pattern for char in "\\[]"):
+        raise ValueError("unsupported CODEOWNERS pattern")
+    anchored = pattern.startswith("/") or "/" in pattern.rstrip("/")
+    body, regex, index = pattern.strip("/"), "", 0
+    while index < len(body):
+        if body.startswith("**/", index) and (index == 0 or body[index - 1] == "/"):
+            regex += "(?:[^/]+/)*"
+            index += 3
+        elif body[index:] == "**" and (index == 0 or body[index - 1] == "/"):
+            regex += ".*"
+            index += 2
+        elif body[index] == "*":
+            regex += "[^/]*"
+            while index < len(body) and body[index] == "*":
+                index += 1
+        elif body[index] == "?":
+            regex += "[^/]"
+            index += 1
+        else:
+            regex += re.escape(body[index])
+            index += 1
+    regex = ("^" if anchored else "^(?:.*/)?") + regex + ("/.*$" if pattern.endswith("/") else "(?:/.*)?$")
+    return re.match(regex, path) is not None
+
+
+def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict, metadata: dict | None) -> None:
+    owners = [p for p in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS") if p in files]
     if not owners:
         report.add("ruleset", ".github/CODEOWNERS", "CODEOWNERS is missing (review gate for important paths)")
         return
     patterns = {line.split()[0] for line in (_text(root, owners[0]) or "").splitlines()
                 if line.strip() and not line.lstrip().startswith("#")}
-    for required in contract["codeowners_required"]:
+    required_paths = list(contract["codeowners_required"])
+    if metadata:
+        required_paths.append("/" + metadata["guide"])
+    for required in required_paths:
         if required not in patterns:
             report.add("ruleset", owners[0], f"CODEOWNERS does not cover {required}")
+    if metadata:
+        rules = [line.split("#", 1)[0].split() for line in (_text(root, owners[0]) or "").splitlines()]
+        try:
+            for path in ("AGENTS.md", METADATA, metadata["guide"]):
+                last = []
+                for parts in rules:
+                    if parts and _owner_pattern(parts[0], path):
+                        last = parts[1:]
+                if not last:
+                    report.add("ruleset", owners[0], f"CODEOWNERS leaves protected document unowned: {path}")
+        except ValueError as error:
+            report.add("ruleset", owners[0], f"cannot verify protected document ownership: {error}")
 
 
 def _pr_template(report: _Report, root: pathlib.Path, files: dict, contract: dict) -> None:
@@ -228,11 +506,17 @@ def _pr_template(report: _Report, root: pathlib.Path, files: dict, contract: dic
             report.add("pr_template", names[0], f"missing required section '## {title}'")
 
 
-def _resolved_pins(root: pathlib.Path, files: dict) -> dict[str, set[str]]:
+def _resolved_pins(report: _Report, root: pathlib.Path, files: dict) -> dict[str, set[str]]:
     pins: dict[str, set[str]] = {}
     for path in files:
         name = pathlib.PurePosixPath(path).name
-        text = _text(root, path) if name in ("Package.resolved", "package-lock.json") else None
+        if name not in ("Package.resolved", "package-lock.json"):
+            continue
+        text = _text(root, path)
+        if text is None:
+            # A denied alias/read must not erase a dependency pin from parity.
+            report.add("dependencies", path, "cannot safely read tracked dependency lockfile")
+            continue
         if not text:
             continue
         try:
@@ -252,9 +536,14 @@ def _resolved_pins(root: pathlib.Path, files: dict) -> dict[str, set[str]]:
     return pins
 
 
-def _dependencies(report: _Report, root: pathlib.Path, files: dict, contract: dict, agents: str) -> None:
+def _dependencies(report: _Report, root: pathlib.Path, files: dict, contract: dict, agents: str,
+                  metadata: dict | None) -> None:
     declared: dict[str, str] = {}
-    body = section(agents, "Dependencies") or ""
+    source = METADATA if metadata is not None else "AGENTS.md"
+    if metadata:
+        declared = {name.lower(): item["version"] for name, item in metadata["dependencies"].items()}
+        declared["shared-ci"] = metadata["shared_ci"]
+    body = (section(agents, "Dependencies") or "") if metadata is None else ""
     for line in body.splitlines():
         match = re.match(r"^\s*[-*]\s+`?([A-Za-z0-9_.-]+)`?\s+`?([A-Za-z0-9_.+-]+)`?(.*)$", line)
         if not match or match.group(1).lower() not in contract["shared_libraries"]:
@@ -262,15 +551,15 @@ def _dependencies(report: _Report, root: pathlib.Path, files: dict, contract: di
         name, version, rest = match.group(1).lower(), match.group(2), match.group(3)
         declared[name] = version
         if not re.search(r"[@/]" + re.escape(version) + r"/ai/", rest):
-            report.add("dependencies", "AGENTS.md", f"{name} {version} must point to that version's ai/ docs")
-    pins = _resolved_pins(root, files)
+            report.add("dependencies", source, f"{name} {version} must point to that version's ai/ docs")
+    pins = _resolved_pins(report, root, files)
     for name in contract["shared_libraries"]:
         observed = pins.get(name, set())
         if name in declared and observed and declared[name] not in observed:
-            report.add("dependencies", "AGENTS.md",
+            report.add("dependencies", source,
                        f"{name} declared {declared[name]} but lockfile pins {sorted(observed)}")
         if observed and name not in declared:
-            report.add("dependencies", "AGENTS.md", f"{name} is pinned in a lockfile but not declared")
+            report.add("dependencies", source, f"{name} is pinned in a lockfile but not declared")
 
 
 def _identity(report: _Report, root: pathlib.Path, files: dict, contract: dict) -> None:
@@ -295,12 +584,19 @@ def audit(ctx: Any, root: pathlib.Path) -> list[Any]:
     report = _Report(ctx)
     files = _git_files(root)
     refs = workflow_refs(root, files)
-    agents = _agents(report, root, contract, refs)
-    _agent_files(report, root, contract, agents)
+    metadata = _metadata(report, root, files)
+    agents = _agents(report, root, contract, refs, metadata, files)
+    guide = (_text(root, metadata["guide"]) or "") if metadata else agents
+    if metadata:
+        for title in contract["guide_sections"]:
+            if section(guide, title) is None:
+                report.add("agents", metadata["guide"], f"guide is missing section '## {title}'")
+    _agent_files(report, root, contract, guide)
     _ci(report, root, files, refs)
+    _review_rules(report, root, refs, metadata)
     _verify(report, root, files)
-    _codeowners(report, root, files, contract)
+    _codeowners(report, root, files, contract, metadata)
     _pr_template(report, root, files, contract)
-    _dependencies(report, root, files, contract, agents)
+    _dependencies(report, root, files, contract, agents, metadata)
     _identity(report, root, files, contract)
     return report.findings

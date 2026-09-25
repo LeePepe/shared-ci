@@ -24,6 +24,78 @@ and `kind: "contract_<item>"`.
 | 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
 | 8 `identity` | No personal account names, credential-profile paths or local home paths | red line | audit scans every tracked text file for the `forbidden_patterns` | account names in prose that the patterns do not cover |
 
+## Opt-in metadata and directory audit
+
+Callers with `.github/repo-contract.json` opt into the directory-only audit
+below. Callers without metadata retain the existing v1 sections, protocol-pointer
+and dependency checks in the table above. Invalid or untracked metadata fails
+closed; it never falls back to a valid legacy AGENTS file. The eight report
+items and finding schema remain unchanged.
+
+The [metadata schema](../schemas/repo-metadata-v1.json) requires exactly `schema`,
+`guide`, `shared_ci` and `dependencies`. `schema` is integer `1`; `shared_ci` is
+one lowercase full 40-character provider SHA matching every workflow pin.
+`guide` names a tracked readable repository-relative document containing
+`Protocol`, `Verify`, `Required checks`, `Red lines` and `Delivery` sections.
+`dependencies` maps library names to exactly `version` and `ai`: an exact semver
+or full SHA, and an HTTPS link containing `/<version>/ai/`. Shared-ci has only
+one authority, `shared_ci`, and cannot also appear in `dependencies`. Supported
+lockfiles retain their parity checks; an unreadable tracked lockfile fails.
+
+In this mode, AGENTS contains headings, blank lines and conditional Markdown
+links only, at most 150 lines, with a local route to the declared guide. Each
+entry is one inline link, optionally preceded by a list marker and a condition
+ending in `:`, and optionally followed by `.` or `;`. Inline commands and policy
+prose belong in linked authoritative documents instead. Required-check duplication
+in tool-specific agent files is checked against the guide rather than the index.
+Review callers must pass that guide as `rules-file`; this checks configuration,
+not whether a live runner or required AI review has been enabled.
+
+### Directory routes and protection
+
+Local targets are repository-root-relative; a fragment alone refers to AGENTS.
+Percent-encoded UTF-8 paths/fragments are decoded once. Malformed escapes, empty
+fragments, query strings, parent traversal and absolute paths fail. Metadata,
+AGENTS, the guide and local targets must have an unconflicted regular-file index
+entry (`100644` or `100755`) and be readable in the worktree. File or ancestor
+symlinks are rejected before reading; untracked local files cannot satisfy a
+route. This validates the worktree, not committed-content identity or concurrent
+hostile mutation. Git filenames used by identity scanning remain distinct from
+the narrower route syntax, including tabs, newlines, quotes and backslashes.
+
+Fragments on `.md`/`.markdown` resolve to block ATX or Setext headings, or explicit
+HTML `id`/`<a name>` anchors. Heading slugs lowercase Unicode letters, remove
+punctuation and inline markup, retain hyphens/underscores, replace spaces with
+hyphens, and suffix duplicates with `-1`, `-2`, etc. Inline code contributes its
+displayed text; explicit anchors are case-sensitive. Code examples, comments,
+frontmatter and raw HTML block headings do not create heading anchors. This is
+a bounded reader, not a full Markdown renderer: container headings, custom
+heading attributes and renderer extensions are unsupported; use a standalone
+explicit anchor instead. Other file types cannot satisfy fragments. HTTPS
+pointers are not fetched or remotely fragment-validated.
+
+CODEOWNERS must retain the existing required patterns and an exact `/<guide>`
+pattern. The highest-priority tracked CODEOWNERS file is authoritative, even
+when empty. Effective last-match ownership of AGENTS, metadata and the guide is
+checked, so later ownerless overrides fail. Unsupported ownership patterns fail
+closed rather than claiming complete GitHub pattern support. Live server
+protection still needs independent readback.
+
+### Adoption boundary
+
+This support does not migrate templates, bootstrap scripts, caller pins or this
+repository's own AGENTS automatically. Adopt only after the provider change is
+reviewed and available at a fixed SHA. A separate reviewed consumer migration
+must coordinate the workflow pin, metadata, guide/index, metadata-aware bootstrap,
+review `rules-file` and guide CODEOWNERS, preserving required checks. Old fixed
+providers do not acquire metadata support retroactively. A versioned protocol
+route may remain for compatibility, but its SHA must match metadata.
+
+Rollback reverts the consumer's coordinated references/configuration to its
+recorded compatible baseline; it does not rewrite provider tags or waive gates.
+Existing repository layer/PR rules below apply in both contract modes. This
+change neither adds a test-loss gate nor changes ordinary-test approval policy.
+
 ## Repository development contract
 
 The repository defines its architecture and PR boundaries before a task is

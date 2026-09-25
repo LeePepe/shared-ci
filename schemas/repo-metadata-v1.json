@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Index-only repository metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "guide", "shared_ci", "dependencies"],
+  "properties": {
+    "schema": {"const": 1},
+    "guide": {"type": "string", "description": "Tracked repository-relative guide; no parent traversal or symlink."},
+    "shared_ci": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "dependencies": {
+      "type": "object",
+      "propertyNames": {"not": {"const": "shared-ci"}},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "ai"],
+        "properties": {
+          "version": {"type": "string", "pattern": "^([0-9a-f]{40}|v?[0-9]+\\.[0-9]+\\.[0-9]+([-+][A-Za-z0-9_.-]+)?)$"},
+          "ai": {"type": "string", "pattern": "^https://", "description": "Version-specific /<version>/ai/ URL."}
+        }
+      }
+    }
+  }
+}

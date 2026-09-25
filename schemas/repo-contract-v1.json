@@ -44,6 +44,7 @@
       {"id": "identity", "number": 8, "kind": "red_line", "enforcement": ["audit"]}
     ],
     "agents_max_lines": 150,
+    "guide_sections": ["Protocol", "Verify", "Required checks", "Red lines", "Delivery"],
     "agents_sections": ["Read first", "Protocol", "Verify", "Required checks", "Red lines", "Delivery"],
     "agent_files": ["CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".cursorrules"],
     "agent_file_max_lines": 12,
