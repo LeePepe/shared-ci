@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "quality" / "test_integrity.py"
@@ -213,6 +214,22 @@ class TestIntegrityTests(unittest.TestCase):
         self.assertIn("fail-closed", result["problems"][0])
         self.assertEqual("fail", ti.evaluate(str(self.repo.root), base="", head="", body=None)["verdict"])
 
+    def test_unreadable_base_test_fails_closed(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        head = self.repo.commit()
+        git = ti._git
+
+        def fail_base_read(root, *args):
+            if args == ("show", f"{self.repo.base}:Tests/ParserTests.swift"):
+                raise ti.IntegrityError("test blob unavailable")
+            return git(root, *args)
+
+        with mock.patch.object(ti, "_git", side_effect=fail_base_read):
+            result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=head, body=None)
+        self.assertEqual("fail", result["verdict"])
+        self.assertTrue(any("test blob unavailable" in problem and "fail-closed" in problem
+                            for problem in result["problems"]), result)
+
     def test_cli(self):
         self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
         head = self.repo.commit()
@@ -272,6 +289,22 @@ class TestIntegrityTests(unittest.TestCase):
                 self.repo.write(".github/CODEOWNERS", text)
                 result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=self.repo.commit(), body=body)
                 self.assertEqual(gated, result["verdict"] == "pass", result["problems"])
+
+    def test_empty_first_codeowners_does_not_fall_back(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.repo.declare("Tests/ParserTests.swift")
+        self.repo.write(".github/CODEOWNERS", "")
+        self.repo.write("CODEOWNERS", "/.github/ @owner\n")
+        result = self.repo.check(BODY.format(section="Tests/ParserTests.swift removed"))
+        self.assertEqual("fail", result["verdict"])
+        self.assertTrue(any("CODEOWNERS does not cover" in problem for problem in result["problems"]), result)
+
+    def test_missing_first_codeowners_uses_root_file(self):
+        self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        self.repo.declare("Tests/ParserTests.swift")
+        self.repo.git("rm", "-q", ".github/CODEOWNERS")
+        self.repo.write("CODEOWNERS", "/.github/ @owner\n")
+        self.assertEqual("pass", self.repo.check(BODY.format(section="Tests/ParserTests.swift removed"))["verdict"])
 
     def test_ledger_line_needs_reason(self):
         self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")

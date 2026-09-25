@@ -107,10 +107,9 @@ def _names(text: str) -> collections.Counter[str]:
 
 
 def _show(root: str, rev: str, path: str) -> str:
-    try:
-        return _git(root, "show", f"{rev}:{path}")
-    except IntegrityError:
-        return ""
+    # Callers establish presence before reading. A missing or unreadable blob
+    # must not turn into empty source, which could hide assertions at the base.
+    return _git(root, "show", f"{rev}:{path}")
 
 
 TEST_DIR = re.compile(r"(^|/)(Tests?|tests?|__tests__|spec|specs)/")
@@ -256,9 +255,11 @@ def ledger_is_owner_gated(root: str, head: str) -> bool:
     ownerless rule on the ledger removes the Owner gate, so this fails closed.
     """
     for path in CODEOWNERS_FILES:
-        text = _show(root, head, path)
-        if not text:
+        if not _git(root, "ls-tree", "--name-only", head, "--", path).strip():
             continue
+        # The first existing file wins even when it is empty. Its existence,
+        # not its content, prevents fallback to a lower-priority CODEOWNERS.
+        text = _show(root, head, path)
         owners = None
         for line in text.splitlines():
             parts = line.split("#", 1)[0].split()
