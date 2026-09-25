@@ -252,26 +252,27 @@ def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
     base_texts = {path: _show(root, merge_base, path) for path, kind in tests.items() if kind != "A"}
     head_texts = {path: _show(root, head, path) for path, kind in tests.items() if kind != "D"}
     head_code = {path: _source_views(text, path)[1].splitlines() for path, text in head_texts.items()}
-    diff = _git(root, "diff", "--unified=0", "--no-color", "--no-renames", merge_base, head, "--",
-                *sorted(tests)) if tests else ""
-    current = None
-    head_line = 0
-    for line in diff.splitlines():
-        if line.startswith("+++ "):
-            current = line[6:] if line.startswith("+++ b/") else None
-        elif line.startswith("@@ "):
-            hunk = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
-            if not hunk:
-                raise IntegrityError("cannot parse test diff hunk")
-            head_line = int(hunk.group(1)) - 1
-        elif current and line.startswith(("+", " ")):
-            # Inspect the whole blob's lexical context, not an isolated added
-            # line which may be inside a multiline comment or literal.
-            if current not in head_code or not 0 <= head_line < len(head_code[current]):
-                raise IntegrityError("cannot locate test diff line")
-            if line.startswith("+") and SKIP.search(head_code[current][head_line]):
-                found.append({"kind": "skip_added", "file": current, "detail": line[1:].strip()[:160]})
-            head_line += 1
+    for path in sorted(head_texts):
+        # Use the NUL-delimited inventory as identity, never a quoted diff
+        # header. Literal pathspecs also prevent filename glob characters from
+        # selecting another file's hunks.
+        diff = _git(root, "--literal-pathspecs", "diff", "--unified=0", "--no-color", "--no-renames",
+                    merge_base, head, "--", path)
+        head_line = None
+        for line in diff.splitlines():
+            if line.startswith("@@ "):
+                hunk = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+                if not hunk:
+                    raise IntegrityError("cannot parse test diff hunk")
+                head_line = int(hunk.group(1)) - 1
+            elif head_line is not None and line.startswith(("+", " ")):
+                # Inspect the whole blob's lexical context, not an isolated
+                # added line inside a multiline comment or literal.
+                if not 0 <= head_line < len(head_code[path]):
+                    raise IntegrityError("cannot locate test diff line")
+                if line.startswith("+") and SKIP.search(head_code[path][head_line]):
+                    found.append({"kind": "skip_added", "file": path, "detail": line[1:].strip()[:160]})
+                head_line += 1
     # Assertion statements: multiset across all changed test files (moves pass, no netting).
     head_statements: collections.Counter[str] = collections.Counter()
     for path, text in head_texts.items():

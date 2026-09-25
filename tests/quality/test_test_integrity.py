@@ -257,6 +257,64 @@ class TestIntegrityTests(unittest.TestCase):
             self.repo.edit("Tests/ParserTests.swift", old, new)
         self.assertIn("skip_added", self.kinds(self.repo.check()))
 
+    def test_skip_in_git_quoted_unicode_path_requires_declaration(self):
+        path = "Tests/验证Tests.swift"
+        self.repo.write(path, SWIFT)
+        self.repo.base = self.repo.commit()
+        self.repo.edit(path, "func testLength() {",
+                       'func testLength() throws {\n        throw XCTSkip("temporarily skipped")')
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual([path], result["undeclared"])
+        self.assertEqual([{"kind": "skip_added", "file": path,
+                           "detail": 'throw XCTSkip("temporarily skipped")'}], result["losses"])
+
+    def test_skip_paths_preserve_quoted_and_literal_filename_identity(self):
+        paths = ["Tests/验证Tests.swift", "Tests/space nameTests.swift", "Tests/tab\tTests.swift",
+                 'Tests/quote"Tests.swift', "Tests/back\\slashTests.swift", "Tests/[ab]Tests.swift"]
+        for path in paths + ["Tests/aTests.swift"]:
+            self.repo.write(path, SWIFT)
+        self.repo.base = self.repo.commit()
+        for path in paths:
+            self.repo.edit(path, "func testLength() {",
+                           'func testLength() throws {\n        throw XCTSkip("later")')
+        # A glob-shaped path must not also read these unrelated hunks.
+        self.repo.edit("Tests/aTests.swift", 'parse("a")', 'parse("b")')
+        for quote_path in ("true", "false"):
+            with self.subTest(quote_path=quote_path):
+                self.repo.git("config", "core.quotepath", quote_path)
+                result = self.repo.check(BODY.format(section="none"))
+                self.assertEqual("fail", result["verdict"])
+                skips = [loss for loss in result["losses"] if loss["kind"] == "skip_added"]
+                self.assertEqual(sorted(paths), sorted(loss["file"] for loss in skips))
+                self.assertTrue(set(paths) <= set(result["undeclared"]))
+
+    def test_quoted_paths_keep_multiline_skip_snippets_non_executable(self):
+        for path in ("Tests/验证Tests.swift", 'Tests/tab\tquote"Tests.swift'):
+            self.repo.write(path, SWIFT)
+        self.repo.base = self.repo.commit()
+        for path in ("Tests/验证Tests.swift", 'Tests/tab\tquote"Tests.swift'):
+            self.repo.write(path, '/*\nXCTSkip("example")\n*/\n'
+                            'let example = """\nXCTSkip("example")\n"""\n' + SWIFT)
+        result = self.repo.check(BODY.format(section="none"))
+        self.assertEqual(("pass", []), (result["verdict"], result["losses"]))
+
+    def test_unlocatable_skip_hunks_fail_closed(self):
+        self.repo.edit("Tests/ParserTests.swift", "func testLength() {",
+                       'func testLength() throws {\n        throw XCTSkip("later")')
+        head = self.repo.commit()
+        git = ti._git
+        for hunk in ("@@ malformed @@", "@@ -1 +999999 @@"):
+            with self.subTest(hunk=hunk):
+                def broken_diff(root, *args):
+                    if "--unified=0" in args and "Tests/ParserTests.swift" in args:
+                        return hunk + '\n+throw XCTSkip("later")\n'
+                    return git(root, *args)
+                with mock.patch.object(ti, "_git", side_effect=broken_diff):
+                    result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=head, body=None)
+                self.assertEqual("fail", result["verdict"])
+                self.assertTrue(any("fail-closed" in problem for problem in result["problems"]), result)
+
     def test_python_skip_and_deleted_file(self):
         self.repo.edit("pytests/test_t.py", "    def test_one(self):\n", "    @unittest." + "skip('x')\n    def test_one(self):\n")
         self.assertIn("skip_added", self.kinds(self.repo.check()))
