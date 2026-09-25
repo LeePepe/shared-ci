@@ -1,37 +1,31 @@
-# AGENTS.md — <Repository>
+# Repository document index
 
 ## Read first
 
-1. `.specify/memory/constitution.md` — non-negotiable principles (if present)
-2. `docs/architecture/tech-context.md` — layer table: layer → paths → depends_on
-3. Relevant leaf `tech-context.md` — layer responsibilities, interfaces and verification
-4. `docs/development.md` — repository development steps, PR work units and verification/review sources
+- Before changing files: [Repository guide](docs/repository-guide.md)
+- For ownership and dependencies: [Layer map](docs/architecture/tech-context.md)
+- For development and PR work units: [Development guide](docs/development.md)
 
 ## Protocol
 
-Follow `LeePepe/shared-ci@<40-char-sha>/ai/agent-protocol.md`
-(https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/agent-protocol.md).
+- For the pinned shared contract: [Agent protocol](https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/agent-protocol.md)
 
 ## Verify
 
-[Development verification](docs/development.md#verification-and-review-sources)
-and [verify entry](scripts/verify).
+- Before local validation or push: [Verification](docs/repository-guide.md#verify)
 
 ## Required checks
 
-[CI caller](.github/workflows/ci.yml), repository protection settings and
-[review ownership](.github/CODEOWNERS).
+- Before merging: [Merge checks](docs/repository-guide.md#required-checks)
 
 ## Red lines
 
-[Root and leaf architecture contracts](docs/architecture/tech-context.md),
-the constitution when present, and the pinned protocol above.
+- Before changing policy or behavior: [Constraints](docs/repository-guide.md#red-lines)
 
 ## Dependencies
 
-- `shared-ci` `<40-char-sha>` — https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/
+- Before integration or upgrades: [Dependency metadata](.github/repo-contract.json)
 
 ## Delivery
 
-[PR work units](docs/development.md#pr-work-units),
-[PR template](.github/pull_request_template.md) and the pinned protocol above.
+- For PR preparation and handoff: [Delivery](docs/repository-guide.md#delivery)

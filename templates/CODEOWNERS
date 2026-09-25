@@ -2,6 +2,8 @@
 # Replace @OWNER with the repository owner account or team.
 /.github/                         @OWNER
 /.githooks/                       @OWNER
+/docs/repository-guide.md         @OWNER
+/docs/development.md              @OWNER
 /AGENTS.md                        @OWNER
 /CLAUDE.md                        @OWNER
 /.specify/memory/constitution.md  @OWNER
