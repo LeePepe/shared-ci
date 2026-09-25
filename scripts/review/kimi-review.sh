@@ -34,6 +34,10 @@ done
 command -v "$KIMI_BIN" >/dev/null 2>&1 || advisory_unavailable "kimi CLI is not installed on the runner."
 git fetch --no-tags --depth=200 origin "$BASE_SHA" "$HEAD_SHA" >/dev/null 2>&1 \
     || advisory_unavailable "Could not fetch the exact PR revisions."
+# Read the immutable base blob, never mutable worktree or PR-head instructions.
+python3 "$REVIEW_DIR/rules_input.py" "$BASE_SHA" "${REVIEW_RULES_FILE:-AGENTS.md}" >"$WORK/rules" \
+    || advisory_unavailable "Trusted-base repository rules are missing or invalid."
+
 git diff --no-ext-diff --find-renames --unified=40 "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
     || advisory_unavailable "Could not compute the PR diff."
 git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null || true
@@ -47,16 +51,10 @@ if [ "$(wc -c <"$WORK/diff")" -gt "$MAX_BYTES" ]; then
     head -c "$MAX_BYTES" "$WORK/diff" >"$WORK/diff.cut" && mv "$WORK/diff.cut" "$WORK/diff"
     TRUNCATED="(diff truncated to $MAX_BYTES bytes)"
 fi
-RULES=""
-if [ -n "${REVIEW_RULES_FILE:-}" ] && [ -f "$REVIEW_RULES_FILE" ]; then
-    RULES="$(head -c 24000 "$REVIEW_RULES_FILE")"
-elif [ -f AGENTS.md ]; then
-    RULES="$(head -c 24000 AGENTS.md)"
-fi
 ARCH="$(python3 "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
-PROMPT="$(REPO_RULES="$RULES" ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
+PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
     TRUNCATED="$TRUNCATED" DIFF="$(cat "$WORK/diff")" \
-    python3 "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md")" \
+    python3 "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" --rules-file "$WORK/rules")" \
     || advisory_unavailable "Prompt rendering failed."
 PROMPT="$PROMPT
 

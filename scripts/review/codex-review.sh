@@ -46,6 +46,10 @@ fi
 git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null && git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null \
     || fail_closed "PR revisions are missing after fetch."
 
+# Read the immutable base blob, never mutable worktree or PR-head instructions.
+python3 "$REVIEW_DIR/rules_input.py" "$BASE_SHA" "${REVIEW_RULES_FILE:-AGENTS.md}" >"$WORK/rules" \
+    || fail_closed "Trusted-base repository rules are missing or invalid."
+
 git diff --no-ext-diff "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
     || git diff --no-ext-diff "$BASE_SHA..$HEAD_SHA" >"$WORK/diff" \
     || fail_closed "Could not compute the PR diff."
@@ -68,17 +72,11 @@ if [ "$(wc -c <"$WORK/diff")" -gt "$MAX_BYTES" ]; then
     TRUNCATED="(diff truncated to $MAX_BYTES bytes; review the rest manually)"
 fi
 
-RULES=""
-if [ -n "${REVIEW_RULES_FILE:-}" ] && [ -f "$REVIEW_RULES_FILE" ]; then
-    RULES="$(head -c 24000 "$REVIEW_RULES_FILE")"
-elif [ -f AGENTS.md ]; then
-    RULES="$(head -c 24000 AGENTS.md)"
-fi
 ARCH="$(python3 "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
 
-PROMPT="$(REPO_RULES="$RULES" ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
+PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
     TRUNCATED="$TRUNCATED" DIFF="$(cat "$WORK/diff")" \
-    python3 "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md")" \
+    python3 "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" --rules-file "$WORK/rules")" \
     || fail_closed "Prompt rendering failed."
 
 EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
