@@ -123,8 +123,19 @@ def is_test_path(path: str) -> bool:
 
 
 def _strip_strings(line: str) -> str:
-    """Line with string/char literal contents removed, for paren counting only."""
-    return re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', '""', line)
+    """Line with string/char/template literals removed for lexical checks."""
+    return re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`', '""', line)
+
+
+def _skip_marker(path: str, line: str) -> bool:
+    """Do not mistake a documented skip spelling for executable skip code."""
+    code = _strip_strings(line)
+    if path.endswith(".py"):
+        code = code.split("#", 1)[0]
+    else:
+        code = code.split("//", 1)[0]
+        code = re.sub(r"/\*.*?\*/", "", code)
+    return SKIP.search(code) is not None
 
 
 def _statement(text: str) -> str:
@@ -186,7 +197,7 @@ def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
     for line in diff.splitlines():
         if line.startswith("+++ "):
             current = line[6:] if line.startswith("+++ b/") else None
-        elif current and line.startswith("+") and SKIP.search(line[1:]):
+        elif current and line.startswith("+") and _skip_marker(current, line[1:]):
             found.append({"kind": "skip_added", "file": current, "detail": line[1:].strip()[:160]})
     base_texts = {path: _show(root, merge_base, path) for path, kind in tests.items() if kind != "A"}
     head_texts = {path: _show(root, head, path) for path, kind in tests.items() if kind != "D"}

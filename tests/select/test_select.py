@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "select" / "layers.py"
@@ -263,8 +264,11 @@ class SelectionTests(unittest.TestCase):
             def resolve(root, path):
                 raise RuntimeError("boom")
 
-        selection = select.select(self.repo.root, event="pull_request", base=self.repo.base,
-                                  head=self.repo.rev(), extra_patterns=[], ctx=Broken())
+        # Unlike CLI fixtures, a direct engine call inherits the test process
+        # environment. Git hooks export GIT_DIR for the parent repository.
+        with mock.patch.dict(os.environ, self.repo.env, clear=True):
+            selection = select.select(self.repo.root, event="pull_request", base=self.repo.base,
+                                      head=self.repo.rev(), extra_patterns=[], ctx=Broken())
         self.assertTrue(selection["full"])
         self.assertIn("src/app/main.py", selection["unmapped"])
 

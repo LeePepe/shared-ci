@@ -103,6 +103,11 @@ class Repo:
 
 class TestIntegrityTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Direct evaluator calls need the same Git isolation as subprocess
+        # fixtures, including when verify is launched from pre-push.
+        isolated = mock.patch.dict(os.environ, environment(), clear=True)
+        isolated.start()
+        self.addCleanup(isolated.stop)
         self.repo = Repo()
         self.addCleanup(self.repo.close)
 
@@ -166,6 +171,13 @@ class TestIntegrityTests(unittest.TestCase):
         repo.git("rm", "-q", "pytests/test_t.py")
         result = repo.check()
         self.assertTrue({"test_file_deleted", "test_removed", "assertion_removed"} <= self.kinds(result))
+
+    def test_skip_markers_in_comments_or_literals_are_not_code(self):
+        self.repo.write("tests/test_documentation.py", '# .enabled(if: false) is a disabled trait\n'
+                        'example = "@unittest.skip(\'example\')"\n')
+        self.repo.write("Tests/DocsTests.swift", '// .disabled() is a disabled trait\n'
+                        'let example = "XCTSkip(\\\"example\\\")"\n')
+        self.assertEqual("pass", self.repo.check(BODY.format(section="none"))["verdict"])
 
     def test_declared_in_ledger_with_owner_passes(self):
         self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
