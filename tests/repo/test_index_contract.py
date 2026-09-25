@@ -1,6 +1,7 @@
 """Metadata/index contract adoption through the real audit CLI."""
 import json
 import re
+import subprocess
 import unittest
 
 from fixture import AGENTS, ContractRepo, OTHER, PIN, REPO
@@ -72,6 +73,49 @@ class IndexContractTests(unittest.TestCase):
         self.repo.write("CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/docs/repository-guide.md @owner\n")
         self.repo.write(".github/CODEOWNERS", "")
         self.finding("unowned")
+
+    def test_staged_codeowners_symlink_cannot_use_regular_worktree_or_fallback(self):
+        path = ".github/CODEOWNERS"
+        target = self.repo.root / path
+        text = target.read_text(encoding="utf-8")
+        self.repo.write("docs/CODEOWNERS", text)
+        self.repo.add()
+        target.unlink()
+        target.symlink_to("../docs/CODEOWNERS")
+        self.repo.git("add", path)
+        target.unlink()
+        target.write_text(text, encoding="utf-8")
+        self.assertTrue(self.repo.git("ls-files", "--stage", path).stdout.startswith("120000 "))
+        # Do not call fixture.audit(): it stages the regular worktree over the probe.
+        result = self.repo.cli("audit")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("contract_ruleset", result.stderr)
+        self.assertIn("CODEOWNERS", result.stderr)
+
+    def test_unmerged_codeowners_cannot_use_regular_worktree(self):
+        path = ".github/CODEOWNERS"
+        self.repo.add()
+        blob = self.repo.git("rev-parse", ":" + path).stdout.strip()
+        subprocess.run(["git", "update-index", "--index-info"], cwd=self.repo.root,
+                       env=self.repo.env, text=True, capture_output=True, check=True, timeout=20,
+                       input=f"0 {'0' * 40}\t{path}\n100644 {blob} 2\t{path}\n"
+                             f"100644 {blob} 3\t{path}\n")
+        self.assertEqual(2, len(self.repo.git("ls-files", "--unmerged", path).stdout.splitlines()))
+        result = self.repo.cli("audit")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("contract_ruleset", result.stderr)
+        self.assertIn("CODEOWNERS", result.stderr)
+
+    def test_regular_and_executable_codeowners_are_accepted(self):
+        path = ".github/CODEOWNERS"
+        self.repo.add()
+        for flag, mode in (("-x", "100644"), ("+x", "100755")):
+            with self.subTest(mode=mode):
+                self.repo.git("update-index", "--chmod=" + flag, path)
+                self.assertTrue(self.repo.git("ls-files", "--stage", path).stdout.startswith(mode + " "))
+                result = self.repo.cli("audit")
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertTrue(json.loads(result.stdout)["ok"])
 
     def test_required_check_duplication_is_read_from_guide(self):
         self.repo.write("CLAUDE.md", "Read AGENTS.md first.\nRequired: `quality / aggregate`\n")

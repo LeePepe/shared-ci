@@ -501,7 +501,11 @@ def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict
     if not owners:
         report.add("ruleset", ".github/CODEOWNERS", "CODEOWNERS is missing (review gate for important paths)")
         return
-    patterns = {line.split()[0] for line in (_text(root, owners[0]) or "").splitlines()
+    text = _tracked_text(root, owners[0], files)
+    if text is None:
+        report.add("ruleset", owners[0], "CODEOWNERS must be a readable, unconflicted tracked regular file")
+        return
+    patterns = {line.split()[0] for line in text.splitlines()
                 if line.strip() and not line.lstrip().startswith("#")}
     required_paths = list(contract["codeowners_required"])
     if metadata:
@@ -510,7 +514,7 @@ def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict
         if required not in patterns:
             report.add("ruleset", owners[0], f"CODEOWNERS does not cover {required}")
     if metadata:
-        rules = [line.split("#", 1)[0].split() for line in (_text(root, owners[0]) or "").splitlines()]
+        rules = [line.split("#", 1)[0].split() for line in text.splitlines()]
         try:
             for parts in rules:
                 for owner in parts[1:]:
