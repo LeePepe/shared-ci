@@ -6,7 +6,7 @@
 # read only as a diff (data). Nothing from the PR head is executed. The fork
 # guard lives in the workflow's job-level `if:`, never in this script.
 #
-#   no blockers                 -> sticky comment, exit 0
+#   no blockers + published record -> exit 0
 #   critical/high blockers      -> sticky comment with findings, exit 1
 #   any tool/setup/parse failure -> sticky "unavailable" comment, exit 1 (fail closed)
 #
@@ -19,7 +19,7 @@ set -uo pipefail
 : "${PR_NUMBER:?}"; : "${BASE_SHA:?}"; : "${HEAD_SHA:?}"; : "${BASE_REPO:?}"; : "${SHARED_CI_DIR:?}"
 REVIEW_DIR="$SHARED_CI_DIR/scripts/review"
 MARKER="${REVIEW_MARKER:-<!-- shared-ci-codex-review -->}"
-MAX_BYTES="${REVIEW_MAX_BYTES:-200000}"
+MAX_BYTES="${REVIEW_MAX_BYTES-200000}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 export CODEX_HOME="${CODEX_REVIEW_HOME:-$HOME/.codex-review}"
 
@@ -52,20 +52,37 @@ git diff --no-ext-diff "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
 git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null \
     || git diff --name-only "$BASE_SHA..$HEAD_SHA" >"$WORK/changed"
 
+# Admit the complete diff, never a prefix. Compare decimal strings in Python
+# to avoid shell integer overflow (the budget is configurable, not a PR policy).
+BUDGET_ERROR="$(python3 -I -B - "$MAX_BYTES" "$WORK/diff" <<'PYTHON'
+import os
+import re
+import sys
+
+budget = sys.argv[1]
+if not re.fullmatch(r"[0-9]+", budget) or not budget.strip("0"):
+    print("REVIEW_MAX_BYTES must be a positive integer byte budget.")
+    sys.exit(1)
+limit = budget.lstrip("0")
+size = str(os.path.getsize(sys.argv[2]))
+if (len(size), size) > (len(limit), limit):
+    print(f"Full PR diff ({size} bytes) exceeds REVIEW_MAX_BYTES ({budget} bytes). "
+          "Complete review unavailable; configure sufficient reviewer capacity and rerun.")
+    sys.exit(1)
+PYTHON
+)" || fail_closed "${BUDGET_ERROR:-Could not validate the complete diff byte budget.}"
+
 if [ ! -s "$WORK/diff" ]; then
     post_sticky "$MARKER" "$MARKER
 ## codex review: pass
 
 Reviewed head: \`$HEAD_SHA\`
 
-No committed diff between base and head."
+No committed diff between base and head." || {
+        echo "[codex-review] review record publication failed; fail closed" >&2
+        exit 1
+    }
     exit 0
-fi
-
-TRUNCATED=""
-if [ "$(wc -c <"$WORK/diff")" -gt "$MAX_BYTES" ]; then
-    head -c "$MAX_BYTES" "$WORK/diff" >"$WORK/diff.cut" && mv "$WORK/diff.cut" "$WORK/diff"
-    TRUNCATED="(diff truncated to $MAX_BYTES bytes; review the rest manually)"
 fi
 
 RULES=""
@@ -77,7 +94,7 @@ fi
 ARCH="$(python3 "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
 
 PROMPT="$(REPO_RULES="$RULES" ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
-    TRUNCATED="$TRUNCATED" DIFF="$(cat "$WORK/diff")" \
+    TRUNCATED="" DIFF="$(cat "$WORK/diff")" \
     python3 "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md")" \
     || fail_closed "Prompt rendering failed."
 
@@ -101,7 +118,10 @@ fi
 BODY="$(python3 "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
     --head "$HEAD_SHA" "$WORK/verdict.json")"
 STATUS=$?
-post_sticky "$MARKER" "$BODY"
+post_sticky "$MARKER" "$BODY" || {
+    echo "[codex-review] review record publication failed; fail closed" >&2
+    exit 1
+}
 case "$STATUS" in
     0) echo "[codex-review] pass"; exit 0 ;;
     1) echo "[codex-review] blocking findings"; exit 1 ;;
