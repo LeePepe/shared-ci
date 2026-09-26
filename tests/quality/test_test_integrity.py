@@ -885,5 +885,129 @@ class ReviewRepairTests(unittest.TestCase):
                 self.assertEqual([], result["undeclared"])
 
 
+class SectionHeadingCompatibilityTests(unittest.TestCase):
+    def test_exact_heading_levels_spacing_case_and_closing_hashes(self):
+        for level in (2, 3):
+            for indent in range(4):
+                for gap in (" ", "\t", " \t ", "\u00a0", "\u2003", "\x1f"):
+                    for title in (ti.SECTION, ti.SECTION.upper()):
+                        for suffix in ("", "  ", "\t", "#", "####", " ##\t", "\u00a0###\u2003"):
+                            heading = " " * indent + "#" * level + gap + title + suffix
+                            with self.subTest(heading=heading):
+                                self.assertEqual("reason", ti.section_text(heading + "\nreason\n"))
+
+    def test_nonexact_headings_do_not_open_section(self):
+        for heading in (
+                "# " + ti.SECTION, "#### " + ti.SECTION, "##### " + ti.SECTION,
+                "###### " + ti.SECTION, "####### " + ti.SECTION,
+                "    ## " + ti.SECTION, "\t## " + ti.SECTION, "##" + ti.SECTION,
+                "##\u200b" + ti.SECTION, "## prefix " + ti.SECTION,
+                "## " + ti.SECTION + " extra", "## " + ti.SECTION + " # #",
+                "## " + ti.SECTION + "\x00", "## " + ti.SECTION.replace(" or ", "  or "),
+                "## " + ti.SECTION.replace(" or ", "\tor ")):
+            with self.subTest(heading=heading):
+                self.assertIsNone(ti.section_text(heading + "\nreason\n"))
+
+    def test_all_heading_levels_end_the_section(self):
+        for level in range(1, 7):
+            for title in ("Other", ti.SECTION + " extra", "#", " # # "):
+                boundary = "#" * level + " " + title
+                with self.subTest(boundary=boundary):
+                    self.assertEqual("before", ti.section_text(
+                        "## " + ti.SECTION + "\nbefore\n" + boundary + "\nafter\n"))
+
+    def test_titleless_and_nonheading_lines_keep_original_boundary_rules(self):
+        for line in ("##", "## ", "##\t", "##\u00a0", "####### title", "##title",
+                     "    ## title", "\t## title", "", "ordinary body"):
+            with self.subTest(line=line):
+                self.assertEqual("before\n" + line + "\nafter", ti.section_text(
+                    "## " + ti.SECTION + "\nbefore\n" + line + "\nafter\n"))
+        # Two whitespace characters suffice: the old matcher used the second
+        # as its required one-character title, even though it is visually empty.
+        for line in ("##  ", "##\t\t", "## \u00a0", "## \t "):
+            with self.subTest(line=line):
+                self.assertEqual("before", ti.section_text(
+                    "## " + ti.SECTION + "\nbefore\n" + line + "\nafter\n"))
+
+    def test_normalized_duplicate_headings_are_rejected(self):
+        first = "## " + ti.SECTION + "\nfirst\n"
+        for second in ("###\t" + ti.SECTION.upper() + "###",
+                       "   ## " + ti.SECTION + " ##\t"):
+            with self.subTest(second=second):
+                self.assertIsNone(ti.section_text(first + "# Other\nbody\n" + second + "\nsecond"))
+        self.assertEqual("first", ti.section_text(first + "## " + ti.SECTION + " extra\nsecond"))
+
+    def test_fences_comments_and_line_endings_keep_section_boundaries(self):
+        heading = "## " + ti.SECTION
+        body = (heading + "\nbefore\n   ````md\n" + heading + "\n```\n~~~\n"
+                "# Other\n   `````\nafter\n<!--" + heading + "-->\n# End\nignored")
+        self.assertEqual("before\nafter\n", ti.section_text(body))
+        self.assertEqual("before", ti.section_text(heading + "\nbefore\n~~~\n" + heading + "\nignored"))
+        self.assertIsNone(ti.section_text("<!--\n" + heading + "\nreason"))
+        self.assertEqual("reason", ti.section_text(
+            "## removed or <!-- hidden -->weakened tests or policy\r\nreason\r\n"))
+        for newline in ("\r", "\r\n", "\v", "\f", "\x85", "\u2028", "\u2029"):
+            with self.subTest(newline=newline):
+                self.assertEqual("reason", ti.section_text(heading + newline + "reason" + newline))
+
+    def test_long_valid_headings_and_unrelated_body_are_not_capped(self):
+        padding = " " * 16384
+        for heading in ("## " + ti.SECTION + padding,
+                        "###" + padding + ti.SECTION.upper() + padding + "#" * 16384 + "\t"):
+            with self.subTest(level=heading[:3]):
+                self.assertEqual("none", ti.section_text(heading + "\nnone\n"))
+        content = "notes: " + padding + "x\n" + "body\n" * 4096
+        self.assertEqual(content.rstrip("\n"), ti.section_text(
+            "unrelated " + padding + "x\n## " + ti.SECTION + "\n" + content))
+
+
+class SectionHeadingEvaluationTests(unittest.TestCase):
+    setUp = TestIntegrityTests.setUp
+
+    def test_heading_boundaries_preserve_real_loss_rationale_requirements(self):
+        path = "Tests/ParserTests.swift"
+        self.repo.edit(path, '        XCTAssertThrowsError(try parse("../etc"))\n', "")
+        head = self.repo.commit()
+        entry = path + ": redundant assertion replaced by focused traversal cases"
+        heading = "## " + ti.SECTION
+        for body, verdict in (
+                (heading + "\n" + entry, "pass"),
+                ("   ###\t" + ti.SECTION.upper() + "###\n" + entry, "pass"),
+                (heading + "\nnone\n", "fail"),
+                (heading + "\n" + path + ": `none`", "fail"),
+                (heading + "\n" + path + ".bak: redundant case", "fail"),
+                (heading + "\n", "fail"),
+                (heading + " " * 64 + "x\n" + entry, "fail"),
+                (heading + "\n" + entry + "\n### " + ti.SECTION + "\n" + entry, "fail"),
+                ("```md\n" + heading + "\n" + entry + "\n```", "fail"),
+                (heading + "\n# Other\n" + entry, "fail"),
+                (heading + "\n##  \n" + entry, "fail"),
+                (heading + "\n## \n" + entry, "pass")):
+            with self.subTest(body=body):
+                result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=head, body=body)
+                self.assertEqual(verdict, result["verdict"], result)
+                self.assertEqual([path], [loss["file"] for loss in result["losses"]])
+                self.assertEqual(["assertion_removed"], [loss["kind"] for loss in result["losses"]])
+                self.assertEqual([] if verdict == "pass" else [path], result["undeclared"])
+                self.assertEqual(verdict == "fail", bool(result["problems"]))
+                self.assertEqual((True, "supplied"), (result["body_checked"], result["body_status"]))
+
+
+class SectionHeadingTests(unittest.TestCase):
+    def test_long_malformed_heading_completes(self):
+        # The old ambiguous whitespace suffix takes seconds even at a fraction
+        # of this size. Bound only our child, with ample room for normal startup.
+        probe = (
+            "import json, runpy, sys; "
+            "section_text = runpy.run_path(sys.argv[1])['section_text']; "
+            "body = '## Removed or weakened tests or policy' + ' ' * 16384 + 'x\\nnone\\n'; "
+            "print(json.dumps(section_text(body)))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", probe, str(SCRIPT)],
+            capture_output=True, text=True, timeout=5, check=True)
+        self.assertIsNone(json.loads(result.stdout))
+
+
 if __name__ == "__main__":
     unittest.main()
