@@ -23,23 +23,29 @@ also include fixtures; deleting such a fixture requires explanation.
 | --- | --- |
 | `assertion_removed` | A normalized lexical assertion occurrence in changed base test files has no identical occurrence in changed head test files. |
 | `test_removed` | A recognized test name has fewer occurrences across changed head test files. |
-| `skip_added` | A recognized lexical skip/disable statement has more occurrences in a head file than in the same base file. |
+| `skip_added` | A recognized lexical skip/disable/focus statement has more occurrences in a head file than in the same base file. |
 | `test_file_deleted` | A recognized test path was deleted, including the old path of a rename. |
+| `test_file_unanalyzable` | A changed test file's base or head cannot be parsed reliably; no assertion/name/skip evidence is compared for that file. |
 
 Names/assertions are multisets, not total counts: unrelated additions cannot
 offset losses, while identical moves among changed test files can preserve them.
 Identical duplicates can substitute for one another; this is not per-test semantic
 identity. A pure rename still requires a reason for the deleted path; moving code
 to a non-test path does not preserve its recognized tests/assertions.
+Unanalyzable files fail closed unless given a per-file rationale. Reviewers must
+inspect them manually; file-deletion findings still apply.
 
 Comments and ordinary quoted/raw/multiline literals are masked before detection;
 literal assertion values remain part of identity. Commenting out a suite removes
 its evidence. Uncommenting an existing skip is detected even without an added
 marker line. Moving a skip to another file reports a new skip in the destination.
 Multiple same-line assertions and balanced multiline delimiters are recognized.
-Jest skip chains include `.skip.each` (array/tagged tables), concurrent variants,
-`.skip.failing`, and `xit`/`xtest`/`xdescribe` aliases; examples inside comments
-or literals remain non-executable data.
+Jest/Vitest skip chains include `.skip.each` (array/tagged tables), concurrent
+variants, `.skip.failing`, and `xit`/`xtest`/`xdescribe` aliases. `.only` focus
+modifiers on `it`/`test`/`describe` (with the same concurrent/each/failing chains)
+also count as skips because they silently drop sibling tests. Python markers
+include `@unittest.expectedFailure`, `raise unittest.SkipTest` and `raise SkipTest`.
+Examples inside comments or literals remain non-executable data.
 The NUL-delimited Git inventory preserves literal Unicode/whitespace/quoted paths;
 malformed records or non-UTF-8 Git data fail closed rather than alias filenames.
 
@@ -115,10 +121,13 @@ reviewer trust boundaries. The lane scans data; it does not run the tests.
 This is a lexical heuristic, not a grammar, coverage metric, assertion-strength
 proof or test-reachability analysis. Common XCTest/Swift Testing, unittest/pytest,
 Go and Jest/Vitest shapes are recognized; unknown frameworks/helper indirection,
-interpolation, regex literals, unusual quoting, conditional compilation and
+interpolation, unusual quoting, conditional compilation and
 complex layouts require independent review. Renaming/reformatting recognized
 assertions can conservatively report losses. Retaining a token does not prove it
 executes; replacing one assertion with an identical copy elsewhere can match.
+Regex literals are not lexed: delimiters inside them are treated as code. An
+unbalanced recognized statement, such as `expect(s).toMatch(/[(]/);`, makes the
+file unanalyzable (a finding requiring rationale), not an unreadable-input error.
 
 For losses, restore accidental changes or explain each affected file for ordinary
 review. For unreadable history/body/API data, repair input and rerun for current
