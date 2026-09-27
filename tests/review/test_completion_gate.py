@@ -13,7 +13,7 @@ SPEC = importlib.util.spec_from_file_location(
     "gate_frontmatter", REPO / "scripts" / "context" / "_frontmatter.py")
 frontmatter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(frontmatter)
-PIN = "9ff304e317a5ff924a4c488515ead5a607d28236"
+PIN = "af2f1c2ab7ed908ff3153c96793152150343e903"
 
 
 class CompletionGateTests(unittest.TestCase):
@@ -60,7 +60,8 @@ class CompletionGateTests(unittest.TestCase):
                                  ("kimi-review", "kimi-review.yml")):
             with self.subTest(job=job_id):
                 job = self.jobs[job_id]
-                self.assertEqual({"if", "uses"}, set(job))
+                self.assertEqual({"if", "uses", "with"}, set(job))
+                self.assertEqual({"rules-file": "docs/repository-guide.md"}, job["with"])
                 self.assertEqual("vars.SHARED_CI_REVIEW_RUNNER == 'true'", job["if"])
                 self.assertTrue(job["uses"].endswith(
                     "/.github/workflows/" + filename + "@" + PIN))

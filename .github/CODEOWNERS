@@ -5,6 +5,7 @@
 /ai/                 @LeePepe
 /schemas/            @LeePepe
 /docs/architecture/  @LeePepe
+/docs/repository-guide.md @LeePepe
 **/tech-context.md   @LeePepe
 /scripts/verify      @LeePepe
 /scripts/context/_contract.py @LeePepe

@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "guide": "docs/repository-guide.md",
+  "shared_ci": "af2f1c2ab7ed908ff3153c96793152150343e903",
+  "dependencies": {}
+}
