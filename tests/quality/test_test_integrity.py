@@ -118,6 +118,108 @@ class TestIntegrityTests(unittest.TestCase):
                        "        self.assertEqual(1, 1)\n\n    def test_two(self):\n        self.assertTrue(True)\n")
         self.assertEqual("pass", self.repo.check(BODY.format(section="none"))["verdict"])
 
+    def lowercase_test_directory(self):
+        # Keep literal tests/ paths distinct on case-insensitive filesystems.
+        self.repo.git("mv", "Tests", "swift-tests")
+        self.repo.base = self.repo.commit()
+
+    def test_unanalyzable_head_requires_per_file_rationale(self):
+        self.lowercase_test_directory()
+        path = "tests/a.test.js"
+        self.repo.write(path, "expect(s).toMatch(/[(]/);\n")
+        for section, verdict, undeclared in (
+                ("none", "fail", [path]),
+                ("- `tests/a.test.js`: regex literal with bracket class; reviewed manually", "pass", [])):
+            with self.subTest(section=section):
+                result = self.repo.check(BODY.format(section=section))
+                self.assertEqual(verdict, result["verdict"], result)
+                self.assertEqual([{"kind": "test_file_unanalyzable", "file": path,
+                                   "detail": "cannot be parsed reliably (head): unbalanced recognized test statement"}],
+                                 result["losses"])
+                self.assertEqual(undeclared, result["undeclared"])
+                self.assertFalse(any("fail-closed" in problem for problem in result["problems"]), result)
+
+    def test_unanalyzable_rationale_cannot_override_input_errors(self):
+        self.lowercase_test_directory()
+        path = "tests/a.test.js"
+        self.repo.write(path, "expect(s).toMatch(/[(]/);\n")
+        head = self.repo.commit()
+        body = BODY.format(section="- `tests/a.test.js`: regex literal with bracket class; reviewed manually")
+        git = ti._git
+        for command in ("merge-base", "show"):
+            with self.subTest(command=command):
+                def broken_git(root, *args):
+                    if args[0] == command:
+                        raise ti.IntegrityError("Git input unavailable")
+                    return git(root, *args)
+                with mock.patch.object(ti, "_git", side_effect=broken_git):
+                    result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=head, body=body)
+                self.assertEqual("fail", result["verdict"])
+                self.assertTrue(any("fail-closed" in problem and "Git input unavailable" in problem
+                                    for problem in result["problems"]), result)
+        result = ti.evaluate(str(self.repo.root), base=self.repo.base, head=head, body={path: "reviewed manually"})
+        self.assertEqual("fail", result["verdict"])
+        self.assertTrue(any("fail-closed" in problem and "PR body must be text" in problem
+                            for problem in result["problems"]), result)
+
+    def test_unanalyzable_base_excludes_evidence_but_keeps_deletion(self):
+        self.lowercase_test_directory()
+        path = "tests/a.test.js"
+        self.repo.write(path, 'test("old", () => {});\nexpect(s).toMatch(/[(]/);\n')
+        self.repo.base = self.repo.commit()
+        self.repo.write(path, 'test.skip("new", () => {});\nexpect(s).toMatch(/[(]/);\n')
+        # Base is reported first even when both revisions are unanalyzable.
+        loss = {"kind": "test_file_unanalyzable", "file": path,
+                "detail": "cannot be parsed reliably (base): unbalanced recognized test statement"}
+        self.assertEqual([loss], self.repo.check()["losses"])
+        self.repo.write(path, 'test.skip("new", () => {});\nexpect(s).toMatch(/ok/);\n')
+        result = self.repo.check()
+        self.assertEqual("fail", result["verdict"])
+        self.assertEqual([loss], result["losses"])
+        self.repo.git("rm", "-q", path)
+        self.assertEqual([loss, {"kind": "test_file_deleted", "file": path, "detail": "test file deleted"}],
+                         self.repo.check()["losses"])
+
+    def test_unanalyzable_head_excludes_evidence_without_hiding_other_losses(self):
+        self.lowercase_test_directory()
+        path = "tests/a.test.js"
+        self.repo.write(path, 'test("old", () => {});\nexpect(old).toBe(true);\n')
+        self.repo.write("tests/b.test.js", 'test("moved", () => {});\nexpect(moved).toBe(true);\n')
+        self.repo.base = self.repo.commit()
+        self.repo.write(path, 'test.skip("new", () => {});\ntest("moved", () => {});\n'
+                        'expect(moved).toBe(true);\nexpect(s).toMatch(/[(]/);\n')
+        self.repo.write("tests/b.test.js", "// moved\n")
+        result = self.repo.check()
+        self.assertEqual(["test_file_unanalyzable", "assertion_removed", "test_removed"],
+                         [loss["kind"] for loss in result["losses"]])
+        self.assertEqual([path, "tests/b.test.js", "tests/b.test.js"],
+                         [loss["file"] for loss in result["losses"]])
+
+    def test_expected_failure_and_skip_test_additions_are_skips(self):
+        self.lowercase_test_directory()
+        path = "tests/test_skip.py"
+        for marker in ("@unittest.expectedFailure", 'raise unittest.SkipTest("later")', 'raise SkipTest("later")'):
+            with self.subTest(marker=marker):
+                self.repo.write(path, marker + "\n")
+                result = self.repo.check()
+                self.assertEqual("fail", result["verdict"])
+                self.assertEqual([{"kind": "skip_added", "file": path, "detail": marker}], result["losses"])
+
+    def test_only_focus_additions_are_skips(self):
+        self.lowercase_test_directory()
+        path = "tests/focus.test.js"
+        for name in ("it", "describe", "test"):
+            for modifiers in (".only", ".concurrent.only", ".only.each([1])", ".only.failing",
+                              ".concurrent.only.failing.each([1])"):
+                marker = name + modifiers + '("focused",()=>{})'
+                with self.subTest(marker=marker):
+                    self.repo.write(path, marker + ";\n")
+                    result = self.repo.check()
+                    self.assertEqual("fail", result["verdict"])
+                    self.assertEqual([{"kind": "skip_added", "file": path, "detail": marker}], result["losses"])
+        self.repo.write(path, 'model.fit(data);\nfit("example", () => {});\nfdescribe("example", () => {});\n')
+        self.assertEqual([], self.repo.check()["losses"])
+
     def test_removed_assertion_fails(self):
         self.repo.edit("Tests/ParserTests.swift", '        XCTAssertThrowsError(try parse("../etc"))\n', "")
         result = self.repo.check()

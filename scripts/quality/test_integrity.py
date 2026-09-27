@@ -8,8 +8,10 @@ Losses (no netting: adding unrelated tests never offsets a loss):
                      test file and absent, whitespace-normalized, from every
                      changed test file at the head
   test_removed       a test name present at the base and absent at the head
-  skip_added         a new lexical skip/disable occurrence in a test file
+  skip_added         a new lexical skip/disable/focus occurrence in a test file
   test_file_deleted  a deleted test file (its tests and assertions are losses too)
+  test_file_unanalyzable  base or head cannot be parsed reliably; no assertion,
+                         name or skip evidence is compared for that file
 
 Explanation (when a PR body is supplied):
   * the PR body section "Removed or weakened tests or policy"
@@ -17,13 +19,20 @@ Explanation (when a PR body is supplied):
     conversely a body that says "none" never passes with a loss.
   * test changes need ordinary AI review, not an Owner approval or ledger.
     CI/gate/policy changes retain their separate protected-path review.
+  * unanalyzable files fail closed unless declared with a per-file rationale;
+    reviewers must inspect them manually.
+
+Skip markers include unittest expectedFailure and raising unittest.SkipTest or
+SkipTest, plus Jest/Vitest .only focus modifiers that silently drop sibling tests.
 
 Output: JSON {"verdict", "losses", "undeclared", "problems"}; exit 0 pass,
 1 fail, 2 usage. Heuristic by design: it recognizes common XCTest, Swift
 Testing, unittest/pytest, Go and Jest/Vitest shapes; unknown frameworks are
 still covered by `test_file_deleted` and the protocol rule.
 Lexical filtering handles comments and quoted/raw/multiline literals, not a
-language grammar. Interpolated expressions, regex literals, conditional
+language grammar. Regex literals are not lexed: their delimiters count as code;
+an unbalanced recognized statement yields test_file_unanalyzable, not an
+unreadable-input error. Interpolated expressions, conditional
 compilation, helper indirection and test reachability need independent review;
 this check does not prove that a retained assertion executes or stays strong.
 """
@@ -56,8 +65,9 @@ TEST_NAME = [
 ]
 SKIP = re.compile(
     r"\.disabled\b|\bXCTSkip\w*\s*\(|withKnownIssue\s*\(|@unittest\.skip|\bpytest\.mark\.(skip|xfail)|"
+    r"@unittest\.expectedFailure\b|\braise\s+(?:unittest\.)?SkipTest\b|"
     r"\bpytest\.skip\s*\(|\bpytest\.xfail\s*\(|\bself\.skipTest\s*\(|"
-    r"\b(?:it|test|describe)(?:\s*\.\s*concurrent)?\s*\.\s*(?:skip|todo)"
+    r"\b(?:it|test|describe)(?:\s*\.\s*concurrent)?\s*\.\s*(?:skip|todo|only)"
     r"(?:\s*\.\s*(?:each|failing))*\s*\(|"
     r"\bx(?:it|describe|test)(?:\s*\.\s*(?:each|failing))*\s*\(|"
     r"\bt\.Skip(?:f|Now)?\s*\(|@Disabled\b|@Ignore\b|\.enabled\s*\(\s*if\s*:")
@@ -65,6 +75,10 @@ SKIP = re.compile(
 
 class IntegrityError(Exception):
     """Repository state cannot be read; the check fails closed."""
+
+
+class UnanalyzableError(IntegrityError):
+    """Test source cannot be parsed reliably; require per-file manual review."""
 
 
 def _git(root: str, *args: str) -> str:
@@ -232,7 +246,7 @@ def _statements(text: str, pattern: re.Pattern, path: str) -> list[str]:
         else:
             end = len(code)
         if depth:
-            raise IntegrityError("unbalanced recognized test statement")
+            raise UnanalyzableError("unbalanced recognized test statement")
         statement = source[start:end]
         # A same-line next statement must not become part of this assertion.
         statements.append(_statement(statement, path))
@@ -285,20 +299,29 @@ def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
     found: list[dict[str, str]] = []
     base_texts = {path: _show(root, merge_base, path) for path, kind in tests.items() if kind != "A"}
     head_texts = {path: _show(root, head, path) for path, kind in tests.items() if kind != "D"}
-    for path, text in sorted(head_texts.items()):
-        before = collections.Counter(_statements(base_texts.get(path, ""), SKIP, path))
-        after = collections.Counter(_statements(text, SKIP, path))
+    base_statements, head_statements = {}, {}
+    base_names, head_names = {}, {}
+    for path in sorted(tests):
+        evidence = {}
+        try:
+            for side, texts in (("base", base_texts), ("head", head_texts)):
+                text = texts.get(path, "")
+                evidence[side] = (collections.Counter(_statements(text, SKIP, path)),
+                                  collections.Counter(assertions(text, path)), _names(text, path))
+        except UnanalyzableError as error:
+            found.append({"kind": "test_file_unanalyzable", "file": path,
+                          "detail": f"cannot be parsed reliably ({side}): {error}"})
+            continue
+        # Publish evidence only after both revisions are analyzable.
+        before, base_statements[path], base_names[path] = evidence["base"]
+        after, head_statements[path], head_names[path] = evidence["head"]
         for marker, count in sorted((after - before).items()):
             for _ in range(count):
                 found.append({"kind": "skip_added", "file": path, "detail": marker[:160]})
     # Match unchanged same-path evidence before cross-file moves, so a duplicate
     # in another edited file cannot transfer a loss to that innocent file.
-    base_statements = {path: collections.Counter(assertions(text, path)) for path, text in base_texts.items()}
-    head_statements = {path: collections.Counter(assertions(text, path)) for path, text in head_texts.items()}
     for path, statement in _removed(base_statements, head_statements):
         found.append({"kind": "assertion_removed", "file": path, "detail": statement[:160]})
-    base_names = {path: _names(text, path) for path, text in base_texts.items()}
-    head_names = {path: _names(text, path) for path, text in head_texts.items()}
     for path, kind in sorted(tests.items()):
         if kind == "D":
             found.append({"kind": "test_file_deleted", "file": path, "detail": "test file deleted"})
