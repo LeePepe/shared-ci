@@ -3,11 +3,12 @@
 ## Read first
 
 - Before changing files: [Repository guide](docs/repository-guide.md)
-- For ownership and dependency boundaries: [Layer map](docs/architecture/tech-context.md)
+- For ownership and dependencies: [Layer map](docs/architecture/tech-context.md)
+- For development and PR work units: [Development guide](docs/development.md)
 
 ## Protocol
 
-- For the pinned execution contract: [Agent protocol](https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/agent-protocol.md)
+- For the pinned shared contract: [Agent protocol](https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/agent-protocol.md)
 
 ## Verify
 
@@ -15,16 +16,16 @@
 
 ## Required checks
 
-- Before reviewing or merging a PR: [Merge checks](docs/repository-guide.md#required-checks)
+- Before merging: [Merge checks](docs/repository-guide.md#required-checks)
 
 ## Red lines
 
-- Before changing contracts or behavior: [Repository constraints](docs/repository-guide.md#red-lines)
+- Before changing policy or behavior: [Constraints](docs/repository-guide.md#red-lines)
 
 ## Dependencies
 
-- Before dependency integration or upgrades: [Dependency metadata](.github/repo-contract.json)
+- Before integration or upgrades: [Dependency metadata](.github/repo-contract.json)
 
 ## Delivery
 
-- For PR scope and handoff: [Delivery](docs/repository-guide.md#delivery)
+- For PR preparation and handoff: [Delivery](docs/repository-guide.md#delivery)

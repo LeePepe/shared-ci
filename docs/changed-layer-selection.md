@@ -1,9 +1,6 @@
-# Changed-layer CI selection (v0.2.0 candidate)
+# Changed-layer CI selection (v0.2.0)
 
-This feature is included in the v0.2.1 development candidate, with
-[Owner/release holds](../ai/README.md) still open. The caller
-[`scripts/verify` template](../templates/scripts/verify) can pick layers from
-the local diff. CI does the same
+`scripts/verify` already picks layers from the local diff. CI does the same
 when the caller opts in with `changed-only: true`, and it must never make a
 required check disappear: GitHub waits forever on a required job that was
 skipped at job level. So selection has three parts: a selector that fails
@@ -45,9 +42,8 @@ the last push, so a follow-up commit cannot drop lanes an earlier commit needs.
 selected (`full=false`, `any_layer=false`, `layers=[]`). The layer lanes
 short-circuit; `contract` (layer map + repository contract) and
 `workflow-lint` still run when enabled, and the aggregate still checks the PR
-body when configured. In the v0.2.1 candidate, enabled
-[test integrity](test-integrity.md#workflow-integration) also runs independently
-of layer selection, including support-only changes.
+body when configured. Enabled [test integrity](test-integrity.md#workflowaggregate-contract)
+also runs independently of layer selection, including support-only changes.
 
 Outputs (`select.yml` and `quality.yml`'s `select` job):
 
@@ -101,7 +97,7 @@ short-circuit. If the select job fails or its output is missing/malformed,
 command lanes fall back to full work and aggregate can still fail the run.
 An exit-0 fallback is not evidence that changed-only resolution succeeded.
 For a required check that never reports, inspect the step-level lane pattern
-below and the [integration checklist](integration-and-migration.md#selection-and-integrity-workflows).
+below.
 
 ## 2. Required-check-safe lanes
 
@@ -189,10 +185,7 @@ The aggregate output and the job summary record the selection (`mode`,
 short-circuit. Selection itself preserves the prior full-run command behavior
 and the `quality / aggregate` name, while adding `quality / select`.
 
-The combined v0.2.1 candidate also adds default-on test integrity, even when
-`changed-only` is false. It can reject previously accepted assertion changes;
-selection compatibility is not a claim that this new gate is policy-neutral.
-Callers on an older provider SHA remain unchanged. Follow the
-[combined compatibility and upgrade checklist](integration-and-migration.md#compatibility)
-before adopting another pin. Synthetic [selector fixtures](../tests/select/test_select.py)
-and provider CI do not establish release or real-consumer adoption evidence.
+The default-on `test-integrity` input is separate: it runs even when
+`changed-only` is false and can reject previously accepted test losses that
+lack a per-file rationale. Selection compatibility is not a claim that the
+integrity gate is policy-neutral; see [test integrity](test-integrity.md).

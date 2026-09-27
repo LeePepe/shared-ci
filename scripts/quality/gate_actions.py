@@ -64,6 +64,8 @@ def build_input(env: dict[str, str], needs: dict, pr_body: str | None) -> dict:
     for lane in LANES:
         key = lane.upper().replace("-", "_") + "_SELECTED"
         need = needs.get(lane)
+        if not isinstance(need, dict) or not isinstance(need.get("outputs", {}), dict):
+            raise ValueError(f"lane {lane} result missing or malformed")
         lanes[lane] = {
             "selected": _flag(key),
             "result": (need or {}).get("result", "unknown"),

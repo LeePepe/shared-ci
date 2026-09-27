@@ -1,121 +1,128 @@
-# Test integrity (v0.2.1 candidate)
+# Test integrity — development candidate
 
-This describes the current [detector](../scripts/quality/test_integrity.py) and
-its lane in [quality.yml](../.github/workflows/quality.yml), not an approved
-release. The Owner decided that test edits/deletions require no Owner approval;
-automatic detection, explanations and AI review remain. Existing consumers retain their old full-SHA behavior
-until a separately reviewed pin change. No real-consumer adoption is claimed.
+The [detector](../scripts/quality/test_integrity.py) and the proposed default-on
+lane in [quality.yml](../.github/workflows/quality.yml) require Owner review as
+a gate change before merging. This is not a released capability or evidence of
+live enforcement/adoption. Existing consumers keep their pinned behavior until
+a separately reviewed full-SHA update. Ordinary test edits/deletions require a
+reason and ordinary quality/AI review, **not** a separate Owner ledger or approval.
+Actual policy/gate/permission changes retain their existing protections.
 
-## Comparison and declarations
+## Comparison
 
-The detector reads committed Git data from `merge-base(base, head)..head`, not
-the working diff or just the last push. It does not execute test sources.
-The [repository contract](../ai/repo-contract.md#test-integrity) and
-[agent protocol](../ai/agent-protocol.md#3-verify-with-the-same-entry-as-ci)
-define the PR explanation obligation. There is no Owner-approved ledger.
+Read-only Git blobs from `merge-base(base, head)..head` are compared; neither
+test sources nor caller-configured diff/textconv programs are executed. Both
+inputs must be full lowercase 40-character commit SHAs with history available.
+Only changed recognized test paths participate. Test directories (`Tests`,
+`tests`, `__tests__`, `spec`, `specs` and singular variants) and common Python,
+Swift, Go, JVM and JS/TS test filenames are recognized. A `test_*.py` tool under
+`scripts/` is excluded unless in a recognized test directory. Directory matches
+also include fixtures; deleting such a fixture requires explanation.
 
-Loss records have `kind`, `file` (repository-relative path) and `detail`:
-
-| Kind | Detector meaning |
+| Loss | Meaning |
 | --- | --- |
-| `assertion_removed` | A normalized assertion from a changed base test file has no matching occurrence among changed head test files. Literal values are retained; changing an assertion can remove its old form. |
-| `test_removed` | A recognized test name has fewer occurrences across the changed head files. |
-| `skip_added` | An added diff line contains a recognized executable skip/disable marker. |
-| `test_file_deleted` | A recognized test source path was deleted; its recognized tests/assertions can also be losses. |
+| `assertion_removed` | A normalized lexical assertion occurrence in changed base test files has no identical occurrence in changed head test files. |
+| `test_removed` | A recognized test name has fewer occurrences across changed head test files. |
+| `skip_added` | A recognized lexical skip/disable statement has more occurrences in a head file than in the same base file. |
+| `test_file_deleted` | A recognized test path was deleted, including the old path of a rename. |
 
-Names and assertions are multisets: unrelated additions do not offset a loss;
-moving an identical occurrence between changed test files can preserve it.
-Skip detection is added-line based, so moving existing skip code can still
-produce `skip_added`. The scanner keeps whole-blob comment/literal context:
-commenting out a suite removes its tests/assertions, but documenting a skip in
-a comment or literal is not executable skip code. Git-quoted Unicode, spaces,
-tabs, quotes and backslashes do not hide additions: per-file diffs use literal
-paths from the NUL-delimited inventory, not decoded display headers.
+Names/assertions are multisets, not total counts: unrelated additions cannot
+offset losses, while identical moves among changed test files can preserve them.
+Identical duplicates can substitute for one another; this is not per-test semantic
+identity. A pure rename still requires a reason for the deleted path; moving code
+to a non-test path does not preserve its recognized tests/assertions.
 
-When losses exist, a supplied PR body must name every affected file and explain
-the changes in `Removed or weakened tests or policy`. A missing section or
-contradictory `none` fails. No ledger, approver spelling or CODEOWNERS rule is
-consulted by this detector. Normal AI review evaluates the explanation and
-behavior; this does not waive Plan-Review or separate CI/gate/policy protection.
+Comments and ordinary quoted/raw/multiline literals are masked before detection;
+literal assertion values remain part of identity. Commenting out a suite removes
+its evidence. Uncommenting an existing skip is detected even without an added
+marker line. Moving a skip to another file reports a new skip in the destination.
+Multiple same-line assertions and balanced multiline delimiters are recognized.
+Jest skip chains include `.skip.each` (array/tagged tables), concurrent variants,
+`.skip.failing`, and `xit`/`xtest`/`xdescribe` aliases; examples inside comments
+or literals remain non-executable data.
+The NUL-delimited Git inventory preserves literal Unicode/whitespace/quoted paths;
+malformed records or non-UTF-8 Git data fail closed rather than alias filenames.
 
-## CLI
+## Per-file rationale
 
-Use Python 3.9+ and Git from the caller repository root, with base/head commits
-and their merge-base history available. Use the detector from the reviewed
-provider checkout, not a similarly named caller script. Supply the variables
-below with that checkout, full caller commit SHAs and a captured PR body file;
-this is an illustrative invocation, not a consumer execution record:
+Use exactly one `## Removed or weakened tests or policy` section (`###` also
+accepted). Each affected path needs a separate line with a non-placeholder reason:
+
+```text
+- `tests/test_parser.py`: obsolete case replaced by malformed-input coverage.
+- "Tests/tab\tname.swift": renamed to match the suite responsibility.
+```
+
+Heading recognition uses bounded prefix matching and linear suffix trimming,
+including long whitespace runs before invalid trailing text. No PR-body size cap
+or truncation is imposed; malformed headings still cannot declare a rationale.
+
+Plain paths, backtick-wrapped paths, or JSON-quoted paths are accepted, followed
+immediately by `:` and a reason. JSON quoting safely represents paths containing
+newlines, tabs, quotes or backticks. Paths are exact and case-sensitive;
+`tests/test_a.py.bak` cannot explain `tests/test_a.py`. Comments, fenced examples,
+missing/duplicate/prefix-only headings, bare filenames and placeholder reasons
+are not declarations. Inline code/emphasis/strikethrough around a whole
+placeholder (for example, `` `none` ``) does not make it a reason; substantive
+reasons may still contain or use code formatting. `none` is appropriate only
+when no losses exist. Reasons are checked for presence, not truth: ordinary AI review must assess whether the
+explanation is accurate and whether behavior/coverage remains acceptable.
+
+## CLI and output
+
+Run the reviewed provider engine from the caller repository root:
 
 ```sh
-python3 "$SHARED_CI_CHECKOUT/scripts/quality/test_integrity.py" \
+python3 -I -B "$SHARED_CI_CHECKOUT/scripts/quality/test_integrity.py" \
   --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" --body-file "$PR_BODY_FILE"
 ```
 
-`--base` and `--head` are required; the CLI resolves them to commits before
-evaluation. `--body-file` supplies the body cross-check. Alternatively,
-`--event-body` reads `pull_request.body` from `GITHUB_EVENT_PATH` when present;
-the file option takes precedence. With neither a body file nor an available
-event PR body, the standalone CLI reports losses without an approval gate and
-sets `body_checked: false`; it cannot claim the PR explanation was checked.
-The workflow supplies a live body.
+`--body-file` checks supplied UTF-8 text. With neither body option, local reporting
+returns losses with `body_checked: false`, `body_status: unavailable-local`;
+a local `pass` does **not** mean rationale was checked. Do not use that mode as
+hosted acceptance evidence. `--live-body` instead requires `REPO`, `PR_NUMBER`
+and `GH_TOKEN`, fetches the actual current body from GitHub's REST API, and
+requires both live head and base SHAs to match the compared commits. Missing,
+malformed or stale API data fails closed. A null API body is checked as empty.
+The mutually exclusive body options never silently fall back to local reporting.
 
-Normal stdout is JSON with `verdict` (`pass` or `fail`), `losses`, `undeclared`
-(file paths missing from the supplied explanation), `problems` (messages) and
-`body_checked` (boolean). Losses and errors are also written to
-stderr. Exit 0 means pass, 1 means an unmet declaration requirement or evaluation
-failure, and 2 means argument usage error. Invalid revisions, unreadable test
-blobs and unlocatable/malformed hunks fail closed. Body-file/event read or
-decode errors can terminate nonzero before JSON; absent output is not a pass.
+JSON stdout contains `verdict` (`pass`/`fail`), `losses` (`kind`, `file`, `detail`),
+`undeclared` paths, `problems`, `body_checked`, and `body_status` (`supplied`,
+`live`, `unavailable-local`, or `unavailable-error`). Exit 0 means the requested
+checks passed; 1 means invalid/unavailable input or undeclared losses; 2 means
+CLI usage error. A process failure or missing JSON is not a pass. Diagnostics
+escape untrusted filenames rather than emitting raw workflow commands.
 
-## Workflow integration
+## Workflow/aggregate contract
 
-Call `quality.yml` at the same full provider SHA as the other shared-ci
-workflows and docs; the [integration checklist](integration-and-migration.md#selection-and-integrity-workflows)
-covers caller setup. The relevant inputs are:
+`test-integrity` defaults to `true` in the candidate reusable workflow. The lane
+runs on a hosted runner from the pinned provider, separately from layer selection,
+using complete caller history. It fetches the live body on pull-request events,
+even if `check-pr-body: false` disables aggregate's general template checks.
+On non-PR events it explicitly reports not applicable; success there is not a
+new diff/rationale evaluation. Its SHA output still identifies the checkout.
 
-| Input | Default | Effect |
-| --- | --- | --- |
-| `test-integrity` | `true` | Selects the hosted integrity lane and makes aggregate require its success on the caller head. `false` is an interface option, not policy-exception authority. |
-| `check-pr-body` | `true` | Controls aggregate's general template/body validation. Setting it false does not disable the integrity lane's loss/body cross-check. |
-| `changed-only` | `false` | Controls command-lane selection, not integrity; see [selection compatibility](changed-layer-selection.md#compatibility). |
+Aggregate always depends on the integrity job. Selected integrity must succeed,
+report the expected head SHA, and report `ran: true` when selection is present;
+empty selected layers cannot short-circuit it. Missing/malformed/skipped/failed
+results fail closed. Explicitly disabling the input still requires a valid
+unselected lane result; the option is not authorization to bypass repository
+policy. This change does not alter existing consumer pins, required checks or
+reviewer trust boundaries. The lane scans data; it does not run the tests.
 
-The lane checks out caller history, then its provider engine at
-`job.workflow_sha`. On `pull_request` and `pull_request_target` it retrieves
-the live PR body and runs the detector with the event's base/head. On other
-events it reports that the PR check is not applicable and succeeds; that is
-not a new diff-integrity evaluation. Its `tested-sha` identifies the checkout.
-The reusable workflow exposes `tested-sha` only after aggregate passes, plus
-`selection`; see the workflow source for the complete input/output inventory.
+## Limits and recovery
 
-Integrity is independent of selected layers: a docs-only selection cannot
-short-circuit it. A read/API/process failure cannot count as a successful lane.
-The check scans Git blobs as data, but ordinary command lanes execute caller
-commands; this does not authorize executing untrusted PR code in a privileged
-review workflow. Keep the existing workflow-lint/fork guards and caller trust
-boundary. This lane does not run or replace the test suite.
+This is a lexical heuristic, not a grammar, coverage metric, assertion-strength
+proof or test-reachability analysis. Common XCTest/Swift Testing, unittest/pytest,
+Go and Jest/Vitest shapes are recognized; unknown frameworks/helper indirection,
+interpolation, regex literals, unusual quoting, conditional compilation and
+complex layouts require independent review. Renaming/reformatting recognized
+assertions can conservatively report losses. Retaining a token does not prove it
+executes; replacing one assertion with an identical copy elsewhere can match.
 
-## Failure routes and limits
-
-- `undeclared` or a body mismatch: inspect each actual loss, restore accidental
-  changes or explain the intended change for ordinary AI review. Test edits
-  themselves do not route to Owner approval.
-- `cannot read the diff` / nonzero without JSON: verify caller root, commits,
-  history and body input. Repair the input and rerun; do not infer no losses.
-- Aggregate failure: inspect the integrity job result and head SHA as well as
-  the [aggregate selection contract](changed-layer-selection.md#3-aggregate).
-  New commits require fresh checks and review; older green evidence is stale.
-
-The engine recognizes common XCTest, Swift Testing, unittest/pytest, Go and
-Jest/Vitest shapes. This is lexical matching, not a language grammar or proof
-of strength/execution. Interpolation, regex literals, conditional compilation,
-helper indirection, unknown frameworks, reachability and complex assertion
-layouts still need independent review. Multiline calls are joined by parenthesis
-depth with a 200-line bound. Repository-specific execution and policy remain
-caller/Owner responsibilities.
-
-[Integrity fixtures](../tests/quality/test_test_integrity.py) cover the
-positive/negative detector boundary, including comment deactivation,
-literal preservation, explanation-without-Owner and quoted filenames. They are
-synthetic Git callers, not real-consumer rollout evidence. Release evidence
-and [registry discovery](integration-and-migration.md#selection-and-integrity-discovery-gap)
-remain outstanding.
+For losses, restore accidental changes or explain each affected file for ordinary
+review. For unreadable history/body/API data, repair input and rerun for current
+commits. Never use a missing report, old SHA evidence or test count as acceptance.
+[Fixtures](../tests/quality/test_test_integrity.py) and
+[aggregate tests](../tests/quality/test_gate.py) exercise synthetic Git callers,
+lexical/parser boundaries and failure routes, not hosted rollout or 6DQ evidence.

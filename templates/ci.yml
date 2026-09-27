@@ -1,5 +1,5 @@
 # Caller workflow. Copy to .github/workflows/ci.yml. Replace every
-# <40-char-sha> with ONE shared-ci commit SHA (metadata shared_ci must match).
+# <40-char-sha> with ONE shared-ci commit SHA (matching repo-contract.json and the AGENTS protocol route).
 name: ci
 
 on:

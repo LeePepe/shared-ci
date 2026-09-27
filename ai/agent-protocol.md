@@ -2,16 +2,16 @@
 
 Every agent that changes a repository which pins shared-ci follows this
 protocol. It does not depend on any particular tool. The repository's
-`AGENTS.md` routes to its repository documents. The `shared_ci` field in
-`.github/repo-contract.json` selects this protocol's revision; legacy callers
-without metadata retain their AGENTS v1 pin. Explicit Owner policy decisions
-take precedence over older protocol text.
+`AGENTS.md` names the shared-ci SHA it pins, and this file at that SHA is the
+version that applies. When a rule here conflicts with a prompt, this file wins.
+When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 1. Before you edit
 
-1. Read in this order: the constitution (if present), then the root
-   `tech-context.md`, then the leaf `tech-context.md` of every layer you will
-   touch. `AGENTS.md` lists the paths.
+1. Use `AGENTS.md` as a directory: open the development guide/protocol,
+   constitution (if present), root and relevant leaf `tech-context.md`, and
+   verification/review documents it points to for this task. Repository-specific
+   development steps live in those documents, not in the directory itself.
 2. Use a dedicated branch **and** a dedicated worktree for the task. Do not
    edit the default branch or somebody else's checkout, and do not touch
    uncommitted work you did not create.
@@ -19,12 +19,24 @@ take precedence over older protocol text.
    writer appears (unexpected commits or a dirty tree you did not make),
    stop and report. Do not merge over it or reset it.
 
-## 2. Scope
+## 2. Develop against the repository contract
 
-- Resolve every path you plan to change:
-  `scripts/context/resolve <path> --format layer`. Change only paths owned by
-  the layers your task names. If a change needs another layer, say so in the
-  PR and keep that edit minimal. Do not refactor across layers along the way.
+- Read the repository's layer map and development/PR guide under the
+  [repository development contract](repo-contract.md#repository-development-contract).
+  Choose its existing PR unit for the requested outcome. Layer boundaries and
+  PR conventions belong to the repository, not to the agent's role.
+- **Dev Team:** Planner maps requirements/spec acceptance to tasks within those
+  units, passes the existing spec/plan gate, and TL dispatches FS. FS implements
+  the assigned task; a gap returns through TL to Planner. A task cannot redefine
+  the repository's architecture or PR policy.
+- **Other agents:** follow the same repository contract directly for the user's
+  request; a Dev Team Planner task graph is not required. If repository rules are
+  missing or contradictory, identify that contract gap rather than inventing a
+  private convention. Existing authorization and review protections still apply.
+- Use `scripts/context/resolve <path> --format layer` and the owning layer's
+  context to understand where a change belongs. Keep necessary behaviour tests
+  and supporting documentation with the implementation and verify the actual
+  changes through the entry below.
 - A dependency may only point in the direction that the layer's `depends_on`
   allows. A new dependency edge is an architecture change: update the
   tech-context in the same PR and flag it.
@@ -41,25 +53,9 @@ take precedence over older protocol text.
   - edit policy, gate, schema, ruleset or CI files in order to pass;
   - pin shared-ci, or any shared library, by branch or tag instead of a full
     SHA or exact version.
-- If a check is wrong, fix it in its own PR that states the reason and needs
-  Owner review. Do not work around it in a feature PR.
-- **Declaring a removed or weakened test.** `quality / test-integrity` fails
-  on any loss in the PR diff unless the loss is declared. It checks each
-  assertion and each test separately, so adding unrelated tests cannot
-  offset a loss. A loss is:
-  - a removed assertion that is not re-added elsewhere in the diff;
-  - a removed test (by name);
-  - a new skip or disable marker;
-  - a deleted test file.
-
-  Name each affected file and explain the change in the PR section `Removed
-  or weakened tests or policy`. The check compares that section with the
-  diff, so `none` fails when there is a loss. Editing or deleting tests and
-  assertions, or changing skip conditions, does not itself require Owner
-  approval, an approval ledger or CODEOWNERS coverage. Normal AI review and
-  any applicable Plan-Review remain required.
-
-  Moving an assertion or a test to another file is not a loss.
+- If a check is wrong, fix it in its own scoped PR with the reason. Ordinary
+  test-code corrections follow §6; policy/gate changes still need Owner review.
+  Do not work around the check in a feature PR.
 - With changed-layer selection (`changed-only: true`, see
   `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
   touches plus their dependents. A lane that prints `not selected: <reason>`
@@ -77,24 +73,31 @@ What a PR must be:
 
 - **Base is the default branch.** A PR must be mergeable on its own. Do not
   make it depend on another open PR being merged first.
-- **One purpose.** Split unrelated fixes, refactors and features.
-- **One layer scope where possible.** If a PR crosses layers, say why in
-  Intent.
+- **Repository-defined unit.** Follow the repository guide's PR conventions:
+  one purpose, an existing unit and its necessary tests/companion documentation.
+  Link the relevant requirement/spec and, for FS, the Planner task. Other sources
+  do not need to create a Dev Team task to submit a PR.
+- **PR Manager handles lifecycle.** Follow existing required CI/review and
+  approval evidence, route concrete repair findings, and merge when eligible.
+  Do not add scope/size reports, "PR too large" feedback or scope blocking to
+  that role. This does not waive any existing required check or review.
 - **Stacked PRs** are allowed only as a temporary queue. Once the base PR
   merges, retarget the next PR to the default branch and rebase it onto that
   branch, dropping the base PR's pre-squash commits
   (`git rebase --onto origin/main <old-base-tip>`), before it merges. A squash
   merge rewrites the base commits, so a stacked branch that is not rebased
   will conflict or carry duplicate changes.
+  Dependent slices wait for prerequisites to merge in order; this queue never
+  bypasses approvals or CI.
 
 Fill in every section of the repository's PR template:
 
 | Section | Content |
 | --- | --- |
 | Existing behaviour | What the code does today, including behaviour that must be kept |
-| Intent | What changes and why; the task or issue link |
+| Intent | What changes and why; repository PR unit and requirement/spec/task link when present |
 | Compatibility | API/data/config compatibility, migrations, rollback |
-| Removed or weakened tests or policy | Each affected test file and reason; separately identify policy changes and their required approvals, or `none` |
+| Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
 
 The `quality / aggregate` check rejects empty or placeholder sections.
@@ -112,11 +115,14 @@ The `quality / aggregate` check rejects empty or placeholder sections.
 
 Changes under `CODEOWNERS` paths need Owner approval (for example
 `.github/**`, policy, schemas, gates, `AGENTS.md`, the constitution,
-dependency pins, credentials, privacy and data migrations). Test changes alone
-do not trigger Owner review; a PR that also changes protected CI/policy remains
-subject to that separate gate. Changes to existing behaviour without an approved
-spec still need the relevant decision. Until the repository enforces CODEOWNERS review,
-add the `owner-review` label and wait.
+dependency pins, credentials, privacy and data migrations). Ordinary test-code
+edits or deletions require a stated reason, CI and AI review, not separate
+Owner approval merely because tests changed. Changes to actual gate/policy
+semantics or permissions remain important even when placed in a test or Markdown
+file. Existing behaviour changes without an approved spec also need the Owner.
+Use trusted policy and effective CODEOWNERS protections, not an author's label,
+to route review. Until CODEOWNERS review is enforced, add `owner-review` for
+important PRs and wait; do not bypass existing protections.
 
 Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
 
@@ -128,23 +134,12 @@ test, a contract or audit check, or a small lint rule. Do not answer an
 incident by making a prompt longer. If the guard belongs in shared-ci, open a
 shared-ci PR and link it.
 
-## 8. Never commit or print
+## 8. Never commit
 
-- Credentials, tokens or keys. Never run a command that prints a token,
-  even partly masked, into a log or transcript: `gh auth status`,
-  `gh auth token`, `echo $GH_TOKEN`, `env`/`printenv` dumps,
-  `git config --get-all credential.*`, or `set -x` around token use. To
-  check identity, use `git config user.email` and `gh api user` (for a
-  GitHub App: `gh api /repos/<owner>/<repo> --jq .full_name`).
+- Credentials, tokens or keys.
 - Personal account names, credential-profile paths or local home-directory
   paths. `scripts/context audit` rejects them.
 - Generated local evidence files. The PR and its checks are the record.
-
-Tool attribution is allowed and is not an identity leak. This covers
-`Co-Authored-By: <tool> <noreply@...>` commit trailers and generated-by
-footers in PR bodies, as long as they name the tool and contain no personal
-account, profile path or home path. The contract audit (item 8) does not
-flag them.
 
 ## 9. When you are blocked
 

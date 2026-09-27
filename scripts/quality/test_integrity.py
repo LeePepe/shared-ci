@@ -4,17 +4,16 @@
 Compares the PR head with merge-base(base, head); stdlib only, fail-closed.
 
 Losses (no netting: adding unrelated tests never offsets a loss):
-  assertion_removed  an assertion statement (a multiline call is one statement,
-                     joined by paren depth) present at the base of a changed
+  assertion_removed  a lexical assertion statement (balanced delimiters) present at the base of a changed
                      test file and absent, whitespace-normalized, from every
                      changed test file at the head
   test_removed       a test name present at the base and absent at the head
-  skip_added         a new skip/disable marker in a test file
+  skip_added         a new lexical skip/disable occurrence in a test file
   test_file_deleted  a deleted test file (its tests and assertions are losses too)
 
 Explanation (when a PR body is supplied):
   * the PR body section "Removed or weakened tests or policy"
-    is not "none" and names every affected file (G6: cross-checked against the diff);
+    declares each affected file with a non-placeholder rationale;
     conversely a body that says "none" never passes with a loss.
   * test changes need ordinary AI review, not an Owner approval or ledger.
     CI/gate/policy changes retain their separate protected-path review.
@@ -38,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
 from typing import Any
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -47,18 +47,19 @@ TEST_PATH = re.compile(
     r"Tests?\.swift$|\.(test|spec)\.[cm]?[jt]sx?$|Test\.(kt|java)$")
 ASSERTION = re.compile(
     r"#expect\b|#require\b|\bXCTAssert\w*\s*\(|\bXCTFail\s*\(|\bXCTUnwrap\s*\(|"
-    r"\bself\.assert\w+\s*\(|^\s*assert\b|\bpytest\.raises\s*\(|\bexpect\s*\(|\bassert\w*\s*\(|"
+    r"\bself\.assert\w+\s*\(|\bassert\b(?!\s*\()|\bpytest\.raises\s*\(|\bexpect\s*\(|\bassert\w*\s*\(|"
     r"\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\s*\(|\brequire\.\w+\s*\(")
 TEST_NAME = [
     re.compile(r"\bfunc\s+(test\w*)\s*\("),                       # XCTest
-    re.compile(r"@Test\b[^\n]*?\bfunc\s+(\w+)\s*\("),              # Swift Testing (same line)
     re.compile(r"^\s*(?:async\s+)?def\s+(test\w*)\s*\("),          # unittest / pytest
     re.compile(r"\bfunc\s+(Test\w+)\s*\(\s*t\s+\*testing\.T"),     # Go
-    re.compile(r"""\b(?:it|test)\s*\(\s*(["'`])(.+?)\1"""),        # Jest / Vitest / Mocha
 ]
 SKIP = re.compile(
     r"\.disabled\b|\bXCTSkip\w*\s*\(|withKnownIssue\s*\(|@unittest\.skip|\bpytest\.mark\.(skip|xfail)|"
-    r"\bself\.skipTest\s*\(|\b(?:it|test|describe)\.(skip|todo)\s*\(|\bx(?:it|describe|test)\s*\(|"
+    r"\bpytest\.skip\s*\(|\bpytest\.xfail\s*\(|\bself\.skipTest\s*\(|"
+    r"\b(?:it|test|describe)(?:\s*\.\s*concurrent)?\s*\.\s*(?:skip|todo)"
+    r"(?:\s*\.\s*(?:each|failing))*\s*\(|"
+    r"\bx(?:it|describe|test)(?:\s*\.\s*(?:each|failing))*\s*\(|"
     r"\bt\.Skip(?:f|Now)?\s*\(|@Disabled\b|@Ignore\b|\.enabled\s*\(\s*if\s*:")
 
 
@@ -67,45 +68,44 @@ class IntegrityError(Exception):
 
 
 def _git(root: str, *args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=root, capture_output=True, check=False, timeout=120)
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
-        raise IntegrityError(f"git {args[0]} failed: {detail[-1] if detail else result.returncode}")
-    return result.stdout.decode("utf-8", "replace")
+    # Never invoke caller-configured external diff/textconv programs.
+    try:
+        result = subprocess.run(["git", *args], cwd=root, capture_output=True,
+                                check=False, timeout=120)
+        if result.returncode != 0:
+            raise IntegrityError(f"git {args[0]} failed ({result.returncode})")
+        return result.stdout.decode("utf-8", "strict")
+    except (OSError, UnicodeError, subprocess.TimeoutExpired) as error:
+        raise IntegrityError("Git data unavailable or not UTF-8") from error
 
 
 def _norm(line: str) -> str:
     return " ".join(line.split())
 
 
-SWIFT_TEST_ATTR = re.compile(r"@Test\b")
-SWIFT_FUNC = re.compile(r"\bfunc\s+(\w+)\s*\(")
 LITERAL_START = re.compile(r'(#+)?("""|\'\'\'|["\'`])')
 
 
 def _names(text: str, path: str = "") -> collections.Counter[str]:
-    """Test names; a multiline `@Test(` / traits / `func name(` counts once."""
-    names: collections.Counter[str] = collections.Counter()
-    pending = False
+    """Recognized names, including multiple calls on one line; literals are data only."""
     source, code = _source_views(text, path)
-    for line, visible in zip(source.splitlines(), code.splitlines()):
-        if pending:
-            func = SWIFT_FUNC.search(visible)
-            if func:
-                names[func.group(1)] += 1
-                pending = False
-                continue
-        for pattern in TEST_NAME:
-            # Jest names are literal data, but the test/it call must be code.
-            matches = pattern.finditer(line if pattern is TEST_NAME[-1] else visible)
-            match = next((m for m in matches if visible[m.start():m.end()].strip()), None)
-            if match:
-                names[match.group(match.lastindex)] += 1
-                pending = False
-                break
-        else:
-            if SWIFT_TEST_ATTR.search(visible):
-                pending = True
+    names: collections.Counter[str] = collections.Counter()
+    for pattern in TEST_NAME:
+        for match in re.finditer(pattern.pattern, code, re.MULTILINE):
+            names[match.group(1)] += 1
+    # Swift attributes may span lines. Do not cross another declaration/body.
+    for match in re.finditer(r"@Test\b[^{};]*?\bfunc\s+(\w+)\s*\(", code):
+        if not match.group(1).startswith("test"):
+            names[match.group(1)] += 1
+    for match in re.finditer(r"\b(?:it|test)\s*\(", code):
+        tail = source[match.end():].lstrip()
+        literal = LITERAL_START.match(tail)
+        if literal:
+            # Tokenization, not a quote regex, preserves escaped/multiline names.
+            token = next(token for kind, token in _tokens(tail, path) if kind == "literal")
+            opening = literal.group(0)
+            closing = literal.group(2) + (literal.group(1) or "")
+            names[token[len(opening):-len(closing)]] += 1
     return names
 
 
@@ -162,7 +162,7 @@ def _tokens(text: str, path: str = ""):
                 delimiter = literal.group(2) + hashes
                 index += len(literal.group(0))
                 while index < len(text):
-                    if text.startswith("\\" + hashes, index):
+                    if text.startswith("\\" + hashes, index) and not (path.endswith(".go") and delimiter == "`"):
                         index += len(hashes) + 2
                     elif text.startswith(delimiter, index):
                         index += len(delimiter)
@@ -197,42 +197,81 @@ def _statement(text: str, path: str = "") -> str:
             literals.append(token)
             parts.append(f"\0{len(literals) - 1}\0")
         else:
-            parts.append(" " if kind == "comment" else token)
+            parts.append(" " if kind == "comment" else re.sub(r"\\\r?\n", " ", token))
     text = "".join(parts)
     text = _norm(text)
-    text = re.sub(r"\s*([()\[\]{},])\s*", r"\1", text)
+    text = re.sub(r"\s*([()\[\]{},.])\s*", r"\1", text)
     text = re.sub(r",([)\]}])", r"\1", text)
     return re.sub(r"\0(\d+)\0", lambda match: literals[int(match.group(1))], text)
 
 
-def assertions(text: str, path: str = "") -> list[str]:
-    """Normalized assertion statements; a call spanning lines (by paren depth) is one statement.
-
-    Changing or deleting any line of a multiline `#expect(` / `XCTAssertEqual(` changes
-    the whole statement, so it cannot slip through a line-based diff.
-    """
-    statements: list[str] = []
+def _statements(text: str, pattern: re.Pattern, path: str) -> list[str]:
+    """Extract lexical statements using masked delimiters, retaining literal values."""
     source, code = _source_views(text, path)
-    lines = source.splitlines()
-    visible = code.splitlines()
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        match = ASSERTION.search(visible[index])
-        if not match:
-            index += 1
-            continue
-        parts = [line]
-        tail = visible[index][match.start():]
-        depth = tail.count("(") - tail.count(")")
-        while depth > 0 and index + 1 < len(lines) and len(parts) < 200:
-            index += 1
-            parts.append(lines[index])
-            tail = visible[index]
-            depth += tail.count("(") - tail.count(")")
-        statements.append(_statement("\n".join(parts), path))
-        index += 1
+    statements = []
+    for match in pattern.finditer(code):
+        start = match.start()
+        depth = 0
+        end = start
+        for end in range(start, len(code)):
+            char = code[end]
+            if depth == 0 and char in ";\n\r}":
+                # Fluent assertion chains can continue after a newline.
+                if char in "\n\r" and code[end + 1:].lstrip().startswith("."):
+                    continue
+                # Explicit Python line continuations are formatting.
+                if char in "\n\r" and code[start:end].rstrip().endswith("\\"):
+                    continue
+                break
+            if char in "([{":
+                depth += 1
+            elif char in ")]}":
+                if depth == 0:
+                    break
+                depth -= 1
+        else:
+            end = len(code)
+        if depth:
+            raise IntegrityError("unbalanced recognized test statement")
+        statement = source[start:end]
+        # A same-line next statement must not become part of this assertion.
+        statements.append(_statement(statement, path))
     return statements
+
+
+def assertions(text: str, path: str = "") -> list[str]:
+    return _statements(text, ASSERTION, path)
+
+
+def _inventory(raw: str) -> dict[str, str]:
+    if not raw:
+        return {}
+    fields = raw.split("\0")
+    if fields.pop() != "" or len(fields) % 2:
+        raise IntegrityError("malformed NUL-delimited Git inventory")
+    changed = {}
+    for kind, path in zip(fields[::2], fields[1::2]):
+        if kind not in {"A", "M", "D", "T"} or not path or path in changed:
+            raise IntegrityError("invalid Git change record")
+        changed[path] = kind
+    return changed
+
+
+def _removed(base_items: dict[str, collections.Counter], head_items: dict[str, collections.Counter]):
+    """Preserve same-file occurrences first, then match actual cross-file moves."""
+    remaining = {}
+    available: collections.Counter = collections.Counter()
+    for path in base_items.keys() | head_items.keys():
+        before = base_items.get(path, collections.Counter())
+        after = head_items.get(path, collections.Counter())
+        remaining[path] = before - after
+        available.update(after - before)
+    for path, items in sorted(remaining.items()):
+        for item, count in sorted(items.items()):
+            keep = min(count, available[item])
+            available[item] -= keep
+            for _ in range(count - keep):
+                yield path, item
 
 
 def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
@@ -240,73 +279,93 @@ def losses(root: str, base: str, head: str) -> list[dict[str, str]]:
     merge_base = _git(root, "merge-base", base, head).strip()
     if not SHA.match(merge_base):
         raise IntegrityError(f"merge-base returned {merge_base!r}")
-    status = _git(root, "diff", "--name-status", "--no-renames", "-z", merge_base, head, "--").split("\0")
-    changed = {status[i + 1]: status[i] for i in range(0, len(status) - 1, 2) if status[i]}
+    changed = _inventory(_git(root, "diff", "--no-ext-diff", "--no-textconv",
+                              "--name-status", "--no-renames", "-z", merge_base, head, "--"))
     tests = {path: kind for path, kind in changed.items() if is_test_path(path)}
     found: list[dict[str, str]] = []
     base_texts = {path: _show(root, merge_base, path) for path, kind in tests.items() if kind != "A"}
     head_texts = {path: _show(root, head, path) for path, kind in tests.items() if kind != "D"}
-    head_code = {path: _source_views(text, path)[1].splitlines() for path, text in head_texts.items()}
-    for path in sorted(head_texts):
-        # Use the NUL-delimited inventory as identity, never a quoted diff
-        # header. Literal pathspecs also prevent filename glob characters from
-        # selecting another file's hunks.
-        diff = _git(root, "--literal-pathspecs", "diff", "--unified=0", "--no-color", "--no-renames",
-                    merge_base, head, "--", path)
-        head_line = None
-        for line in diff.splitlines():
-            if line.startswith("@@ "):
-                hunk = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
-                if not hunk:
-                    raise IntegrityError("cannot parse test diff hunk")
-                head_line = int(hunk.group(1)) - 1
-            elif head_line is not None and line.startswith(("+", " ")):
-                # Inspect the whole blob's lexical context, not an isolated
-                # added line inside a multiline comment or literal.
-                if not 0 <= head_line < len(head_code[path]):
-                    raise IntegrityError("cannot locate test diff line")
-                if line.startswith("+") and SKIP.search(head_code[path][head_line]):
-                    found.append({"kind": "skip_added", "file": path, "detail": line[1:].strip()[:160]})
-                head_line += 1
-    # Assertion statements: multiset across all changed test files (moves pass, no netting).
-    head_statements: collections.Counter[str] = collections.Counter()
-    for path, text in head_texts.items():
-        head_statements.update(assertions(text, path))
-    for path in sorted(base_texts):
-        for statement in assertions(base_texts[path], path):
-            if head_statements[statement] > 0:
-                head_statements[statement] -= 1
-            else:
-                found.append({"kind": "assertion_removed", "file": path, "detail": statement[:160]})
+    for path, text in sorted(head_texts.items()):
+        before = collections.Counter(_statements(base_texts.get(path, ""), SKIP, path))
+        after = collections.Counter(_statements(text, SKIP, path))
+        for marker, count in sorted((after - before).items()):
+            for _ in range(count):
+                found.append({"kind": "skip_added", "file": path, "detail": marker[:160]})
+    # Match unchanged same-path evidence before cross-file moves, so a duplicate
+    # in another edited file cannot transfer a loss to that innocent file.
+    base_statements = {path: collections.Counter(assertions(text, path)) for path, text in base_texts.items()}
+    head_statements = {path: collections.Counter(assertions(text, path)) for path, text in head_texts.items()}
+    for path, statement in _removed(base_statements, head_statements):
+        found.append({"kind": "assertion_removed", "file": path, "detail": statement[:160]})
     base_names = {path: _names(text, path) for path, text in base_texts.items()}
-    head_names: collections.Counter[str] = collections.Counter()
-    for path, text in head_texts.items():
-        head_names += _names(text, path)
+    head_names = {path: _names(text, path) for path, text in head_texts.items()}
     for path, kind in sorted(tests.items()):
         if kind == "D":
             found.append({"kind": "test_file_deleted", "file": path, "detail": "test file deleted"})
-    for path, names in sorted(base_names.items()):  # multiset: a move between files passes
-        for name in sorted(names):
-            keep = min(names[name], head_names[name])
-            head_names[name] -= keep
-            for _ in range(names[name] - keep):
-                found.append({"kind": "test_removed", "file": path, "detail": name})
+    for path, name in _removed(base_names, head_names):
+        found.append({"kind": "test_removed", "file": path, "detail": name})
     return found
 
 
 def section_text(body: str) -> str | None:
-    text = re.sub(r"<!--.*?-->", "", body.replace("\r\n", "\n"), flags=re.DOTALL)
-    parts = re.split(r"(?m)^#{2,3}\s+", text)
-    for part in parts[1:]:
-        heading, _, rest = part.partition("\n")
-        if heading.strip().lower().startswith(SECTION):
-            return rest
-    return None
+    """One exact section, ignoring HTML comments and fenced examples."""
+    body = re.sub(r"<!--.*?(?:-->|$)", "", body.replace("\r\n", "\n"), flags=re.DOTALL)
+    sections = []
+    current = None
+    fence = None
+    for line in body.splitlines():
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence:
+            if re.fullmatch(r" {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*", line):
+                fence = None
+            continue
+        if marker:
+            fence = marker.group(1)
+            continue
+        heading = re.match(r"^ {0,3}(#{1,6})\s", line)
+        # Keep the required title character, even for whitespace-only titles.
+        if heading and heading.end() < len(line):
+            # Strip the suffix in bounded passes; overlapping regex whitespace
+            # repetitions backtrack cubically on a long malformed title.
+            title = line[heading.end():].strip().rstrip("#").rstrip()
+            current = None
+            if len(heading.group(1)) in (2, 3) and title.lower() == SECTION:
+                sections.append([])
+                current = sections[-1]
+        elif current is not None:
+            current.append(line)
+    return "\n".join(sections[0]) if len(sections) == 1 else None
 
 
 def says_none(text: str) -> bool:
-    stripped = [line.strip().strip("-*").strip() for line in text.splitlines() if line.strip()]
-    return not stripped or all(line.rstrip(".").lower() in {"none", "n/a", "no", "nothing"} for line in stripped)
+    # Normalize whole-placeholder inline wrappers, not Markdown inside a reason.
+    # Repeat to handle nested emphasis/code spans without parsing general Markdown.
+    value = text
+    while True:
+        previous = value
+        value = re.sub(r"^[-*+]\s+", "", value.strip()).strip("-* ").rstrip(".").strip()
+        for wrapper in ("`", "__", "~~", "_"):
+            if len(value) >= 2 * len(wrapper) and value.startswith(wrapper) and value.endswith(wrapper):
+                value = value[len(wrapper):-len(wrapper)].strip()
+                break
+        if value == previous:
+            break
+    value = value.lower()
+    return value in {"", "none", "n/a", "no", "nothing", "tbd", "todo", "...", "…"} or bool(
+        re.fullmatch(r"<[^>]*>|\[[ xX]\]", value))
+
+
+def _declared(section: str, path: str) -> bool:
+    # JSON encoding handles newlines, tabs, quotes and backticks in Git paths.
+    forms = {path, "`" + path + "`", json.dumps(path, ensure_ascii=False), json.dumps(path)}
+    for line in section.splitlines():
+        line = re.sub(r"^\s*(?:[-*+]\s+)?", "", line)
+        for form in forms:
+            if line.startswith(form + ":"):
+                reason = line[len(form) + 1:].strip()
+                if not says_none(reason):
+                    return True
+    return False
 
 
 def evaluate(root: str, *, base: str, head: str, body: str | None) -> dict[str, Any]:
@@ -314,7 +373,9 @@ def evaluate(root: str, *, base: str, head: str, body: str | None) -> dict[str, 
     found: list[dict[str, str]] = []
     undeclared: list[str] = []
     try:
-        if not SHA.match(base or "") or not SHA.match(head or ""):
+        if body is not None and not isinstance(body, str):
+            raise IntegrityError("PR body must be text")
+        if not SHA.fullmatch(base or "") or not SHA.fullmatch(head or ""):
             raise IntegrityError("base/head must be full 40-char SHAs")
         found = losses(root, base, head)
         files = sorted({loss["file"] for loss in found})
@@ -325,49 +386,73 @@ def evaluate(root: str, *, base: str, head: str, body: str | None) -> dict[str, 
                 problems.append("PR body section 'Removed or weakened tests or policy' says none, "
                                 f"but the diff removes or weakens tests in: {', '.join(files)}")
             else:
-                undeclared = [path for path in files if path not in section]
+                undeclared = [path for path in files if not _declared(section, path)]
                 if undeclared:
                     problems.append("PR body section 'Removed or weakened tests or policy' does not "
                                     f"name: {', '.join(undeclared)}")
     except IntegrityError as error:
         problems.append(f"test-integrity cannot read the diff (fail-closed): {error}")
     return {"verdict": "fail" if problems else "pass", "losses": found,
-            "undeclared": undeclared, "problems": problems, "body_checked": body is not None}
+            "undeclared": undeclared, "problems": problems, "body_checked": body is not None,
+            "body_status": "supplied" if body is not None else "unavailable-local"}
 
 
-def _pr_body(args: argparse.Namespace) -> str | None:
-    if args.body_file:
-        with open(args.body_file, encoding="utf-8") as handle:
-            return handle.read()
-    event = os.environ.get("GITHUB_EVENT_PATH")
-    if args.event_body and event and os.path.isfile(event):
-        with open(event, encoding="utf-8") as handle:
-            pull_request = json.load(handle).get("pull_request")
-        if pull_request is not None:
-            return pull_request.get("body") or ""
-    return None
+def _live_body(head: str, base: str) -> str:
+    """Fetch current PR data, not the possibly stale webhook body."""
+    repo = os.environ.get("REPO", "")
+    number = os.environ.get("PR_NUMBER", "")
+    token = os.environ.get("GH_TOKEN", "")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or not re.fullmatch(r"[1-9][0-9]*", number) or not token:
+        raise IntegrityError("live PR API context missing or malformed")
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/pulls/{number}",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        raise IntegrityError("live PR API response is not an object")
+    for name, sha in (("head", head), ("base", base)):
+        ref = data.get(name)
+        if not isinstance(ref, dict) or ref.get("sha") != sha:
+            raise IntegrityError(f"live PR {name} missing or moved; rerun for current commits")
+    if "body" not in data or (data["body"] is not None and not isinstance(data["body"], str)):
+        raise IntegrityError("live PR body missing or malformed")
+    return data["body"] or ""
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="test-integrity")
-    parser.add_argument("--base", required=True)
-    parser.add_argument("--head", required=True)
-    parser.add_argument("--body-file", help="PR body to cross-check (G6)")
-    parser.add_argument("--event-body", action="store_true", help="read the PR body from $GITHUB_EVENT_PATH")
+    parser.add_argument("--base", required=True, help="full base commit SHA")
+    parser.add_argument("--head", required=True, help="full head commit SHA")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--body-file", help="supplied PR body; omission is local reporting only")
+    group.add_argument("--live-body", action="store_true", help="fetch current PR body (required in CI)")
     args = parser.parse_args(argv)
-    root = os.getcwd()
     try:
-        base = _git(root, "rev-parse", "--verify", args.base + "^{commit}").strip()
-        head = _git(root, "rev-parse", "--verify", args.head + "^{commit}").strip()
-    except IntegrityError as error:
-        base, head = "", ""
-        print(f"::error::{error}", file=sys.stderr)
-    result = evaluate(root, base=base, head=head, body=_pr_body(args))
+        if not SHA.fullmatch(args.base) or not SHA.fullmatch(args.head):
+            raise IntegrityError("base/head must be full 40-char SHAs")
+        for sha in (args.base, args.head):
+            if _git(os.getcwd(), "rev-parse", "--verify", sha + "^{commit}").strip() != sha:
+                raise IntegrityError("revision is not a commit")
+        if args.live_body:
+            body = _live_body(args.head, args.base)
+        elif args.body_file:
+            with open(args.body_file, encoding="utf-8") as handle:
+                body = handle.read()
+        else:
+            body = None
+        result = evaluate(os.getcwd(), base=args.base, head=args.head, body=body)
+        if args.live_body:
+            result["body_status"] = "live"
+    except (IntegrityError, OSError, ValueError) as error:
+        result = {"verdict": "fail", "losses": [], "undeclared": [],
+                  "problems": [f"test-integrity input unavailable (fail-closed): {type(error).__name__}"],
+                  "body_checked": False, "body_status": "unavailable-error"}
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    for loss in result["losses"]:
-        print(f"[test-integrity] {loss['kind']}: {loss['file']}: {loss['detail']}", file=sys.stderr)
+    # JSON-escape untrusted filenames/details: no raw workflow commands in logs.
     for problem in result["problems"]:
-        print(f"::error::{problem}", file=sys.stderr)
+        print(json.dumps(problem), file=sys.stderr)
     return 0 if result["verdict"] == "pass" else 1
 
 

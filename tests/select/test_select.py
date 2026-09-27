@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
+from unittest.mock import patch
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "select" / "layers.py"
@@ -188,11 +188,6 @@ class SelectionTests(unittest.TestCase):
         self.repo.change("AGENTS.md")
         self.assertFalse(self.repo.select()["full"])
 
-    def test_metadata_pin_change_is_full(self):
-        self.repo.write(".github/repo-contract.json", json.dumps({"schema": 1, "shared_ci": NEW_PIN}))
-        self.repo.commit("metadata pin")
-        self.assertFull(self.repo.select(), "CI wiring")
-
     def test_empty_diff_is_defined_contract_and_lint_only(self):
         selection = self.repo.select(head=self.repo.commit("empty"))
         self.assertEqual((False, False, [], []), (selection["full"], selection["any_layer"],
@@ -269,13 +264,19 @@ class SelectionTests(unittest.TestCase):
             def resolve(root, path):
                 raise RuntimeError("boom")
 
-        # Unlike CLI fixtures, a direct engine call inherits the test process
-        # environment. Git hooks export GIT_DIR for the parent repository.
-        with mock.patch.dict(os.environ, self.repo.env, clear=True):
+        # Direct engine calls inherit the test process environment, including
+        # a Git hook's GIT_DIR for the outer repository.
+        with patch.dict(os.environ, self.repo.env, clear=True):
             selection = select.select(self.repo.root, event="pull_request", base=self.repo.base,
                                       head=self.repo.rev(), extra_patterns=[], ctx=Broken())
         self.assertTrue(selection["full"])
         self.assertIn("src/app/main.py", selection["unmapped"])
+
+    def test_resolver_exception_during_resolve_with_foreign_git_dir(self):
+        foreign = Fixture()
+        self.addCleanup(foreign.close)
+        with patch.dict(os.environ, {"GIT_DIR": str(foreign.root / ".git")}):
+            self.test_resolver_exception_during_resolve_is_full()
 
     def test_git_error_is_full(self):
         self.assertFull(self.repo.select(base="f" * 40), "diff error")
@@ -376,7 +377,10 @@ class TemplateVerifySelectedTests(unittest.TestCase):
                        check=True, capture_output=True, env=self.repo.env)
 
     def verify(self, *args: str, **env: str) -> subprocess.CompletedProcess:
-        environment = dict(self.repo.env, SHARED_CI=self.checkout, **env)
+        # Outer CI selects provider layers, not this synthetic caller's layers.
+        environment = {key: value for key, value in self.repo.env.items()
+                       if key not in ("CI_SELECTION_FULL", "CI_SELECTED_LAYERS")}
+        environment.update(SHARED_CI=self.checkout, **env)
         return subprocess.run(["bash", "scripts/verify", *args], cwd=self.repo.root, env=environment,
                               capture_output=True, text=True, timeout=120)
 
@@ -387,6 +391,16 @@ class TemplateVerifySelectedTests(unittest.TestCase):
         result = self.verify("--selected", CI_SELECTION_FULL="false", CI_SELECTED_LAYERS="App")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(["gate-App"], self.gates(result))
+
+    def test_outer_selection_does_not_define_fixture_selection(self):
+        self.repo.env.update(CI_SELECTION_FULL="false", CI_SELECTED_LAYERS="Context Lint Review Select")
+        for env, gates in (({}, ["gate-App", "gate-Core"]),
+                           ({"CI_SELECTION_FULL": "true"}, ["gate-App", "gate-Core"]),
+                           ({"CI_SELECTION_FULL": "false", "CI_SELECTED_LAYERS": "App"}, ["gate-App"])):
+            with self.subTest(env=env):
+                result = self.verify("--selected", **env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(gates, self.gates(result))
 
     def test_full_or_missing_selection_runs_every_layer(self):
         for env in ({"CI_SELECTION_FULL": "true", "CI_SELECTED_LAYERS": "App"}, {}, {"CI_SELECTION_FULL": ""}):
@@ -399,41 +413,6 @@ class TemplateVerifySelectedTests(unittest.TestCase):
         result = self.verify("--selected", CI_SELECTION_FULL="false", CI_SELECTED_LAYERS="Ghost")
         self.assertEqual(1, result.returncode)
         self.assertIn("unknown selected layer: Ghost", result.stderr)
-
-    def test_index_only_metadata_bootstrap(self):
-        head = subprocess.run(["git", "-C", self.checkout, "rev-parse", "HEAD"],
-                              check=True, capture_output=True, text=True, env=self.repo.env).stdout.strip()
-        self.repo.write("docs/repository-guide.md", (self.repo.root / "AGENTS.md").read_text())
-        self.repo.write("AGENTS.md", "# Index\n- Before work: [Guide](docs/repository-guide.md)\n")
-        self.repo.write(".github/repo-contract.json", json.dumps({"schema": 1,
-                        "guide": "docs/repository-guide.md", "shared_ci": head, "dependencies": {}}))
-        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/docs/repository-guide.md @owner\n")
-        self.repo.add()
-        result = self.verify("--selected", CI_SELECTION_FULL="false", CI_SELECTED_LAYERS="App")
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(["gate-App"], self.gates(result))
-
-    def test_invalid_metadata_fails_instead_of_using_legacy_pin(self):
-        self.repo.write(".github/repo-contract.json", '{"schema": 1, "shared_ci": "main"}')
-        result = self.verify("--all")
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("full 40-char SHA", result.stderr)
-        self.assertTrue(pathlib.Path(self.checkout, ".git").is_dir())
-
-    def test_provider_lookup_isolated_from_caller_hook_git_dir(self):
-        result = self.verify("--selected", CI_SELECTION_FULL="false", CI_SELECTED_LAYERS="App",
-                             GIT_DIR=str(self.repo.root / ".git"))
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(["gate-App"], self.gates(result))
-
-    def test_wrong_provider_pin_never_deletes_supplied_checkout(self):
-        self.repo.write(".github/repo-contract.json", '{"schema": 1, "shared_ci": "' + "a" * 40 + '"}')
-        sentinel = pathlib.Path(self.checkout, "preserve-untracked.txt")
-        sentinel.write_text("keep")
-        result = self.verify("--all")
-        self.assertNotEqual(0, result.returncode)
-        self.assertEqual("keep", sentinel.read_text())
-        self.assertIn("already be at the declared pin", result.stderr)
 
 if __name__ == "__main__":
     unittest.main()

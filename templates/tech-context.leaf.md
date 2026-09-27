@@ -13,5 +13,14 @@ red_lines:
 
 # Core
 
-Responsibility, data flow and constraints of this layer. Keep facts here, not
-in AGENTS.md. `scripts/context/run Core --gate test` runs a gate.
+## Responsibility and interfaces
+
+Describe this layer's stable responsibility, public interfaces, data flow and
+excluded concerns. Adapt the example paths/commands to the repository; include
+tests in `owns` even when they live outside the implementation directory.
+
+## Verification
+
+The declared gates and repository import-boundary checks verify this layer.
+List any missing checks as gaps; a dependency declaration alone does not prove
+imports obey it. Keep these facts here, not in AGENTS or Planner instructions.
