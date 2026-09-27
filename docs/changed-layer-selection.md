@@ -41,7 +41,9 @@ the last push, so a follow-up commit cannot drop lanes an earlier commit needs.
 **Empty diff and support-only diff** (for example docs only): no layer is
 selected (`full=false`, `any_layer=false`, `layers=[]`). The layer lanes
 short-circuit; `contract` (layer map + repository contract) and
-`workflow-lint` always run, and the aggregate still checks the PR body.
+`workflow-lint` still run when enabled, and the aggregate still checks the PR
+body when configured. Enabled [test integrity](test-integrity.md#workflowaggregate-contract)
+also runs independently of layer selection, including support-only changes.
 
 Outputs (`select.yml` and `quality.yml`'s `select` job):
 
@@ -49,10 +51,53 @@ Outputs (`select.yml` and `quality.yml`'s `select` job):
 | --- | --- |
 | `full` | `true` / `false` |
 | `any-layer` | `true` when at least one layer runs (always `true` when `full`) |
-| `layers` | JSON list of selected layer IDs (every layer when `full`) |
+| `layers` | JSON list of selected layer IDs; on a full run, all known layers (possibly empty if loading failed or mode is disabled). `full` takes precedence over membership. |
 | `layers-space` | the same, space separated |
 | `reason` | one line, e.g. `changed layers: VoxDomain; dependents: VoxApplication, …` |
 | `selection` | full JSON record: mode, event, base, head, layers, triggers, changed/unmapped paths (capped at 200 each, with exact `*_count`) |
+
+### CLI and workflow interface
+
+Run the pinned selector from the caller Git checkout with Python 3.9+ and Git.
+Set the variables to the reviewed provider checkout and the PR's full base/head
+SHAs; ensure their merge-base history is available. This illustrative invocation
+does not execute a consumer's gates:
+
+```sh
+python3 "$SHARED_CI_CHECKOUT/scripts/select/layers.py" \
+  --event pull_request --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" \
+  --mode changed-only --force-full-paths 'config/**'
+```
+
+`--event` is required. `--base`/`--head` default to empty, which forces a full
+fallback for PR selection. `--mode` is `changed-only` by default; `disabled`
+returns a full-run record without reading the diff. `--force-full-paths`
+defaults empty and accepts whitespace/comma-separated patterns. Optional
+`--github-output` and `--step-summary` append Actions outputs and a Markdown
+summary to the supplied files. The unabridged JSON goes to stdout; only the
+Actions selection record caps path/trigger lists.
+
+Exit 0 means a selection was emitted, including a full fallback for an error;
+exit 2 denotes argument usage errors. Output-file/process errors can terminate
+nonzero; consumers must not interpret missing output as an empty selection.
+
+The standalone `select.yml` always uses changed-only mode and accepts
+`force-full-paths` (default empty). Its workflow outputs are the table above.
+In `quality.yml`, `changed-only` defaults false and the internal `select` job
+has those fields; the reusable quality workflow itself exposes only `selection`
+and `tested-sha` (the latter only after aggregate passes). Other workflow
+inputs/defaults remain authoritative in the [workflow source](../.github/workflows/quality.yml).
+
+### Failure routes
+
+Inspect `full`, `reason` and `triggers` before interpreting `layers`. A resolver,
+Git or revision error emits a full fallback even if the known layer list is
+empty. Repair the caller history/map/input; do not convert uncertainty to a
+short-circuit. If the select job fails or its output is missing/malformed,
+command lanes fall back to full work and aggregate can still fail the run.
+An exit-0 fallback is not evidence that changed-only resolution succeeded.
+For a required check that never reports, inspect the step-level lane pattern
+below.
 
 ## 2. Required-check-safe lanes
 
@@ -136,7 +181,11 @@ The aggregate output and the job summary record the selection (`mode`,
 ## Compatibility
 
 `changed-only` defaults to `false`. Then `select` runs in `disabled` mode
-(`full=true`, the diff is not read), every lane has `ran=true`, and the gate
-behaves as in v0.1.0. v0.1.0 callers keep working with no edits; their
-`quality / aggregate` check name is unchanged. The one visible difference is
-a new `quality / select` job in the run.
+(`full=true`, the diff is not read) and enabled command lanes do not
+short-circuit. Selection itself preserves the prior full-run command behavior
+and the `quality / aggregate` name, while adding `quality / select`.
+
+The default-on `test-integrity` input is separate: it runs even when
+`changed-only` is false and can reject previously accepted test losses that
+lack a per-file rationale. Selection compatibility is not a claim that the
+integrity gate is policy-neutral; see [test integrity](test-integrity.md).

@@ -97,6 +97,10 @@ class AggregateNegativeTests(unittest.TestCase):
         self.assertFails(with_lane("verify", result=""), "'unknown'")
         self.assertFails(with_lane("verify", result="neutral"), "'neutral'")
 
+    def test_selected_test_integrity_failure_fails(self):
+        data = with_lane("test-integrity", selected=True, result="failure", tested_sha=HEAD)
+        self.assertFails(data, "selected lane test-integrity result is 'failure'")
+
     def test_unselected_lane_failure(self):
         self.assertFails(with_lane("build", result="failure"), "unselected lane build")
 

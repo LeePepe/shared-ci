@@ -36,6 +36,8 @@ itself is unavailable. One-contract work may select its `doc.*` or `cap.*` ID.
 | `evaluate_policy` | [Policy contract](policy-validation-contract.md), [`validate.py`](../scripts/policy/validate.py) | [Deterministic failure order](policy-validation-contract.md#deterministic-failure-order-and-kinds), then [caller trust](policy-validation-contract.md#caller-trust-assumptions-and-limits). |
 | `aggregate_6dq` | [Quality contract](quality-aggregation-contract.md), [`aggregate.py`](../scripts/quality/aggregate.py) | [State machine and findings](quality-aggregation-contract.md#exact-state-machine-and-findings), then [interface and trust](quality-aggregation-contract.md#interface-and-trust). |
 | Committed registry resolution | [Registry contract](registry-resolution-contract.md), [`resolve.py`](../scripts/contracts/resolve.py) | [Fixed findings and precedence](registry-resolution-contract.md#errors); a repair pointer is not permission to fetch/install. |
+| Changed-layer selection | [Selection contract and CLI](changed-layer-selection.md#cli-and-workflow-interface), [`layers.py`](../scripts/select/layers.py) | [Failure routes](changed-layer-selection.md#failure-routes); a full fallback is not permission to narrow required checks. |
+| Test-integrity lane | [Integrity contract and CLI](test-integrity.md#cli-and-output), [`test_integrity.py`](../scripts/quality/test_integrity.py) | [Limits and recovery](test-integrity.md#limits-and-recovery); test changes need a per-file rationale and ordinary AI review, not Owner approval. |
 
 Schemas and fixture pointers live in those contracts and the integration page;
 this map does not redefine fields, thresholds or exception eligibility. Internal

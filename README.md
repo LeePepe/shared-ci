@@ -16,6 +16,7 @@ the docs, schemas, templates and engines all come from that same commit.
 | Layer-map resolver + audit | [`scripts/context/`](scripts/context/) ([contract](docs/context-cli-contract.md)) | `audit`, `resolve`, `layers`, `field`, `contexts`, `run`. Reads the repo-kit `tech-context.md` layer map, and still reads legacy `CONTEXT.md` trees. For repo-kit callers, `audit` also checks the repository contract |
 | Quality gate | [`.github/workflows/quality.yml`](.github/workflows/quality.yml) | Reusable. Runs per-repo command lanes (verify/lint/build/test) plus the contract audit and workflow-lint, then a **fail-closed `aggregate`** job: selected lanes must be `success` on the PR head SHA, unselected lanes must be `success`/`skipped`, and the PR body must fill every template section |
 | Changed-layer selection (v0.2.0) | [`scripts/select/`](scripts/select/), [`select.yml`](.github/workflows/select.yml) ([contract](docs/changed-layer-selection.md)) | Opt-in `changed-only: true`. Maps the PR diff (merge-base to head) to layers plus their dependents with the pinned resolver. It falls back to a full run for unmapped paths, manifests and lockfiles, `.github/**`, `scripts/verify`, `scripts/ci/**`, layer maps, pin changes, non-PR events and any error. Unselected lanes short-circuit with `not selected: <reason>` and succeed, so required checks always report. `select.yml` gives the same outputs to callers' own matrix lanes |
+| Test integrity | [`scripts/quality/test_integrity.py`](scripts/quality/test_integrity.py), `quality / test-integrity` ([contract](docs/test-integrity.md)) | Default-on, independently of layer selection. Detects whole-PR test losses and requires a per-file rationale in the PR body; test changes need ordinary AI review, not Owner approval or a ledger. The contract documents the heuristic limits |
 | AI review | [`codex-review.yml`](.github/workflows/codex-review.yml), [`kimi-review.yml`](.github/workflows/kimi-review.yml) | Reusable, run by `pull_request_target` on a self-hosted runner that has a local CLI. Fork PRs never reach that runner, and PR code is never checked out or executed (the diff is data). codex is a gate: it comments and fails on critical/high findings. kimi is advisory and never fails. Both prompts include layer ownership and the allowed dependency direction from the resolver |
 | workflow-lint | [`.github/workflows/workflow-lint.yml`](.github/workflows/workflow-lint.yml), [`scripts/lint/workflows.py`](scripts/lint/workflows.py) | Rejects shared-ci refs that are not full SHAs, self-hosted jobs without the fork guard, and PR-head checkout under `pull_request_target` |
 | Ruleset as code | [`templates/ruleset.json`](templates/ruleset.json), [`scripts/ruleset/`](scripts/ruleset/) | The default-branch ruleset is part of the contract. `plan.py` prints old → new against the live rules and keeps existing required checks unless they are explicitly mapped. `apply.sh` applies only with `--apply`, and only after Owner approval, then reads the result back |
@@ -51,8 +52,9 @@ mixed or do not match.
 shared-ci runs on its own gate. [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 calls `quality.yml` pinned to an **earlier** commit of this repository, never
 the commit under test, and its `verify` lane runs [`scripts/verify`](scripts/verify).
-That script runs every self-test (aggregate, workflow-lint, contract, resolver
-and review fixtures), the self-applied audit and the lint. Local entry:
+That script runs the context, repository-contract, lint, review, ruleset,
+selection, gate, integrity, policy and pure-quality suites plus self-audit/lint.
+The separately admitted registry suites are not included. Local entry:
 `scripts/verify`, which the pre-push hook also calls.
 
 | Task | Entry |
@@ -61,6 +63,7 @@ and review fixtures), the self-applied audit and the lint. Local entry:
 | Locate a contract by task | [AI usage](docs/ai-usage.md) |
 | Connect or migrate a caller | [Integration and migration](docs/integration-and-migration.md) |
 | Run only changed layers in CI | [Changed-layer selection](docs/changed-layer-selection.md) |
+| Diagnose or explain a test loss | [Test integrity](docs/test-integrity.md) |
 | Recover source, configuration or evidence | [Disaster recovery](docs/disaster-recovery.md) |
 
 Requirements: Python 3.9+ (stdlib only), Git and a POSIX shell.
