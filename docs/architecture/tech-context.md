@@ -1,7 +1,7 @@
 ---
 layer: _root
 support:
-  - patterns: ["*.md", ".gitignore", "docs/**", "ai/**", "examples/**", "templates/**", ".github/**", ".githooks/**", "scripts/verify"]
+  - patterns: ["*.md", "LICENSE", ".gitignore", "docs/**", "ai/**", "examples/**", "templates/**", ".github/**", ".githooks/**", "scripts/verify"]
     reason: contracts, documentation, templates and CI wiring; verified by scripts/verify and the contract audit
 red_lines:
   - Engines are stdlib-only Python 3.9+, Git and POSIX shell; no third-party packages.
