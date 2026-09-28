@@ -5,7 +5,7 @@
 1. `.specify/memory/constitution.md` — non-negotiable principles (if present)
 2. `docs/architecture/tech-context.md` — layer table: layer → paths → depends_on
 3. Relevant leaf `tech-context.md` — layer responsibilities, interfaces and verification
-4. `docs/development.md` — repository development steps, PR work units and verification/review sources
+4. `docs/development.md` — repository development steps, goal-based PR kinds and verification/review sources
 
 ## Protocol
 
@@ -33,5 +33,5 @@ the constitution when present, and the pinned protocol above.
 
 ## Delivery
 
-[PR work units](docs/development.md#pr-work-units),
+[PR kinds](docs/development.md#pr-kinds),
 [PR template](.github/pull_request_template.md) and the pinned protocol above.

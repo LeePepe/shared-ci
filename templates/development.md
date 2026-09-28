@@ -1,7 +1,7 @@
 # Development guide
 
-<!-- Place at docs/development.md or adapt an existing guide. Replace example
-units with this repository's real paths, commands and review pointers. -->
+<!-- Place at docs/development.md or adapt an existing guide. Adapt PR kinds
+with this repository's real commands and review pointers. -->
 
 ## Architecture
 
@@ -11,20 +11,29 @@ interfaces and verification commands. Read those sources for the change at hand.
 The pinned shared protocol/contract reached through AGENTS defines the common
 development rules; this guide records the repository-specific choices.
 
-## PR work units
+## PR kinds
 
-| Unit | Path source | Permitted companion changes | Verification / review |
+One goal per PR: start `Intent` with `After this PR, <observable outcome>`.
+"And" between unrelated outcomes means two PRs. Layers are review signals, not
+PR scope; ownership stays in tech-context. Every PR head passes `scripts/verify`.
+There is no universal line/file ceiling. Follow-ups become new PRs/tasks.
+
+| Kind | What belongs together | Keep separate from | Verification / review |
 | --- | --- | --- | --- |
-| Core | Core leaf `owns` | Required behaviour tests and API documentation | Core gates; repository architecture/code review |
-| App | App leaf `owns` | Required behaviour tests and feature documentation | App gates and affected dependents; code review |
-| CI | Repository workflow/hook/verify entry points | Tests and docs of that wiring change | Workflow lint and full verification; protected-path review |
-| Docs / spec | One documentation topic or requirement/spec | Its diagrams and examples | Documentation checks/review; no unrelated implementation |
-| Review / policy | Repository's actual policy and reviewer-configuration paths | Policy regression tests and usage docs | Policy checks and existing protected-path review |
+| Mechanical | Rename/move/format/generated/codemod for one goal | Behavioural changes | Existing behaviour tests; code review |
+| Dependency / pin | Manifest/lockfile/shared-ci pin and necessary compatibility evidence | Non-trivial adaptation | Full verification; Owner review |
+| Governance | AGENTS, policy, ruleset, CI wiring, CODEOWNERS paths for one rule, with tests/docs | Feature code | Policy checks, workflow lint as applicable, full verification; Owner review |
+| Behaviour / feature slice | One observable outcome with required tests and implementation docs | Mechanical changes, dependency/pin bumps, governance, unrelated features | Affected layer/dependent gates; code review |
+| Interface-first | Cross-layer: lower-layer interface + tests + a real or test usage first | Upward adoption that can follow separately | Interface/compatibility tests; architecture/code review |
+| Docs / spec | One documentation topic or requirement, its diagrams and examples | Unrelated implementation | Documentation checks/review; policy changes retain Owner review |
 
-Each PR serves one purpose within a unit. Refer to layer ownership instead of
-copying its glob lists here. Specify any additional companion paths precisely;
-sharing a unit is not permission to bundle independent requirements. For a
-cross-layer feature, document the interface and dependency-ordered PRs first.
+Test-only additions for existing behaviour may precede the change they protect.
+For cross-layer work, introduce the tested lower-layer interface with a usage,
+then adopt upward; small single-goal cross-layer PRs are fine. Touching several
+layers prompts "still one goal? interface-first order?". Use a flag or an
+unused-but-tested path when adoption needs several steps. Stack dependent PRs
+under the pinned protocol: review in parallel, merge in order, then retarget and
+rebase after each squash merge. Combine or reorder slices that cannot build alone.
 
 ## Verification and review sources
 
