@@ -245,7 +245,7 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
         self.assertIn("Y = 3", prompt)
 
     def owner_comment(self, **overrides):
-        return json.dumps(dict(dict(id=17, user_id=1001, created_at="2026-09-28T10:00:00Z",
+        return json.dumps(dict(dict(id=17, user_id=1001, user_type="User", created_at="2026-09-28T10:00:00Z",
                                     updated_at="2026-09-28T10:00:00Z",
                                     body=f"For {self.head}: accept this scoped test policy exception."), **overrides))
 

@@ -31,17 +31,22 @@ def parse_records(output: str) -> list[dict]:
         if (not isinstance(record, dict)
                 or any(type(record.get(key)) is not int for key in ("id", "user_id"))
                 or any(not isinstance(record.get(key), str)
-                       for key in ("created_at", "updated_at", "body"))):
+                       for key in ("user_type", "created_at", "updated_at", "body"))):
             raise ValueError("Owner decision comment record has missing fields or wrong types.")
         records.append(record)
     return records
 
 
 def admit(records: list[dict], owner_id: int, head_sha: str) -> list[dict]:
-    """Select decisions by numeric author, exact head token and unedited timestamp."""
+    """Select decisions by human numeric author, exact head token and unedited timestamp.
+
+    Bot/Organization authors are rejected even when the ID matches, so an App or
+    agent account can never authorize its own exceptions.
+    """
     token = re.compile(r"(?<![0-9a-fA-F])" + re.escape(head_sha) + r"(?![0-9a-fA-F])")
     decisions = [record for record in records
                  if type(record["user_id"]) is int and record["user_id"] == owner_id
+                 and record["user_type"] == "User"
                  and token.search(record["body"])
                  and record["created_at"] == record["updated_at"]]
     if len(decisions) > MAX_DECISIONS:
@@ -91,7 +96,7 @@ def main() -> int:
     try:
         result = subprocess.run(
             ["gh", "api", "--paginate", endpoint, "--jq",
-             ".[] | {id: .id, user_id: .user.id, created_at: .created_at, updated_at: .updated_at, body: .body}"],
+             ".[] | {id: .id, user_id: .user.id, user_type: .user.type, created_at: .created_at, updated_at: .updated_at, body: .body}"],
             capture_output=True, encoding="utf-8", check=True, timeout=60)
     except (OSError, subprocess.SubprocessError, UnicodeError):
         print("owner-decisions: PR comment API failed or returned invalid UTF-8.", file=sys.stderr)

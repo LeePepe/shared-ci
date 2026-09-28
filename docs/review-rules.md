@@ -58,7 +58,10 @@ The default is empty: no comment API call is made. Kimi does not consume these
 decisions. The trusted workflow reads comments at run time with its workflow
 token; it never executes or reads PR-head code to obtain them.
 
-A comment qualifies only when its author ID matches, its body names the **full
+`owner-user-id` must be a human Owner account, never an App/bot account:
+otherwise an agent acting as that account could authorize its own exceptions.
+A comment qualifies only when its author ID matches, the author's `user.type`
+is `User` (Bot and Organization authors are rejected even with a matching ID), its body names the **full
 current head SHA** as a standalone token (not adjacent to a hexadecimal digit),
 and `created_at == updated_at`. Edited comments are ignored: repository writers
 can edit others' comments, and REST exposes no editor identity. The Owner must
@@ -87,3 +90,9 @@ contents have no Owner-decision authority.
 To use: the Owner posts a **new comment containing the full head SHA and the
 decision**, then re-runs the `codex-review` job. A new push requires a new decision.
 This is review input, not a substitute for required checks or Owner approval.
+
+Known limitation: the unedited check compares second-resolution REST
+timestamps, so an edit within the same second as creation is indistinguishable
+from an unedited comment. A writer editing the Owner's comment would have to
+race creation within that second; exact editor identity would need GraphQL,
+which this reader deliberately does not use.

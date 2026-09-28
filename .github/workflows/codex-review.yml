@@ -29,7 +29,7 @@ on:
         type: string
         default: ""
       owner-user-id:
-        description: Numeric GitHub user ID of the Owner whose head-SHA-bound PR comments are trusted review input; empty disables.
+        description: Numeric GitHub user ID of the human Owner account (never an App/bot account) whose head-SHA-bound PR comments are trusted review input; empty disables.
         type: string
         default: ""
       max-diff-bytes:

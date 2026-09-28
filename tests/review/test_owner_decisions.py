@@ -23,7 +23,7 @@ CREATED = "2026-09-28T10:00:00Z"
 
 
 def record(**overrides):
-    return dict(dict(id=7, user_id=1001, created_at=CREATED, updated_at=CREATED,
+    return dict(dict(id=7, user_id=1001, user_type="User", created_at=CREATED, updated_at=CREATED,
                      body=f"For {HEAD}: accept the scoped policy exception."), **overrides)
 
 
@@ -36,13 +36,18 @@ class OwnerDecisionTests(unittest.TestCase):
         records = owner_decisions.parse_records("\n".join(json.dumps(r) for r in ignored + [valid]))
         self.assertEqual([valid], owner_decisions.admit(records, 1001, HEAD))
 
+    def test_non_human_author_with_matching_id_is_ignored(self):
+        for user_type in ("Bot", "Organization", "user", ""):
+            with self.subTest(user_type=user_type):
+                self.assertEqual([], owner_decisions.admit([record(user_type=user_type)], 1001, HEAD))
+
     def test_invalid_json_or_record_types_fail_closed(self):
         for raw in ("not json", "\n", "[]", "null", "true", "{}",
                     json.dumps(record()) + "\n{broken"):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 owner_decisions.parse_records(raw)
         for field, values in (("id", [True, "7", None]), ("user_id", [True, "1001", 1001.0]),
-                              ("created_at", [None, 1]), ("updated_at", [[], False]),
+                              ("user_type", [None, 1]), ("created_at", [None, 1]), ("updated_at", [[], False]),
                               ("body", [None, {}, 1])):
             for value in values:
                 with self.subTest(field=field, value=value), self.assertRaises(ValueError):
@@ -134,7 +139,7 @@ class OwnerDecisionCLITests(unittest.TestCase):
         self.assertIn("### Owner decision comment 7", result.stdout)
         self.assertIn("> For " + HEAD, result.stdout)
         self.assertEqual(["api", "--paginate", "repos/o/r/issues/7/comments?per_page=100", "--jq",
-                          ".[] | {id: .id, user_id: .user.id, created_at: .created_at, updated_at: .updated_at, body: .body}"],
+                          ".[] | {id: .id, user_id: .user.id, user_type: .user.type, created_at: .created_at, updated_at: .updated_at, body: .body}"],
                          (self.root / "called").read_text().splitlines())
 
     def test_empty_configuration_skips_validation_and_api(self):
