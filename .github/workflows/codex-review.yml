@@ -8,6 +8,7 @@ name: codex-review
 #   * review scripts come from this shared-ci revision (job.workflow_sha).
 # Verdict: no blockers -> pass; critical/high blockers -> PR comment + failure;
 # tool/setup/parse errors -> PR comment + failure (fail closed).
+# Owner decisions are read at run time: re-run the job after the Owner comments.
 
 on:
   workflow_call:
@@ -25,6 +26,10 @@ on:
         default: codex
       rules-file:
         description: Base-tree file with repository review rules (default AGENTS.md).
+        type: string
+        default: ""
+      owner-user-id:
+        description: Numeric GitHub user ID of the Owner whose head-SHA-bound PR comments are trusted review input; empty disables.
         type: string
         default: ""
       max-diff-bytes:
@@ -76,6 +81,7 @@ jobs:
           CODEX_BIN: ${{ inputs.codex-bin }}
           CODEX_LAUNCHER: ${{ inputs.codex-launcher }}
           REVIEW_RULES_FILE: ${{ inputs.rules-file }}
+          OWNER_DECISION_USER_ID: ${{ inputs.owner-user-id }}
           REVIEW_MAX_BYTES: ${{ inputs.max-diff-bytes }}
         run: bash .shared-ci/scripts/review/codex-review.sh
 

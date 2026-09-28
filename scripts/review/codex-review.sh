@@ -13,7 +13,8 @@
 # Env: PR_NUMBER BASE_SHA HEAD_SHA BASE_REPO GH_TOKEN SHARED_CI_DIR
 # Optional: CODEX_BIN, CODEX_LAUNCHER (trusted base-tree argv prefix; receives CODEX_BIN and
 # the exec arguments and inserts `exec` itself), REVIEW_RULES_FILE, REVIEW_MAX_BYTES,
-# REVIEW_MARKER, CODEX_REVIEW_HOME.
+# REVIEW_MARKER, CODEX_REVIEW_HOME, OWNER_DECISION_USER_ID (numeric Owner ID;
+# empty/unset disables head-SHA-bound Owner decision comments).
 set -uo pipefail
 
 : "${PR_NUMBER:?}"; : "${BASE_SHA:?}"; : "${HEAD_SHA:?}"; : "${BASE_REPO:?}"; : "${SHARED_CI_DIR:?}"
@@ -49,6 +50,12 @@ git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null && git cat-file -e "$HEAD_SHA^{
 # Read the immutable base blob, never mutable worktree or PR-head instructions.
 python3 -B "$REVIEW_DIR/rules_input.py" "$BASE_SHA" "${REVIEW_RULES_FILE:-AGENTS.md}" >"$WORK/rules" \
     || fail_closed "Trusted-base repository rules are missing or invalid."
+
+# Fetch only through the trusted workflow token; do not read PR-head instructions.
+python3 -I -B "$REVIEW_DIR/owner_decisions.py" >"$WORK/owner" \
+    || fail_closed "Owner decision comments could not be verified (API or bound failure)."
+# Body lines are quoted, so only generated headers can contribute to this count.
+echo "[codex-review] admitted Owner decisions: $(grep -c '^### Owner decision comment ' "$WORK/owner")"
 
 git diff --no-ext-diff "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
     || git diff --no-ext-diff "$BASE_SHA..$HEAD_SHA" >"$WORK/diff" \
@@ -94,7 +101,8 @@ ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c
 
 PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
     TRUNCATED="" DIFF="$(cat "$WORK/diff")" \
-    python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" --rules-file "$WORK/rules")" \
+    python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" \
+        --rules-file "$WORK/rules" --owner-file "$WORK/owner")" \
     || fail_closed "Prompt rendering failed."
 
 EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
