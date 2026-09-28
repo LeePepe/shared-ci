@@ -26,13 +26,13 @@ Replace every `<40-char-sha>` with the same supported full lowercase provider
 SHA and `@OWNER` with the actual review owner. Choose real repository layer
 responsibilities, ownership (including tests), dependencies and gate commands;
 the Swift examples are not a mandatory architecture. Preserve an existing
-`docs/development.md` and its repository-defined PR units rather than replacing
+`docs/development.md` and its goal-based PR kinds rather than replacing
 it mechanically. Keep `.shared-ci/` ignored. Stage the generated files so that
 the audit can validate executable bits and tracked regular routes.
 
 The protected repository guide includes the complete shared protocol snapshot
 and a review-relevant extract of the development guide. Adapt that extract to
-the repository's real PR units and include all additional review policy inline.
+the repository's PR kinds and include all additional review policy inline.
 The development guide remains the authority for repository development choices;
 changes to those choices must update the reviewer extract in the same change.
 A tool-free reviewer cannot follow links. Both review callers therefore pass
@@ -89,7 +89,7 @@ selection runs all. Fixture selection state must not leak from provider CI.
 
 1. Record the existing coordinated caller pin/configuration and protection state.
 2. Publish/review the trusted guide prerequisite, then migrate metadata, index,
-   bootstrap, matching workflow pins, review routing and protection as one purpose.
+   bootstrap, matching workflow pins, review routing and protection as one goal.
 3. Run audit, `scripts/verify --all`, changed/selected paths, and the actual hook.
    Check malformed metadata, cache preservation and rendered complete reviewer
    input. Keep the same required checks; obtain current-head CI and Owner review.

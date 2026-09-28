@@ -4,7 +4,7 @@
 
 - Before changing files: [Repository guide](docs/repository-guide.md)
 - For ownership and dependencies: [Layer map](docs/architecture/tech-context.md)
-- For development and PR work units: [Development guide](docs/development.md)
+- For development and goal-based PR kinds: [Development guide](docs/development.md#pr-kinds)
 
 ## Protocol
 

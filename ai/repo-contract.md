@@ -122,17 +122,23 @@ contract, not invent a new layer model or PR policy for each assignment.
 | --- | --- |
 | Root `tech-context.md` | Layer inventory, dependency graph and reasoned support paths |
 | Each layer's `tech-context.md` | Responsibility, owned implementation/tests, interfaces, allowed dependencies and verification |
-| Development guide (normally `docs/development.md`) | PR work units, permitted companion changes, development/verification entry points and review routing |
+| Development guide (normally `docs/development.md`) | PR kinds, permitted companion changes, development/verification entry points and review routing |
 | Scripts, caller CI and CODEOWNERS | Executable project checks and effective review protection |
 | `AGENTS.md` | Task-oriented pointers to those sources, not copies of their rules |
 
 ### Define layers by responsibility
 
-- A layer is a stable code responsibility with explicit interfaces and allowed
-  dependencies. Packages/targets are evidence, not an automatic one-to-one rule:
-  one package may contain domain, state and presentation layers. Do not create
-  temporary layers just to fit a task or PR, or impose one stack's layer names
-  on every repository.
+- A layer is a unit with its own verification command and a dependency direction
+  that the build enforces. In Swift repos, default to one layer per SPM package
+  (or per target when a package holds genuinely separate responsibilities); the
+  app shell is its own layer; non-code areas (CI wiring, docs/spec, policy/review
+  config, tooling) are support areas, not layers. If you cannot name its gate
+  command and allowed dependencies, it is not a layer.
+- Layers serve context routing, CI/test selection and dependency direction,
+  not PR scope. Do not create temporary layers to fit a task or PR.
+- Role layers (`Types -> Config -> Repo -> Service -> Runtime -> UI`) are
+  optional dependency vocabulary. Enforce them only when a lint exists; never
+  use them for PR scope or task splitting.
 - Use the existing [tech-context format](../docs/context-cli-contract.md#simplified-tech-context-layer-map-repo-kit-format):
   unique layer ID, root-relative `owns`, `depends_on`, verification `gate` and
   `red_lines`. Put tests under the layer they exercise even when stored elsewhere.
@@ -146,26 +152,39 @@ contract, not invent a new layer model or PR policy for each assignment.
   ownership/dependencies, not arbitrary language imports. Record missing checks
   as gaps rather than claiming the declarations prove the implementation.
 
-### Define PR work units in the repository
+### Define PR scope by goal
 
-The development guide names the repository's PR units and, for each, references
-its layer/path source, allowed companion changes, verification and review policy.
-Use [the guide template](../templates/development.md) with actual repository paths.
-Code units refer to existing layer IDs; CI wiring, documentation/spec work and
-review/policy changes use their own supporting responsibilities, not fake layers.
+The development guide names PR kinds, permitted companion changes, verification
+and review policy. Use [the guide template](../templates/development.md#pr-kinds)
+with actual repository commands and review sources; layer ownership stays in
+tech-context.
 
-- One PR delivers one independently acceptable purpose within one such unit.
-  Independent requirements/spec work stay separate even within the same layer.
-  Required tests and implementation documentation travel with their code;
-  unrelated docs cleanup, CI changes or review-policy changes do not.
-- Cross-layer features become dependency-ordered PRs using the repository's
-  interfaces and permitted companion paths. Keep every step buildable/testable;
-  redesign the sequence if it cannot stand alone. A needed architecture or PR
-  boundary change is an explicit contract change under existing review policy,
-  not an implementer widening a label or a Planner inventing another layer.
-- The PR's existing `Intent` names the repository unit and the requirement/spec
-  or task when present. A direct agent needs no Dev Team task graph to follow
-  this contract. There is no separate author-defined path-allowlist form.
+- One goal per PR, acceptable or rejectable as a whole while leaving main
+  working. Start `Intent` with one sentence: `After this PR, <observable outcome>`.
+  If it needs "and" between unrelated outcomes, it is two PRs. Then name the PR
+  kind and link the requirement/spec/task when present. A direct agent needs no
+  Dev Team task graph or separate path-allowlist form.
+- Layers/units are review signals, not the scope unit. Touching several layers
+  prompts "still one goal? interface-first order?", not a layer-count rule.
+- Separate change kinds, even within one layer:
+  - mechanical (rename/move/format/generated/codemod) from behavioural changes;
+  - dependency/pin bumps from non-trivial adaptation; pin PRs retain Owner
+    review and full CI;
+  - governance (AGENTS, policy, ruleset, CI wiring, CODEOWNERS paths) from feature
+    code;
+  - test-only additions for existing behaviour may precede the change they
+    protect. Required tests and implementation documentation accompany code.
+- Cross-layer work is interface-first: add the lower-layer protocol/type/API
+  with tests and a real or test usage, then adopt it upward in dependency order.
+  Use a flag or unused-but-tested path when adoption needs several steps. Small,
+  single-goal cross-layer PRs are fine. Architecture changes remain explicit
+  contract changes under existing review, not task-local layers.
+- Aim for roughly 100–400 changed hand-written lines and a handful of directories;
+  above about 1,000 lines or 25 files, split or explain why not. Generated changes
+  and deletions carry less weight. These are review heuristics, not limits.
+- Every PR passes `scripts/verify` at its head. If a slice cannot build alone,
+  combine or reorder slices; never ship a broken intermediate. Dependent slices
+  may use stacked PRs under the protocol. Follow-ups become new PRs/tasks.
 - There is no universal line/file ceiling. Markdown, tests and support paths
   do not determine approval by extension; actual policy/gate/permission changes
   remain protected under the [protocol](agent-protocol.md#6-important-prs-need-the-owner).
@@ -177,11 +196,11 @@ review/policy changes use their own supporting responsibilities, not fake layers
 | Tracked-path coverage, overlaps, declared dependencies/cycles and table drift | Existing context audit / CI contract lane |
 | Real import boundaries, builds and behaviour | Repository-declared lint/build/test commands; local hooks and CI use the same entry |
 | Check selection and current-head evidence | Existing layer selection and aggregate; retain forced full runs and all required checks |
-| One purpose, appropriate PR unit and necessary companion changes | Existing planning/code review using the repository guide; not a new PRM scope report |
+| One goal, PR kind and necessary companion changes | Existing planning/code review using the repository guide; not a new PRM scope report |
 
 Record `enforced`, `manual`, `planned` or `N/A` with the actual command/evidence
-for each repository rule. The current aggregate does not infer PR purpose or
-validate the guide's PR-unit table; do not claim those are mechanical checks.
+for each repository rule. The current aggregate does not infer PR goals or
+validate the guide's PR-kinds table; do not claim those are mechanical checks.
 PRM consumes existing CI/review outcomes and manages delivery, not PR size.
 Updating this source does not deploy consumer pins, roles, directory-only
 schema/audit migrations or server protections.

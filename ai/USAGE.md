@@ -13,9 +13,10 @@ or human-readable release tag is not a shared-ci consumption pin.
 | Check supported interfaces | [COMPATIBILITY](COMPATIBILITY.md) | Each caller assumption compared with the target commit's contract |
 | Upgrade or roll back | [MIGRATION](MIGRATION.md) | Old/new pins, adaptations, negative checks and a compatible rollback target |
 | Change or diagnose an API | [API task map](../docs/ai-usage.md) | Exact interface, observed finding/status and its contract |
-| Develop in a consumer | [Agent protocol](agent-protocol.md), [repository contract](repo-contract.md) | Repository-defined PR unit, verification and required review at the tested SHA |
+| Develop in a consumer | [Agent protocol](agent-protocol.md), [repository contract](repo-contract.md) | One goal, repository PR kind, verification and required review at the tested SHA |
 
-The repository owns layer responsibilities, allowed dependencies and PR units.
+The repository owns layer responsibilities, allowed dependencies and PR kinds;
+each PR serves one goal, not one layer.
 AGENTS is the directory to those sources. The protocol applies to both Dev Team
 and other agents; it defines their different task entry paths without creating
 role-specific architecture rules. Ordinary test corrections need reasons,

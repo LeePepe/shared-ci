@@ -25,10 +25,13 @@ The `depends_on` column must equal each leaf's frontmatter (audit reports
 `layer_table_drift`). External dependencies are described in prose, not in
 `depends_on`.
 
-Adapt the example layers to stable responsibilities and interfaces, not package
-count. Executable tools under `scripts/` need an owner; they are not blanket
-support exclusions. Tests belong to the layer they exercise. For code kept in
-support paths, explain the boundary and its actual verification explicitly.
+Each layer needs its own verification command and build-enforced dependency
+direction. In Swift, default to one layer per SPM package, or per target for
+genuinely separate responsibilities; the app shell is its own layer. Non-code
+CI, docs/spec, policy/review config and tooling are support areas. Executable
+tools under `scripts/` still need ownership and explicit verification; broad
+support exclusions must not hide them. Tests belong to the layer they exercise.
 
-PR work units and permitted companion changes are in `docs/development.md`;
-they refer to this inventory rather than defining a second layer model.
+Layers serve context routing, CI/test selection and dependency direction, not
+PR scope. [PR kinds](../development.md#pr-kinds) and permitted companion changes
+follow one goal per PR; layer ownership stays here.
