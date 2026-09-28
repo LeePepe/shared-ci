@@ -21,6 +21,7 @@ jobs:
     with:
       rules-file: docs/repository-guide.md
       codex-launcher: ""   # e.g. "python3 scripts/ci/review-raven.py" (base-tree file)
+      owner-user-id: ""   # numeric ID of the human Owner account (never an App/bot); enables head-SHA-bound Owner decisions
 
   kimi-review:
     uses: LeePepe/shared-ci/.github/workflows/kimi-review.yml@<40-char-sha>

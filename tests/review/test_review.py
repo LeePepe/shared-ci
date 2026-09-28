@@ -85,6 +85,56 @@ class RenderPromptTests(unittest.TestCase):
         self.assertIn("Architecture conformance", self.TEMPLATE)
         self.assertIn("allowed direction", self.TEMPLATE)
 
+    def test_owner_placeholder_is_optional_and_defaults_off(self):
+        out = render_prompt.render(self.TEMPLATE, {})
+        self.assertIn("(Owner decision input is not configured for this repository.)", out)
+        legacy = self.TEMPLATE.replace("{{OWNER_DECISIONS}}", "")
+        render_prompt.render(legacy, {})  # Kimi/older templates do not require the new input.
+
+    def test_owner_and_rules_file_options_preserve_bytes_in_either_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            rules, owner = root / "rules", root / "owner"
+            rules.write_bytes(b"RULES\r\n{{OWNER_DECISIONS}}\n\n")
+            owner.write_bytes(b"OWNER\r\n{{DIFF}}\n\n")
+            options = [["--rules-file", str(rules), "--owner-file", str(owner)],
+                       ["--owner-file", str(owner), "--rules-file", str(rules)],
+                       ["--owner-file", str(owner)]]
+            for args in options:
+                with self.subTest(args=args):
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-B", str(REVIEW / "render_prompt.py"),
+                         str(REVIEW / "review-prompt.md"), *args], capture_output=True, timeout=10)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertIn(owner.read_bytes(), result.stdout)
+                    if "--rules-file" in args:
+                        self.assertIn(rules.read_bytes(), result.stdout)
+
+    def test_owner_cli_rejects_unknown_duplicate_missing_or_invalid_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / "input"
+            path.write_bytes(b"bad\xff")
+            for args, expected in ((["--other", str(path)], 2), (["--owner-file"], 2),
+                                   (["--owner-file", str(path)] * 2, 2),
+                                   (["--rules-file", str(path)] * 2, 2),
+                                   (["--owner-file", str(path)], 3),
+                                   (["--owner-file", str(path) + "missing"], 3)):
+                with self.subTest(args=args):
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-B", str(REVIEW / "render_prompt.py"),
+                         str(REVIEW / "review-prompt.md"), *args], capture_output=True, timeout=10)
+                    self.assertEqual(expected, result.returncode, result.stderr)
+                    self.assertEqual(b"", result.stdout)
+
+    def test_owner_cli_does_not_trust_ambient_environment_without_file(self):
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(REVIEW / "render_prompt.py"), str(REVIEW / "review-prompt.md")],
+            env=dict(os.environ, OWNER_DECISIONS="AMBIENT OWNER DECISION"),
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("AMBIENT OWNER DECISION", result.stdout)
+        self.assertIn("(Owner decision input is not configured for this repository.)", result.stdout)
+
 
 class ArchContextTests(unittest.TestCase):
     def test_reports_layers_direction_and_unmapped(self):
@@ -115,6 +165,10 @@ class ArchContextTests(unittest.TestCase):
 STUB_GH = """#!/bin/sh
 # Records publication attempts; faults are entirely offline.
 case "$*" in
+  *"per_page=100"*)
+    [ -n "${STUB_COMMENTS_FAIL:-}" ] && exit 1
+    printf '%s' "${STUB_COMMENTS:-}"
+    ;;
   *"--paginate"*) echo "${STUB_COMMENT_ID:-}" ;;
   *)
     method=""; prev=""
@@ -141,7 +195,10 @@ printf '%s' "$last" > "$STUB_OUT/prompt"
 printf '%s' "$STUB_VERDICT" > "$out"
 """
 STUB_KIMI = """#!/bin/sh
+prev=""
+for a in "$@"; do [ "$prev" = "-p" ] && printf '%s' "$a" > "$STUB_OUT/prompt"; prev="$a"; done
 [ -n "$STUB_FAIL" ] && exit 5
+printf '%s\\n' '{"role":"user","content":"review"}'
 printf '%s\\n' "{\\"role\\":\\"assistant\\",\\"content\\":$(printf '%s' "$STUB_VERDICT" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')}"
 """
 
@@ -172,6 +229,7 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
                    PR_NUMBER="7", BASE_SHA=self.base, HEAD_SHA=self.head, BASE_REPO="o/r",
                    SHARED_CI_DIR=str(REPO), STUB_OUT=str(self.out), STUB_VERDICT=verdict_json,
                    STUB_FAIL=fail, CODEX_REVIEW_HOME=str(self.out / "home"))
+        env.pop("OWNER_DECISION_USER_ID", None)
         env.update(overrides)
         result = subprocess.run(["bash", str(REVIEW / script)], cwd=self.repo.root, env=env,
                                 capture_output=True, text=True, timeout=60)
@@ -185,6 +243,67 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
         prompt = (self.out / "prompt").read_text()
         self.assertIn("src/app/main.py -> App", prompt)
         self.assertIn("Y = 3", prompt)
+
+    def owner_comment(self, **overrides):
+        return json.dumps(dict(dict(id=17, user_id=1001, user_type="User", created_at="2026-09-28T10:00:00Z",
+                                    updated_at="2026-09-28T10:00:00Z",
+                                    body=f"For {self.head}: accept this scoped test policy exception."), **overrides))
+
+    def test_codex_owner_decision_in_trusted_section_and_count_only_logged(self):
+        result, _ = self.run_script("codex-review.sh", json.dumps(PASS),
+                                    OWNER_DECISION_USER_ID="1001", STUB_COMMENTS=self.owner_comment())
+        self.assertEqual(0, result.returncode, result.stderr)
+        prompt = (self.out / "prompt").read_text()
+        section = prompt.split("## Owner decisions (verified author, head-bound)", 1)[1]
+        trusted = section.split("======== UNTRUSTED DATA BELOW", 1)[0]
+        self.assertIn("### Owner decision comment 17", trusted)
+        self.assertIn(f"> For {self.head}: accept this scoped test policy exception.", trusted)
+        self.assertIn("[codex-review] admitted Owner decisions: 1", result.stdout)
+        self.assertNotIn("accept this scoped", result.stdout + result.stderr)
+
+    def test_codex_wrong_author_owner_decision_absent(self):
+        result, _ = self.run_script("codex-review.sh", json.dumps(PASS), OWNER_DECISION_USER_ID="1001",
+                                    STUB_COMMENTS=self.owner_comment(user_id=2002))
+        self.assertEqual(0, result.returncode, result.stderr)
+        prompt = (self.out / "prompt").read_text()
+        self.assertNotIn("accept this scoped", prompt)
+        self.assertIn("(No Owner decision names the current head SHA.)", prompt)
+        self.assertIn("[codex-review] admitted Owner decisions: 0", result.stdout)
+
+    def test_codex_owner_api_failure_unavailable_before_model_even_with_empty_diff(self):
+        for head in (self.head, self.base):
+            with self.subTest(head=head):
+                result, comment = self.run_script("codex-review.sh", json.dumps(PASS), HEAD_SHA=head,
+                                                  OWNER_DECISION_USER_ID="1001", STUB_COMMENTS_FAIL="1")
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("unavailable", comment)
+                self.assertIn("Owner decision comments could not be verified", comment)
+                self.assertFalse((self.out / "prompt").exists())
+
+    def test_codex_owner_feature_off_keeps_existing_path(self):
+        result, _ = self.run_script("codex-review.sh", json.dumps(PASS), STUB_COMMENTS_FAIL="1")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("(Owner decision input is not configured for this repository.)",
+                      (self.out / "prompt").read_text())
+
+    def test_codex_owner_malformed_or_oversized_input_unavailable_before_model(self):
+        for comments in ("{bad json", self.owner_comment(body=self.head + " " + "x" * 4000),
+                         "\n".join(self.owner_comment(id=i) for i in range(6))):
+            with self.subTest(comments=comments[:60]):
+                result, comment = self.run_script("codex-review.sh", json.dumps(PASS),
+                                                  OWNER_DECISION_USER_ID="1001", STUB_COMMENTS=comments)
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("unavailable", comment)
+                self.assertFalse((self.out / "prompt").exists())
+
+    def test_kimi_does_not_fetch_owner_comments_and_still_renders(self):
+        result, comment = self.run_script("kimi-review.sh", json.dumps(PASS), OWNER_DECISION_USER_ID="1001",
+                                          STUB_COMMENTS_FAIL="1", STUB_COMMENTS=self.owner_comment())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("kimi advisory review: pass", comment)
+        prompt = (self.out / "prompt").read_text()
+        self.assertIn("(Owner decision input is not configured for this repository.)", prompt)
+        self.assertNotIn("accept this scoped", prompt)
 
     def test_codex_blockers_fail_with_comment(self):
         result, comment = self.run_script("codex-review.sh", json.dumps(CHANGES))

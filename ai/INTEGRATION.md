@@ -22,6 +22,12 @@ caller. Check [COMPATIBILITY](COMPATIBILITY.md) before choosing a surface.
 | Machine discovery | [Registry admission and distribution](../docs/registry-resolution-contract.md#tool-admission) | Resolver v1 needs its admitted standalone detached distribution, not a linked implementation worktree |
 | Policy and quality functions | [Source adapters](../docs/integration-and-migration.md#pure-functions) | No CLI/installer; caller owns reviewed import, decoding and trusted input provenance |
 
+Codex review accepts optional `owner-user-id` (numeric GitHub Owner ID), default
+empty/off and backward compatible. Configure it in the trusted caller; the Owner
+then posts a new, unedited decision naming the full current head SHA and re-runs
+the job. See [Owner decision comments](../docs/review-rules.md#owner-decision-comments)
+for admission limits and non-overridable red lines. Kimi does not consume it.
+
 ## Local context example
 
 From a caller Git root with tracked repo-kit metadata, set ADMITTED_PYTHON to
