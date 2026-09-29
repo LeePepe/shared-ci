@@ -7,8 +7,8 @@ shared-ci's repository-specific development and PR rules; AGENTS is its index.
 
 ## Protocol
 
-The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/af2f1c2ab7ed908ff3153c96793152150343e903/ai/agent-protocol.md)
-and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/af2f1c2ab7ed908ff3153c96793152150343e903/ai/repo-contract.md)
+The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/agent-protocol.md)
+and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/repo-contract.md)
 govern development. The local [protocol source](../ai/agent-protocol.md),
 [contract source](../ai/repo-contract.md) and surface contracts linked below are
 the candidate being developed, not an override of the pinned common rules.
@@ -182,8 +182,8 @@ Approved exceptions: none.
 
 [Repository metadata](../.github/repo-contract.json) is the machine authority:
 schema 1, guide `docs/repository-guide.md`, `shared_ci`
-`af2f1c2ab7ed908ff3153c96793152150343e903`, and an empty `dependencies` map.
-The [versioned provider documentation](https://github.com/LeePepe/shared-ci/tree/af2f1c2ab7ed908ff3153c96793152150343e903/ai/)
+`6e354f476bc53d68f0f09fc231d5cd938466af9c`, and an empty `dependencies` map.
+The [versioned provider documentation](https://github.com/LeePepe/shared-ci/tree/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/)
 describes that selected provider. Shared-ci is recorded only in `shared_ci`,
 not duplicated as a library entry. This self-adoption changes no product
 consumer pin and installs nothing.
@@ -232,11 +232,11 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 ## 2. Develop against the repository contract
 
 - Read the repository's layer map and development/PR guide under the
-  [repository development contract](https://github.com/LeePepe/shared-ci/blob/af2f1c2ab7ed908ff3153c96793152150343e903/ai/repo-contract.md#repository-development-contract).
-  Choose its existing PR unit for the requested outcome. Layer boundaries and
-  PR conventions belong to the repository, not to the agent's role.
-- **Dev Team:** Planner maps requirements/spec acceptance to tasks within those
-  units, passes the existing spec/plan gate, and TL dispatches FS. FS implements
+  [repository development contract](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/repo-contract.md#repository-development-contract).
+  Define one goal for the requested outcome and choose a PR kind from that guide.
+  Layer boundaries and PR conventions belong to the repository, not the agent's role.
+- **Dev Team:** Planner maps requirements/spec acceptance to single-goal tasks,
+  passes the existing spec/plan gate, and TL dispatches FS. FS implements
   the assigned task; a gap returns through TL to Planner. A task cannot redefine
   the repository's architecture or PR policy.
 - **Other agents:** follow the same repository contract directly for the user's
@@ -281,10 +281,12 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 What a PR must be:
 
-- **Base is the default branch.** A PR must be mergeable on its own. Do not
-  make it depend on another open PR being merged first.
-- **Repository-defined unit.** Follow the repository guide's PR conventions:
-  one purpose, an existing unit and its necessary tests/companion documentation.
+- **Declared base.** Use the default branch unless stacked. Each PR must be
+  mergeable once its declared base PR has merged; the final PR of a stack
+  targets the default branch.
+- **One goal.** Start `Intent` with `After this PR, <observable outcome>` as
+  one sentence. Choose the PR kind per the repository guide and include necessary
+  tests/companion documentation.
   Link the relevant requirement/spec and, for FS, the Planner task. Other sources
   do not need to create a Dev Team task to submit a PR.
 - **PR Manager handles lifecycle.** Follow existing required CI/review and
@@ -297,15 +299,23 @@ What a PR must be:
   (`git rebase --onto origin/main <old-base-tip>`), before it merges. A squash
   merge rewrites the base commits, so a stacked branch that is not rebased
   will conflict or carry duplicate changes.
-  Dependent slices wait for prerequisites to merge in order; this queue never
-  bypasses approvals or CI.
+  PRs may be reviewed in parallel, but dependent slices wait for prerequisites
+  to merge in order; this queue never bypasses approvals or CI.
+
+**Commits.** Use one logical step per commit with a Conventional Commit subject.
+Keep mechanical and behavioural steps in separate commits; put tests with or
+just before the code. Only the PR head must pass CI and `scripts/verify`, not
+every intermediate commit. When bisectable commits matter, optionally run
+`git rebase -x scripts/verify`. Fixup commits during review are fine. Merges stay
+squash: the PR is the atomic unit on main, and the PR title becomes the squash
+subject, so write it as a Conventional Commit subject.
 
 Fill in every section of the repository's PR template:
 
 | Section | Content |
 | --- | --- |
 | Existing behaviour | What the code does today, including behaviour that must be kept |
-| Intent | What changes and why; repository PR unit and requirement/spec/task link when present |
+| Intent | One-sentence goal first, then what changes and why; PR kind and requirement/spec/task link when present |
 | Compatibility | API/data/config compatibility, migrations, rollback |
 | Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |

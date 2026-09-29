@@ -12,7 +12,7 @@ import unittest
 from fixture import ContractRepo, OTHER, REPO, environment
 
 
-PROVIDER = "af2f1c2ab7ed908ff3153c96793152150343e903"
+PROVIDER = "6e354f476bc53d68f0f09fc231d5cd938466af9c"
 GUIDE = "docs/repository-guide.md"
 METADATA = ".github/repo-contract.json"
 SPEC = importlib.util.spec_from_file_location(
@@ -104,8 +104,13 @@ class SelfAdoptionTests(unittest.TestCase):
         for reviewer in ("codex", "kimi"):
             with self.subTest(reviewer=reviewer):
                 call = f"    uses: LeePepe/shared-ci/.github/workflows/{reviewer}-review.yml@{PROVIDER}\n"
-                self.repo.write(path, original.replace(
-                    call + f"    with:\n      rules-file: {GUIDE}\n", call))
+                start = original.index(call) + len(call)
+                line = f"      rules-file: {GUIDE}\n"
+                self.assertIn(line, original[start:])
+                removed = original[start:].replace(line, "", 1)
+                if removed.startswith("    with:\n") and not removed.startswith("    with:\n      "):
+                    removed = removed[len("    with:\n"):]
+                self.repo.write(path, original[:start] + removed)
                 self.assert_rejected("contract_ci", "review rules-file")
 
     def test_index_is_not_review_rules(self):
@@ -168,12 +173,15 @@ class SelfAdoptionTests(unittest.TestCase):
         self.assertEqual("${{ always() }}", gate["if"])
         self.assertEqual(["codex-review-target"], gate["needs"])
         self.assertEqual({}, gate["permissions"])
-        for job, reviewer in (("codex-review-target", "codex"), ("kimi-review", "kimi")):
+        codex_inputs = {"codex-bin": "/opt/homebrew/bin/codex", "rules-file": GUIDE,
+                        "owner-user-id": "13819054"}
+        for job, reviewer, inputs in (("codex-review-target", "codex", codex_inputs),
+                                      ("kimi-review", "kimi", {"rules-file": GUIDE})):
             with self.subTest(job=job):
                 self.assertEqual({
                     "if": "vars.SHARED_CI_REVIEW_RUNNER == 'true'",
                     "uses": f"LeePepe/shared-ci/.github/workflows/{reviewer}-review.yml@{PROVIDER}",
-                    "with": {"rules-file": GUIDE},
+                    "with": inputs,
                 }, review["jobs"][job])
 
 
