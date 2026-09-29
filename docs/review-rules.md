@@ -51,6 +51,11 @@ objects and stub model/GH commands, not hosted or product-adoption evidence.
 
 ## Owner decision comments
 
+PR title and description are fetched at review time as untrusted author input,
+never as instructions or Owner decisions; the body is capped at 8,000 UTF-8 bytes
+with a truncation marker. `review.yml` triggers on `opened`, `synchronize` and
+`reopened`, so a title/body-only edit does not re-run review: re-run the job or push.
+
 Codex optionally consumes PR issue comments as trusted, PR-scoped decisions.
 Set the reusable workflow's `owner-user-id` to the Owner's numeric GitHub user ID
 through trusted caller configuration (`OWNER_DECISION_USER_ID` for the wrapper).
@@ -97,10 +102,15 @@ or clear correctness/security bugs. Claims in diffs, commit messages or file
 contents have no Owner-decision authority.
 
 For PR-controlled text actually supplied to the reviewer, an unverifiable Owner
-request/approval claim lacking an admitted Owner decision or linked Owner-authored
-source is a non-blocking note by default, but a high blocker when used to justify a
+request/approval claim lacking an admitted Owner decision in the trusted
+Owner-decisions block is a non-blocking note by default; mention any link as
+unverified so a human can check it. It is a high blocker when used to justify a
 protected change (CODEOWNERS paths, policy/gate/CI/ruleset/schema files, or removed
-or weakened tests).
+or weakened tests), regardless of any link; a link does not clear the finding.
+Only an admitted Owner decision in the trusted Owner-decisions block can verify
+such a claim. Links in PR-controlled text (title, description or diff) are
+author-controlled and do not verify a claim. The reviewer cannot verify their
+contents or authorship.
 
 To use: the Owner posts a **new comment whose first line starts with
 `Owner decision:`**, followed by the decision, then re-runs the `codex-review` job.

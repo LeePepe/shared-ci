@@ -14,28 +14,29 @@ import pathlib
 import re
 import sys
 
-PLACEHOLDERS = ("REPO_RULES", "ARCHITECTURE", "OWNER_DECISIONS", "CHANGED", "TRUNCATED", "DIFF")
+PLACEHOLDERS = ("REPO_RULES", "ARCHITECTURE", "OWNER_DECISIONS", "PR_TEXT", "CHANGED", "TRUNCATED", "DIFF")
 REQUIRED = ("REPO_RULES", "ARCHITECTURE", "CHANGED", "DIFF")
 OWNER_DEFAULT = "(Owner decision input is not configured for this repository.)"
+PR_DEFAULT = "(PR title/body not supplied.)"
 
 
 def render(template: str, values: dict[str, str]) -> str:
     missing = [name for name in REQUIRED if "{{" + name + "}}" not in template]
     if missing:
         raise ValueError("template is missing placeholder(s): " + ", ".join(missing))
-    values = {"OWNER_DECISIONS": OWNER_DEFAULT, **values}
+    values = {"OWNER_DECISIONS": OWNER_DEFAULT, "PR_TEXT": PR_DEFAULT, **values}
     rendered = re.sub(r"\{\{(" + "|".join(PLACEHOLDERS) + r")\}\}",
                       lambda match: values.get(match.group(1), ""), template)
     return rendered.encode("utf-8", "replace").decode("utf-8")
 
 
 def main() -> int:
-    allowed = {"--rules-file": "REPO_RULES", "--owner-file": "OWNER_DECISIONS"}
+    allowed = {"--rules-file": "REPO_RULES", "--owner-file": "OWNER_DECISIONS", "--pr-file": "PR_TEXT"}
     args = sys.argv[2:]
     if (len(sys.argv) < 2 or len(args) % 2
             or any(arg not in allowed for arg in args[::2])
             or len(set(args[::2])) != len(args[::2])):
-        print(f"usage: {sys.argv[0]} <template.md> [--rules-file FILE] [--owner-file FILE]", file=sys.stderr)
+        print(f"usage: {sys.argv[0]} <template.md> [--rules-file FILE] [--owner-file FILE] [--pr-file FILE]", file=sys.stderr)
         return 2
     options = dict(zip(args[::2], args[1::2]))
     path = pathlib.Path(sys.argv[1])
@@ -43,7 +44,8 @@ def main() -> int:
         print(f"render-prompt: template not found: {path}", file=sys.stderr)
         return 2
     try:
-        values = {name: os.environ.get(name, "") for name in PLACEHOLDERS if name != "OWNER_DECISIONS"}
+        values = {name: os.environ.get(name, "") for name in PLACEHOLDERS
+                  if name not in ("OWNER_DECISIONS", "PR_TEXT")}
         for option, filename in options.items():
             # Preserve exact newlines; shell command substitution strips them.
             values[allowed[option]] = pathlib.Path(filename).read_bytes().decode("utf-8")

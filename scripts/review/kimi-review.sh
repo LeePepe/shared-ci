@@ -38,6 +38,11 @@ git fetch --no-tags --depth=200 origin "$BASE_SHA" "$HEAD_SHA" >/dev/null 2>&1 \
 python3 -B "$REVIEW_DIR/rules_input.py" "$BASE_SHA" "${REVIEW_RULES_FILE:-AGENTS.md}" >"$WORK/rules" \
     || advisory_unavailable "Trusted-base repository rules are missing or invalid."
 
+PROMPT_ARGS=(--rules-file "$WORK/rules")
+if python3 -I -B "$REVIEW_DIR/pr_text.py" >"$WORK/pr"; then
+    PROMPT_ARGS+=(--pr-file "$WORK/pr")
+fi
+
 git diff --no-ext-diff --find-renames --unified=40 "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
     || advisory_unavailable "Could not compute the PR diff."
 git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null || true
@@ -55,7 +60,8 @@ fi
 ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
 PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
     TRUNCATED="$TRUNCATED" DIFF="$(cat "$WORK/diff")" \
-    python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" --rules-file "$WORK/rules")" \
+    python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" \
+        "${PROMPT_ARGS[@]}")" \
     || advisory_unavailable "Prompt rendering failed."
 PROMPT="$PROMPT
 

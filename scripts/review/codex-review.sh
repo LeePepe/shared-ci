@@ -57,6 +57,9 @@ python3 -I -B "$REVIEW_DIR/owner_decisions.py" >"$WORK/owner" \
 # Body lines are quoted, so only generated headers can contribute to this count.
 echo "[codex-review] admitted Owner decisions: $(grep -c '^### Owner decision comment ' "$WORK/owner")"
 
+python3 -I -B "$REVIEW_DIR/pr_text.py" >"$WORK/pr" \
+    || fail_closed "PR title/body could not be fetched."
+
 git diff --no-ext-diff "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
     || git diff --no-ext-diff "$BASE_SHA..$HEAD_SHA" >"$WORK/diff" \
     || fail_closed "Could not compute the PR diff."
@@ -102,7 +105,7 @@ ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c
 PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
     TRUNCATED="" DIFF="$(cat "$WORK/diff")" \
     python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" \
-        --rules-file "$WORK/rules" --owner-file "$WORK/owner")" \
+        --rules-file "$WORK/rules" --owner-file "$WORK/owner" --pr-file "$WORK/pr")" \
     || fail_closed "Prompt rendering failed."
 
 EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
