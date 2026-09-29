@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts/lint/commit_identity.py"
+SCRIPT = REPO / "scripts/quality/commit_identity.py"
 NOREPLY = "123+contributor@users.noreply.github.com"
 BOT = "456+automation[bot]@users.noreply.github.com"
 
@@ -230,7 +230,7 @@ class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.repo = Repo()
         self.addCleanup(self.repo.close)
-        provider = self.repo.root / ".shared-ci/scripts/lint"
+        provider = self.repo.root / ".shared-ci/scripts/quality"
         provider.mkdir(parents=True)
         shutil.copyfile(SCRIPT, provider / SCRIPT.name)
 
@@ -289,6 +289,15 @@ class WorkflowTests(unittest.TestCase):
         result = self.run_step(head, ALLOW="$(touch injected), *@ONE.invalid\n*@two.invalid")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse((self.repo.root / "injected").exists())
+
+
+class VerificationTests(unittest.TestCase):
+    def test_native_verify_runs_commit_identity_suite(self):
+        verify = (REPO / "scripts/verify").read_text()
+        self.assertIn(
+            '"$python" -I -B -m unittest discover -s tests/quality -p \'test_commit_identity.py\'',
+            verify.splitlines(),
+        )
 
 
 if __name__ == "__main__":

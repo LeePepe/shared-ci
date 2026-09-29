@@ -61,7 +61,7 @@ contract change, not a new task-local layer or permission to expand scope.
 | --- | --- | --- | --- |
 | Context: resolve ownership, audit contracts, run declared gates | [Context leaf](../scripts/context/tech-context.md), [CLI contract](context-cli-contract.md), [repository contract](../ai/repo-contract.md) | Required context/repo regressions, affected existing schema and contract documentation | Context and repo suites; checker/schema/policy changes need Owner review |
 | Lint: validate reusable workflow callers | [Lint leaf](../scripts/lint/tech-context.md), [architecture](architecture.md) | Caller-validation regressions and usage documentation | Lint suite and workflow-lint; Owner review |
-| Quality: aggregate explicit gate results, test integrity and 6DQ evidence | [Quality leaf](../scripts/quality/tech-context.md), [aggregation contract](quality-aggregation-contract.md), [test integrity](test-integrity.md) | Gate/integrity/aggregation regressions and affected result schema/contract | Quality suites; Owner review |
+| Quality: aggregate explicit gate results, PR-range checks and 6DQ evidence | [Quality leaf](../scripts/quality/tech-context.md), [aggregation contract](quality-aggregation-contract.md), [test integrity](test-integrity.md), [commit identity](commit-identity.md) | Gate/integrity/identity/aggregation regressions and affected result schema/contract | Quality suites; Owner review |
 | Select: choose changed layers and dependents, falling back to full runs | [Select leaf](../scripts/select/tech-context.md), [selection contract](changed-layer-selection.md) | Selection regressions and selection documentation | Select suite; Owner review |
 | Policy: evaluate eligibility as a pure function | [Policy leaf](../scripts/policy/tech-context.md), [validation contract](policy-validation-contract.md) | Validation regressions and affected policy schema/contract | Policy suite; Owner review |
 | Review: immutable-base rules, diff ingestion and verdicts | [Review leaf](../scripts/review/tech-context.md), [rules admission](review-rules.md) | Reviewer regressions and prompt/usage documentation | Review suite; Owner review; real model acceptance remains separate |
@@ -91,7 +91,7 @@ scripts/verify --all                 # same full run
 This repository runs its full suites; it does not use the template bootstrap
 or narrow local verification by layer. The entry checks shell/Python/JSON syntax,
 the actual layer map and repository contract, workflow-lint, Context, repo,
-Lint, Review, Ruleset, Select, Quality (including test integrity) and Policy tests, then committed-tree
+Lint, Review, Ruleset, Select, Quality (including test integrity and commit identity) and Policy tests, then committed-tree
 whitespace. For edits not yet committed, also run `git diff --check` and
 `git diff --cached --check`. New metadata/documents must be staged for the
 tracked-file audit. Staging is not proof that worktree content equals a commit.

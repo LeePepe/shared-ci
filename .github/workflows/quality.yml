@@ -164,7 +164,7 @@ jobs:
             echo "commit-identity: skipped (disabled by input)"
             exit 0
           fi
-          python3 -I -B .shared-ci/scripts/lint/commit_identity.py \
+          python3 -I -B .shared-ci/scripts/quality/commit_identity.py \
             --base "$BASE_SHA" --head "$HEAD_SHA" --allow "$ALLOW" --root .
 
   verify:

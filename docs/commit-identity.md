@@ -5,6 +5,10 @@ The reusable [quality workflow](../.github/workflows/quality.yml) defaults
 commit in `base..head`, including merge commits, for both author and committer
 email. It reads raw Git metadata, not names or mailmap aliases.
 
+The [check](../scripts/quality/commit_identity.py) belongs to the
+[Quality layer](../scripts/quality/tech-context.md), alongside the PR-range
+[test-integrity check](test-integrity.md); it is not reusable-workflow lint.
+
 Accepted addresses (case-insensitive):
 
 - `*@users.noreply.github.com`, including numeric-ID and bot addresses.
@@ -29,7 +33,7 @@ Existing consumers keep their pinned behavior until a reviewed provider update.
 From the caller repository, run the selected provider script:
 
 ```sh
-python3 -I -B "$SHARED_CI_CHECKOUT/scripts/lint/commit_identity.py" \
+python3 -I -B "$SHARED_CI_CHECKOUT/scripts/quality/commit_identity.py" \
   --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" --root .
 ```
 

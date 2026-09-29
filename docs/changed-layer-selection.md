@@ -164,7 +164,8 @@ so a skip is harmless.
 ## 3. Aggregate
 
 The existing `select` job also hosts the default-on
-[commit-identity step](commit-identity.md). It checks the full PR commit range
+[commit-identity step](commit-identity.md), implemented by Quality's
+[`commit_identity.py`](../scripts/quality/commit_identity.py). It checks the full PR commit range
 even when selection is disabled or no layer is selected. The independent inputs
 are `commit-identity` (boolean, default `true`) and `commit-identity-allow`
 (string, default empty); neither changes layer-selection output. Its failure
