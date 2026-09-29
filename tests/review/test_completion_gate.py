@@ -56,12 +56,15 @@ class CompletionGateTests(unittest.TestCase):
             self.workflow["on"])
         self.assertEqual({"codex-review-target", "codex-review-gate", "kimi-review"},
                          set(self.jobs))
-        for job_id, filename in (("codex-review-target", "codex-review.yml"),
-                                 ("kimi-review", "kimi-review.yml")):
+        codex_inputs = {"codex-bin": "/opt/homebrew/bin/codex",
+                        "rules-file": "docs/repository-guide.md", "owner-user-id": "13819054"}
+        for job_id, filename, inputs in (
+                ("codex-review-target", "codex-review.yml", codex_inputs),
+                ("kimi-review", "kimi-review.yml", {"rules-file": "docs/repository-guide.md"})):
             with self.subTest(job=job_id):
                 job = self.jobs[job_id]
                 self.assertEqual({"if", "uses", "with"}, set(job))
-                self.assertEqual({"rules-file": "docs/repository-guide.md"}, job["with"])
+                self.assertEqual(inputs, job["with"])
                 self.assertEqual("vars.SHARED_CI_REVIEW_RUNNER == 'true'", job["if"])
                 self.assertTrue(job["uses"].endswith(
                     "/.github/workflows/" + filename + "@" + PIN))
