@@ -14,7 +14,7 @@ red_lines:
 | Layer | Responsibility | tech-context | depends_on |
 |---|---|---|---|
 | Context | Layer-map resolver, contract audit, runner | `scripts/context/tech-context.md` | (none) |
-| Lint | workflow-lint engine | `scripts/lint/tech-context.md` | Context |
+| Lint | Workflow and commit-identity lint | `scripts/lint/tech-context.md` | Context |
 | Quality | Fail-closed aggregate gate and 6DQ reconciliation | `scripts/quality/tech-context.md` | Policy |
 | Select | Changed-layer CI selection (diff → layers + dependents, fail-closed full run) | `scripts/select/tech-context.md` | Context |
 | Policy | Policy eligibility evaluator | `scripts/policy/tech-context.md` | (none) |

@@ -163,6 +163,13 @@ so a skip is harmless.
 
 ## 3. Aggregate
 
+The existing `select` job also hosts the default-on
+[commit-identity step](commit-identity.md). It checks the full PR commit range
+even when selection is disabled or no layer is selected. The independent inputs
+are `commit-identity` (boolean, default `true`) and `commit-identity-allow`
+(string, default empty); neither changes layer-selection output. Its failure
+propagates through the existing requirement that `select` succeed.
+
 The aggregate needs `select` too. Each lane reports a `ran` output (`true`
 when its real steps executed). With a selection present, the gate
 ([`gate.py`](../scripts/quality/gate.py)) keeps every v0.1.0 rule and adds:
