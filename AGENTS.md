@@ -8,7 +8,7 @@
 
 ## Protocol
 
-- For the common development protocol: [Pinned agent protocol](https://github.com/LeePepe/shared-ci/blob/af2f1c2ab7ed908ff3153c96793152150343e903/ai/agent-protocol.md).
+- For the common development protocol: [Pinned agent protocol](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/agent-protocol.md).
 - For provider versus candidate authority: [Protocol and self-adoption](docs/repository-guide.md#protocol).
 
 ## Verify

@@ -13,7 +13,7 @@ SPEC = importlib.util.spec_from_file_location(
     "gate_frontmatter", REPO / "scripts" / "context" / "_frontmatter.py")
 frontmatter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(frontmatter)
-PIN = "af2f1c2ab7ed908ff3153c96793152150343e903"
+PIN = "6e354f476bc53d68f0f09fc231d5cd938466af9c"
 
 
 class CompletionGateTests(unittest.TestCase):
