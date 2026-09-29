@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Admit unedited, Owner-authored PR comments bound to the exact review head.
+"""Admit explicitly marked, unedited Owner decisions for every head of the same PR.
 
 Run with python3 -I -B in the trusted workflow context; never read PR-head files.
 """
@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 NOT_CONFIGURED = "(Owner decision input is not configured for this repository.)"
+MARKER = "Owner decision:"
 MAX_DECISIONS = 5
 MAX_DECISION_BYTES = 4000
 MAX_TOTAL_BYTES = 12000
@@ -37,17 +38,20 @@ def parse_records(output: str) -> list[dict]:
     return records
 
 
-def admit(records: list[dict], owner_id: int, head_sha: str) -> list[dict]:
-    """Select decisions by human numeric author, exact head token and unedited timestamp.
+def admit(records: list[dict], owner_id: int) -> list[dict]:
+    """Select PR-scoped decisions by human numeric author, marker and unedited timestamp.
 
+    The first non-empty line, stripped of surrounding whitespace, must start
+    with MARKER (case-sensitive); CRLF and CR are treated as newlines.
     Bot/Organization authors are rejected even when the ID matches, so an App or
     agent account can never authorize its own exceptions.
     """
-    token = re.compile(r"(?<![0-9a-fA-F])" + re.escape(head_sha) + r"(?![0-9a-fA-F])")
     decisions = [record for record in records
                  if type(record["user_id"]) is int and record["user_id"] == owner_id
                  and record["user_type"] == "User"
-                 and token.search(record["body"])
+                 and next((line.strip() for line in
+                           record["body"].replace("\r\n", "\n").replace("\r", "\n").split("\n")
+                           if line.strip()), "").startswith(MARKER)
                  and record["created_at"] == record["updated_at"]]
     if len(decisions) > MAX_DECISIONS:
         raise ValueError(f"Owner decisions exceed {MAX_DECISIONS} comments.")
@@ -67,9 +71,9 @@ def admit(records: list[dict], owner_id: int, head_sha: str) -> list[dict]:
 
 
 def render(decisions: list[dict]) -> str:
-    """Render admitted decisions deterministically, with bodies kept inside quotes."""
+    """Render admitted PR-scoped decisions deterministically, keeping bodies quoted."""
     if not decisions:
-        return "(No Owner decision names the current head SHA.)\n"
+        return "(No Owner decision comment on this PR.)\n"
     lines = []
     for record in sorted(decisions, key=lambda record: record["id"]):
         lines.append(f"### Owner decision comment {record['id']} (created {record['created_at']})")
@@ -86,7 +90,7 @@ def main() -> int:
         print(NOT_CONFIGURED)
         return 0
     patterns = {"OWNER_DECISION_USER_ID": r"[1-9][0-9]{0,19}",
-                "HEAD_SHA": r"[0-9a-f]{40}", "PR_NUMBER": r"[1-9][0-9]*",
+                "PR_NUMBER": r"[1-9][0-9]*",
                 "BASE_REPO": r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"}
     for name, pattern in patterns.items():
         if not re.fullmatch(pattern, os.environ.get(name, "")):
@@ -102,7 +106,7 @@ def main() -> int:
         print("owner-decisions: PR comment API failed or returned invalid UTF-8.", file=sys.stderr)
         return 1
     try:
-        decisions = admit(parse_records(result.stdout), int(owner), os.environ["HEAD_SHA"])
+        decisions = admit(parse_records(result.stdout), int(owner))
         output = render(decisions)
         sys.stdout.buffer.write(output.encode("utf-8"))
     except UnicodeError:

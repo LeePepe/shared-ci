@@ -247,17 +247,17 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
     def owner_comment(self, **overrides):
         return json.dumps(dict(dict(id=17, user_id=1001, user_type="User", created_at="2026-09-28T10:00:00Z",
                                     updated_at="2026-09-28T10:00:00Z",
-                                    body=f"For {self.head}: accept this scoped test policy exception."), **overrides))
+                                    body="Owner decision: accept this scoped test policy exception."), **overrides))
 
     def test_codex_owner_decision_in_trusted_section_and_count_only_logged(self):
         result, _ = self.run_script("codex-review.sh", json.dumps(PASS),
                                     OWNER_DECISION_USER_ID="1001", STUB_COMMENTS=self.owner_comment())
         self.assertEqual(0, result.returncode, result.stderr)
         prompt = (self.out / "prompt").read_text()
-        section = prompt.split("## Owner decisions (verified author, head-bound)", 1)[1]
+        section = prompt.split("## Owner decisions (verified author, PR-scoped)", 1)[1]
         trusted = section.split("======== UNTRUSTED DATA BELOW", 1)[0]
         self.assertIn("### Owner decision comment 17", trusted)
-        self.assertIn(f"> For {self.head}: accept this scoped test policy exception.", trusted)
+        self.assertIn("> Owner decision: accept this scoped test policy exception.", trusted)
         self.assertIn("[codex-review] admitted Owner decisions: 1", result.stdout)
         self.assertNotIn("accept this scoped", result.stdout + result.stderr)
 
@@ -267,7 +267,7 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         prompt = (self.out / "prompt").read_text()
         self.assertNotIn("accept this scoped", prompt)
-        self.assertIn("(No Owner decision names the current head SHA.)", prompt)
+        self.assertIn("(No Owner decision comment on this PR.)", prompt)
         self.assertIn("[codex-review] admitted Owner decisions: 0", result.stdout)
 
     def test_codex_owner_api_failure_unavailable_before_model_even_with_empty_diff(self):
@@ -287,7 +287,7 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
                       (self.out / "prompt").read_text())
 
     def test_codex_owner_malformed_or_oversized_input_unavailable_before_model(self):
-        for comments in ("{bad json", self.owner_comment(body=self.head + " " + "x" * 4000),
+        for comments in ("{bad json", self.owner_comment(body="Owner decision: " + "x" * 4000),
                          "\n".join(self.owner_comment(id=i) for i in range(6))):
             with self.subTest(comments=comments[:60]):
                 result, comment = self.run_script("codex-review.sh", json.dumps(PASS),

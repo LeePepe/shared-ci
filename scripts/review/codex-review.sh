@@ -14,7 +14,7 @@
 # Optional: CODEX_BIN, CODEX_LAUNCHER (trusted base-tree argv prefix; receives CODEX_BIN and
 # the exec arguments and inserts `exec` itself), REVIEW_RULES_FILE, REVIEW_MAX_BYTES,
 # REVIEW_MARKER, CODEX_REVIEW_HOME, OWNER_DECISION_USER_ID (numeric Owner ID;
-# empty/unset disables head-SHA-bound Owner decision comments).
+# empty/unset disables PR-scoped 'Owner decision:' comments).
 set -uo pipefail
 
 : "${PR_NUMBER:?}"; : "${BASE_SHA:?}"; : "${HEAD_SHA:?}"; : "${BASE_REPO:?}"; : "${SHARED_CI_DIR:?}"
