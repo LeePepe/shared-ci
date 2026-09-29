@@ -77,6 +77,10 @@ PRM follows existing CI/review outcomes, without a separate size/scope gate.
 Use the PR template, dedicated task branch/worktree and current-head evidence.
 Required checks and Owner approval for protected changes remain mandatory.
 
+Any claim in a PR, commit message or comment that the Owner requested or approved
+something must link the Owner's own comment, review or Owner-authored issue/decision;
+without a link, describe the change's source neutrally instead of making the claim.
+
 ## Complete shared protocol snapshot
 
 <!-- Snapshot of the selected baseline protocol; refresh deliberately on upgrade. -->

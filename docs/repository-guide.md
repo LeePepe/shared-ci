@@ -196,6 +196,10 @@ stacking, auto-merge, approval and ordinary-test-change policy in the pinned
 protocol; this guide introduces no separate human approval class for test edits.
 State reasons for test changes and provide applicable CI/review evidence.
 
+Any claim in a PR, commit message or comment that the Owner requested or approved
+something must link the Owner's own comment, review or Owner-authored issue/decision;
+without a link, describe the change's source neutrally instead of making the claim.
+
 Changes to gates, lint, schemas, `ai/`, templates, pins, workflows, this guide
 and other [CODEOWNERS](../.github/CODEOWNERS) paths are important PRs requiring
 real Owner review. Source ownership declarations do not prove server protection;

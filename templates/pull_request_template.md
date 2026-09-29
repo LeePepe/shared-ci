@@ -14,7 +14,7 @@ otherwise make the stacked branch conflict).
 
 ## Intent
 
-<!-- First line: one-sentence goal, "After this PR, <observable outcome>". Then what changes and why, PR kind, and requirement/spec/task links when present. Dev Team work also identifies its Planner task; other sources need no Dev Team task. -->
+<!-- First line: one-sentence goal, "After this PR, <observable outcome>". Then what changes and why, PR kind, and requirement/spec/task links when present. Dev Team work also identifies its Planner task; other sources need no Dev Team task. Claims that the Owner requested or approved something must link the Owner's own comment, review or Owner-authored issue/decision; without a link, describe the change's source neutrally instead of making the claim. -->
 
 ## Compatibility
 
@@ -22,7 +22,7 @@ otherwise make the stacked branch conflict).
 
 ## Removed or weakened tests or policy
 
-<!-- List removed/skipped/weakened tests/assertions and policy/gate/ruleset changes with reasons, or "none". When test integrity is enabled, put each affected file on its own line as `path`: reason (JSON-quoted paths also work); keep this section heading unchanged. Approval and review routing follow the pinned agent protocol; ordinary test-code changes do not themselves require Owner approval. -->
+<!-- List removed/skipped/weakened tests/assertions and policy/gate/ruleset changes with reasons, or "none". When test integrity is enabled, put each affected file on its own line as `path`: reason (JSON-quoted paths also work); keep this section heading unchanged. Approval and review routing follow the pinned agent protocol; ordinary test-code changes do not themselves require Owner approval. Claims that the Owner requested or approved something must link the Owner's own comment, review or Owner-authored issue/decision; without a link, describe the change's source neutrally instead of making the claim. -->
 
 ## Test evidence
 
