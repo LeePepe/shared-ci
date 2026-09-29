@@ -27,6 +27,12 @@ advisory (exit zero). Legacy default selection is preserved, not legacy silent
 acceptance of missing or invalid AGENTS. No required-check names or fork trust
 boundaries change.
 
+Kimi is always advisory and never a required check. A missing runner CLI makes
+the review job **skipped**, with an unavailable warning, step summary and sticky
+PR comment. Later review failures report **unavailable**, never pass, in the
+warning, summary and comment (when publication is possible). Neither case fails
+the workflow or blocks merge; a successful availability probe is not a review.
+
 ## Directory-mode adoption
 
 AGENTS may be only an index. A tool-free reviewer cannot follow its links:

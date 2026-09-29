@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import stat
 import subprocess
 import sys
@@ -233,12 +234,13 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
             path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
     def run_script(self, script, verdict_json, fail="", **overrides):
-        for name in ("comment", "attempted-comment", "publish-attempts", "prompt"):
+        for name in ("comment", "attempted-comment", "publish-attempts", "prompt", "summary"):
             (self.out / name).unlink(missing_ok=True)
         env = dict(self.repo.env, PATH=f"{self.tools}:{os.environ.get('PATH', '/usr/bin:/bin')}",
                    PR_NUMBER="7", BASE_SHA=self.base, HEAD_SHA=self.head, BASE_REPO="o/r",
                    SHARED_CI_DIR=str(REPO), STUB_OUT=str(self.out), STUB_VERDICT=verdict_json,
-                   STUB_FAIL=fail, CODEX_REVIEW_HOME=str(self.out / "home"))
+                   STUB_FAIL=fail, CODEX_REVIEW_HOME=str(self.out / "home"),
+                   GITHUB_STEP_SUMMARY=str(self.out / "summary"))
         env.pop("OWNER_DECISION_USER_ID", None)
         env.update(overrides)
         result = subprocess.run(["bash", str(REVIEW / script)], cwd=self.repo.root, env=env,
@@ -516,6 +518,71 @@ exec "$STUB_PYTHON" "$@"
             result, comment = self.run_script("kimi-review.sh", verdict_json, fail)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertIn("kimi", comment)
+
+    def assert_kimi_unavailable(self, result, comment, reason):
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("::warning::kimi review unavailable: " + reason, result.stdout)
+        self.assertIn("kimi review unavailable: " + reason, (self.out / "summary").read_text())
+        self.assertNotIn("review: pass", result.stdout + comment)
+        self.assertNotIn("advisory complete", result.stdout)
+
+    def test_kimi_missing_cli_warns_without_passing_or_blocking(self):
+        # Only the unavailable branch's tools exist; neither kimi nor git can run.
+        limited_path = self.tools / "without-kimi"
+        limited_path.mkdir()
+        for name in ("bash", "mktemp", "rm"):
+            (limited_path / name).symlink_to(shutil.which(name))
+        (limited_path / "python3").symlink_to(sys.executable)
+        (limited_path / "gh").symlink_to(self.tools / "gh")
+        for comment_id in ("", "123"):
+            with self.subTest(comment_id=comment_id):
+                result, comment = self.run_script(
+                    "kimi-review.sh", json.dumps(PASS), PATH=str(limited_path),
+                    KIMI_BIN="kimi", STUB_COMMENT_ID=comment_id)
+                self.assert_kimi_unavailable(result, comment, "kimi CLI is not installed on the runner")
+                self.assertIn("## kimi review unavailable", comment)
+                self.assertEqual("PATCH\n" if comment_id else "POST\n",
+                                 (self.out / "publish-attempts").read_text())
+                self.assertFalse((self.out / "prompt").exists())
+
+    def test_kimi_missing_required_environment_is_unavailable(self):
+        for name in ("PR_NUMBER", "BASE_SHA", "HEAD_SHA", "BASE_REPO", "SHARED_CI_DIR"):
+            with self.subTest(name=name):
+                result, comment = self.run_script("kimi-review.sh", json.dumps(PASS), **{name: ""})
+                self.assert_kimi_unavailable(result, comment, "Missing required environment: " + name)
+                self.assertFalse((self.out / "prompt").exists())
+
+    def test_kimi_later_failures_warn_without_passing_or_blocking(self):
+        for overrides, reason in (
+                ({"BASE_SHA": "0" * 40}, "Could not fetch the exact PR revisions."),
+                ({"REVIEW_RULES_FILE": "missing-rules.md"}, "Trusted-base repository rules are missing or invalid."),
+                ({"fail": "1"}, "kimi CLI exited non-zero.")):
+            with self.subTest(reason=reason):
+                result, comment = self.run_script("kimi-review.sh", json.dumps(PASS), **overrides)
+                self.assert_kimi_unavailable(result, comment, reason)
+                self.assertIn("## kimi review unavailable", comment)
+
+    def test_kimi_prompt_failure_is_unavailable_before_model(self):
+        provider = self.tools / "provider"
+        shutil.copytree(REVIEW, provider / "scripts/review")
+        (provider / "scripts/review/review-prompt.md").write_text("no placeholders")
+        result, comment = self.run_script("kimi-review.sh", json.dumps(PASS), SHARED_CI_DIR=str(provider))
+        self.assert_kimi_unavailable(result, comment, "Prompt rendering failed.")
+        self.assertIn("## kimi review unavailable", comment)
+        self.assertFalse((self.out / "prompt").exists())
+
+    def test_kimi_invalid_verdict_is_unavailable(self):
+        result, comment = self.run_script("kimi-review.sh", "junk")
+        self.assert_kimi_unavailable(result, comment, "kimi CLI returned an invalid verdict.")
+        self.assertIn("## kimi review unavailable", comment)
+
+    def test_kimi_unavailable_without_summary_or_comment_publication(self):
+        result, comment = self.run_script(
+            "kimi-review.sh", json.dumps(PASS), fail="1", GITHUB_STEP_SUMMARY="", STUB_PUBLISH_FAIL="all")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("::warning::kimi review unavailable: kimi CLI exited non-zero.", result.stdout)
+        self.assertEqual("", comment)
+        self.assertFalse((self.out / "summary").exists())
 
 
 if __name__ == "__main__":

@@ -6,7 +6,11 @@ import importlib.util
 import os
 import pathlib
 import subprocess
+import sys
+import tempfile
 import unittest
+
+from test_review import STUB_GH
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -119,6 +123,98 @@ class CompletionGateTests(unittest.TestCase):
                 self.assertIn("SHARED_CI_REVIEW_RUNNER", result.stdout)
                 self.assertIn("re-run", result.stdout)
                 self.assertIn("Owner approval and Kimi", result.stdout)
+
+
+class KimiAvailabilityWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = frontmatter.parse(
+            (REPO / ".github" / "workflows" / "kimi-review.yml").read_text())
+
+    def test_missing_cli_skips_review_without_changing_trust_or_permissions(self):
+        workflow = self.workflow
+        jobs = workflow["jobs"]
+        self.assertIn("kimi-probe", jobs)
+        probe, review = jobs["kimi-probe"], jobs["kimi-review"]
+        guard = ("github.event_name == 'pull_request_target' && "
+                 "github.event.pull_request.head.repo.full_name == github.repository")
+        self.assertEqual(guard, probe["if"])
+        self.assertEqual(["kimi-probe"], review["needs"])
+        self.assertEqual(guard + " && needs.kimi-probe.outputs.available == 'true'", review["if"])
+        self.assertEqual({"available": "${{ steps.probe.outputs.available }}"}, probe["outputs"])
+        self.assertEqual({"contents": "read", "pull-requests": "write"}, workflow["permissions"])
+        for job in (probe, review):
+            self.assertIs(True, job["continue-on-error"])
+            self.assertEqual("${{ fromJSON(inputs.runs-on) }}", job["runs-on"])
+            for step in job["steps"]:
+                self.assertNotIn("${{", step.get("run", ""))
+                if step.get("uses", "").startswith("actions/checkout@"):
+                    self.assertIn(step["with"]["ref"], (
+                        "${{ github.event.pull_request.base.sha }}", "${{ job.workflow_sha }}"))
+                if "kimi-review.sh" in step.get("run", ""):
+                    self.assertEqual("bash .shared-ci/scripts/review/kimi-review.sh", step["run"])
+        check = next(step for step in probe["steps"] if step.get("id") == "probe")
+        self.assertEqual("${{ inputs.kimi-bin }}", check["env"]["KIMI_BIN"])
+        self.assertIn('command -v "$KIMI_BIN"', check["run"])
+        shared = next(step for step in probe["steps"] if "uses" in step)
+        self.assertEqual({"repository": "${{ job.workflow_repository }}",
+                          "ref": "${{ job.workflow_sha }}", "path": ".shared-ci",
+                          "persist-credentials": False}, shared["with"])
+        for step in probe["steps"][1:]:
+            self.assertEqual("steps.probe.outputs.available == 'false'", step["if"])
+        inputs = workflow["on"]["workflow_call"]["inputs"]
+        self.assertEqual({"runs-on", "kimi-bin", "kimi-model", "rules-file",
+                          "max-diff-bytes", "timeout-minutes"}, set(inputs))
+        self.assertTrue(all(not value.get("required", False) for value in inputs.values()))
+
+    def test_actual_probe_shell_and_unavailable_sticky_comment(self):
+        steps = self.workflow["jobs"]["kimi-probe"]["steps"]
+        check = next(step for step in steps if step.get("id") == "probe")
+        publish = next(step for step in steps if "post_sticky" in step.get("run", ""))
+        with tempfile.TemporaryDirectory(prefix="kimi-probe-") as temp:
+            root = pathlib.Path(temp)
+            tools = root / "tools"
+            tools.mkdir()
+            (root / ".shared-ci").symlink_to(REPO, target_is_directory=True)
+            (tools / "python3").symlink_to(sys.executable)
+            (tools / "gh").write_text(STUB_GH)
+            (tools / "gh").chmod(0o755)
+            available = tools / "installed kimi"
+            available.write_text("#!/bin/sh\nexit 99\n")  # Probe must not execute the CLI.
+            available.chmod(0o755)
+            env = dict(os.environ, PATH=str(tools), PR_NUMBER="7", BASE_REPO="o/r",
+                       HEAD_SHA="a" * 40, STUB_OUT=str(root), STUB_PUBLISH_FAIL="",
+                       GITHUB_OUTPUT=str(root / "output"), GITHUB_STEP_SUMMARY=str(root / "summary"))
+            for binary, expected in (("kimi", "false"), ("", "false"),
+                                     (str(available), "true"), ("$(printf unsafe > injected); kimi", "false")):
+                with self.subTest(binary=binary):
+                    for name in ("output", "summary"):
+                        (root / name).unlink(missing_ok=True)
+                    env["KIMI_BIN"] = binary
+                    result = subprocess.run(["/bin/bash", "-e", "-o", "pipefail", "-c", check["run"]],
+                                            cwd=root, env=env, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual("available=" + expected + "\n", (root / "output").read_text())
+                    self.assertFalse((root / "injected").exists())
+                    if expected == "true":
+                        self.assertNotIn("unavailable", result.stdout)
+                        self.assertFalse((root / "summary").exists())
+                    else:
+                        reason = "kimi review unavailable: kimi CLI is not installed on the runner"
+                        self.assertIn("::warning::" + reason, result.stdout)
+                        self.assertEqual(reason + "\n", (root / "summary").read_text())
+            for comment_id, failure in (("", ""), ("123", ""), ("123", "all")):
+                with self.subTest(comment_id=comment_id, failure=failure):
+                    (root / "publish-attempts").unlink(missing_ok=True)
+                    env.update(STUB_COMMENT_ID=comment_id, STUB_PUBLISH_FAIL=failure)
+                    result = subprocess.run(["/bin/bash", "-e", "-o", "pipefail", "-c", publish["run"]],
+                                            cwd=root, env=env, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    comment = (root / "attempted-comment").read_text()
+                    self.assertTrue(comment.startswith("<!-- shared-ci-kimi-review -->\n## kimi review unavailable\n"))
+                    self.assertNotIn("review: pass", comment)
+                    self.assertIn("does not block merge", comment)
+                    self.assertEqual("PATCH\nPOST\n" if failure else "PATCH\n" if comment_id else "POST\n",
+                                     (root / "publish-attempts").read_text())
 
 
 if __name__ == "__main__":
