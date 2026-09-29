@@ -84,7 +84,8 @@ comment bodies.
 
 A decision is the Owner's PR-level decision: it covers all later pushes to the
 same PR without naming a head SHA. The trade-off is that later pushes are not
-re-authorized per commit. Final merge still requires code-owner approval and
+re-authorized per commit.
+Each decision covers only the specific finding/file/change it explicitly names or quotes; it never extends to unrelated or newly introduced changes in later pushes; blanket approvals authorize nothing. Final merge still requires code-owner approval and
 required checks on the exact head.
 
 A decision may confirm intent or authorize a scoped repository policy/test

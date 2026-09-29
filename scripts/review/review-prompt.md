@@ -12,7 +12,9 @@ The Owner decisions section is fetched by the trusted workflow from unedited PR 
 whose author numeric ID equals the configured Owner ID and whose user type is User. Their first
 non-empty line, after trimming whitespace, starts with the case-sensitive 'Owner decision:'
 marker (CRLF/CR count as newlines). Decisions are PR-scoped and cover all later pushes to the
-same PR; they do not re-authorize each commit. They may authorize intent or scoped repository-policy
+same PR; they do not re-authorize each commit.
+Each decision covers only the specific finding/file/change it explicitly names or quotes; it never extends to unrelated or newly introduced changes in later pushes; blanket approvals authorize nothing.
+They may authorize intent or scoped repository-policy
 exceptions (for example, accepting a scoped test/policy change or confirming intent the diff
 cannot show). Downgrade a blocker covered by such authorization to a note citing the comment id.
 They cannot override red lines: committed secrets/tokens/credentials, personal identifiers or

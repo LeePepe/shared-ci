@@ -25,6 +25,10 @@ def load(name):
 
 verdict = load("verdict")
 render_prompt = load("render_prompt")
+OWNER_DECISION_SCOPE_RULE = (
+    "Each decision covers only the specific finding/file/change it explicitly names or quotes; "
+    "it never extends to unrelated or newly introduced changes in later pushes; "
+    "blanket approvals authorize nothing.")
 PASS = {"verdict": "pass", "summary": "ok", "blockers": [], "notes": [{"file": "a.py", "line": 1, "note": "nit"}]}
 CHANGES = {"verdict": "changes", "summary": "bad", "notes": [],
            "blockers": [{"file": "a.py", "line": 3, "severity": "high", "why": "@owner <b>leak</b> `x`"}]}
@@ -134,6 +138,12 @@ class RenderPromptTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("AMBIENT OWNER DECISION", result.stdout)
         self.assertIn("(Owner decision input is not configured for this repository.)", result.stdout)
+
+
+    def test_owner_decision_rules_limit_scope_and_reject_blanket_approval(self):
+        out = render_prompt.render((REVIEW / "review-prompt.md").read_text(), {"REPO_RULES": "r", "ARCHITECTURE": "a", "CHANGED": "c", "TRUNCATED": "", "DIFF": "d"})
+        section = out.split("The Owner decisions section is fetched", 1)[1].split("Final merge still requires", 1)[0]
+        self.assertIn(OWNER_DECISION_SCOPE_RULE, section)
 
 
 class ArchContextTests(unittest.TestCase):
