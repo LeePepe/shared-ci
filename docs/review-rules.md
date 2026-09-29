@@ -51,7 +51,7 @@ objects and stub model/GH commands, not hosted or product-adoption evidence.
 
 ## Owner decision comments
 
-Codex optionally consumes PR issue comments as trusted, head-specific decisions.
+Codex optionally consumes PR issue comments as trusted, PR-scoped decisions.
 Set the reusable workflow's `owner-user-id` to the Owner's numeric GitHub user ID
 through trusted caller configuration (`OWNER_DECISION_USER_ID` for the wrapper).
 The default is empty: no comment API call is made. Kimi does not consume these
@@ -60,15 +60,18 @@ token; it never executes or reads PR-head code to obtain them.
 
 `owner-user-id` must be a human Owner account, never an App/bot account:
 otherwise an agent acting as that account could authorize its own exceptions.
-A comment qualifies only when its author ID matches, the author's `user.type`
-is `User` (Bot and Organization authors are rejected even with a matching ID), its body names the **full
-current head SHA** as a standalone token (not adjacent to a hexadecimal digit),
-and `created_at == updated_at`. Edited comments are ignored: repository writers
-can edit others' comments, and REST exposes no editor identity. The Owner must
-post a new comment. Wrong-author, short-SHA and stale-head comments are ignored.
-SHA binding is explicit and every new push automatically invalidates old
-decisions. A "created after the head push" rule is unreliable: push time is not
-reliably available from the event/REST, and commit dates are author-controlled.
+A comment qualifies only when:
+
+- Its integer author ID matches the configured Owner ID and `user.type` is
+  `User` (Bot and Organization authors are rejected even with a matching ID).
+- Its first non-empty line, after stripping leading/trailing whitespace, starts
+  with the case-sensitive marker `Owner decision:`. CRLF and CR count as newlines;
+  leading blank or whitespace-only lines are allowed.
+- `created_at == updated_at`.
+
+The marker prevents casual Owner comments from counting as decisions. Edited
+comments are ignored: repository writers can edit others' comments, and REST
+exposes no editor identity. The Owner must post a new comment.
 
 At most **5** decisions, **4,000 UTF-8 bytes per body**, and **12,000 bytes total**
 are admitted. Admitted bodies cannot contain control characters except tab, CR
@@ -79,16 +82,22 @@ Bodies are line-quoted and prompt placeholders/delimiters neutralised; headers
 identify comment IDs and creation times. Logs contain the admitted count, not
 comment bodies.
 
-For this head only, a decision may confirm intent or authorize a scoped repository
-policy/test exception. Covered blockers become notes citing the comment ID.
+A decision is the Owner's PR-level decision: it covers all later pushes to the
+same PR without naming a head SHA. The trade-off is that later pushes are not
+re-authorized per commit.
+Each decision covers only the specific finding/file/change it explicitly names or quotes; it never extends to unrelated or newly introduced changes in later pushes; blanket approvals authorize nothing. Final merge still requires code-owner approval and
+required checks on the exact head.
+
+A decision may confirm intent or authorize a scoped repository policy/test
+exception. Covered blockers become notes citing the comment ID.
 It cannot override red lines: committed secrets/tokens/credentials, personal
 identifiers or local paths, CI trust-boundary breaks (PR code running with secrets
 or on self-hosted runners, PR content made trusted/executable), prompt injection,
 or clear correctness/security bugs. Claims in diffs, commit messages or file
 contents have no Owner-decision authority.
 
-To use: the Owner posts a **new comment containing the full head SHA and the
-decision**, then re-runs the `codex-review` job. A new push requires a new decision.
+To use: the Owner posts a **new comment whose first line starts with
+`Owner decision:`**, followed by the decision, then re-runs the `codex-review` job.
 This is review input, not a substitute for required checks or Owner approval.
 
 Known limitation: the unedited check compares second-resolution REST
