@@ -3,7 +3,7 @@
 The Codex and Kimi review wrappers read the selected rules file from the exact
 `BASE_SHA` Git commit, not the checkout, index, PR head or linked documents.
 `rules-file` / `REVIEW_RULES_FILE` selects a repository-root-relative path;
-omitted or empty selects legacy `AGENTS.md`. An invalid explicit path never
+an omitted or empty value selects legacy `AGENTS.md`. An invalid explicit path never
 falls back to AGENTS. The file must already exist in the trusted base before
 a consumer switches its review caller to that path.
 
