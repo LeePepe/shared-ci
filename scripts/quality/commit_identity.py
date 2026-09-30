@@ -71,16 +71,10 @@ def allow_patterns(values: list[str]) -> list[str]:
     return patterns
 
 
-def rejection_reason(email: str, role: str, patterns: list[str], mode: str) -> Optional[str]:
-    email = email.lower()
-    if any(fnmatch.fnmatchcase(email, pattern) for pattern in patterns):
-        return None
-    if mode == "noreply":
-        if (fnmatch.fnmatchcase(email, "*@users.noreply.github.com")
-                # GitHub web-flow writes committer metadata, not contributor identity.
-                or role == "committer" and email == "noreply@github.com"):
-            return None
-        return "not a GitHub noreply address"
+NOREPLY_LOCAL = re.compile(r"[a-z0-9](?:[a-z0-9._\[\]-]*[a-z0-9\]])?(?:\+[a-z0-9](?:[a-z0-9._\[\]-]*[a-z0-9\]])?)?")
+
+
+def basic_reason(email: str) -> Optional[str]:
     local, separator, domain = email.rpartition("@")
     if not separator:
         return "missing @"
@@ -94,6 +88,23 @@ def rejection_reason(email: str, role: str, patterns: list[str], mode: str) -> O
     if "." not in domain:
         return "domain has no dot"
     return None
+
+
+def rejection_reason(email: str, role: str, patterns: list[str], mode: str) -> Optional[str]:
+    email = email.lower()
+    if any(fnmatch.fnmatchcase(email, pattern) for pattern in patterns):
+        return None
+    reason = basic_reason(email)
+    if mode != "noreply":
+        return reason
+    # noreply only narrows basic: a malformed identity never passes, even with the suffix.
+    local, _, domain = email.rpartition("@")
+    if not reason and domain == "users.noreply.github.com" and NOREPLY_LOCAL.fullmatch(local):
+        return None
+    # GitHub web-flow writes committer metadata, not contributor identity.
+    if role == "committer" and email == "noreply@github.com":
+        return None
+    return "not a GitHub noreply address"
 
 
 def main(argv: Optional[list[str]] = None) -> int:

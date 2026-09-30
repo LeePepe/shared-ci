@@ -30,7 +30,10 @@ check, not full email syntax, deliverability, ownership or privacy validation.
 **noreply** mode preserves the strict policy. Accepted addresses
 (case-insensitive):
 
-- `*@users.noreply.github.com`, including numeric-ID and bot addresses.
+- `<user>@users.noreply.github.com` or `<id>+<user>@users.noreply.github.com`,
+  including bot addresses (`<id>+<name>[bot]@...`). The local part must be a
+  well-formed GitHub noreply name; `@users.noreply.github.com` alone, a leading
+  `+`, or an extra `@` is rejected, and basic-mode malformations never pass.
 - `noreply@github.com` for **committers only**: GitHub's web-flow committer is
   used for web merges and Update branch. Authors still need their own noreply
   address, unless explicitly allowlisted.

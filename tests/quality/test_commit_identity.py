@@ -126,6 +126,23 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit(NOREPLY + ".invalid")
         self.assertEqual(1, self.repo.cli(head, "--mode", "noreply").returncode)
 
+    def test_noreply_mode_rejects_malformed_noreply_local_parts(self):
+        for email in ("@users.noreply.github.com", "+name@users.noreply.github.com",
+                      "x@y@users.noreply.github.com", "1+@users.noreply.github.com"):
+            with self.subTest(email=email):
+                for role in ("author", "committer"):
+                    head = self.repo.commit(**{role: email})
+                    result = self.repo.cli(head, "--mode", "noreply")
+                    self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                    self.assertIn(role, result.stderr)
+
+    def test_noreply_mode_accepts_github_noreply_local_part_shapes(self):
+        for email in ("name@users.noreply.github.com", "123+name@users.noreply.github.com",
+                      "123+some-app[bot]@users.noreply.github.com"):
+            with self.subTest(email=email):
+                result = self.repo.cli(self.repo.commit(email, email), "--mode", "noreply")
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_web_flow_committer_passes_but_author_requires_allowlist(self):
         result = self.repo.cli(self.repo.commit(committer="NOREPLY@GITHUB.COM"), "--mode", "noreply")
         self.assertEqual(0, result.returncode, result.stderr)
