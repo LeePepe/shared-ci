@@ -94,9 +94,9 @@ python3 -I -B "$SHARED_CI_CHECKOUT/scripts/quality/commit_identity.py" \
 Use `--mode noreply` for a strict caller. `--allow` is repeatable and accepts the
 same comma/newline-separated globs and validation rules.
 Exit 0 means clean (including zero commits); 1 reports offending short SHAs,
-roles, JSON-escaped emails and reasons (for example `local hostname domain`,
-`missing domain` or `not a GitHub noreply address`); 2 means invalid configuration,
-arguments or unavailable Git input. Base and
+roles and reasons (for example `local hostname domain`, `missing domain` or
+`not a GitHub noreply address`), without logging raw email addresses; 2 means
+invalid configuration, arguments or unavailable Git input. Base and
 head must both resolve to commits; an empty or unknown revision never passes.
 
 To repair a branch in basic mode, set `git config user.email` to a valid address

@@ -76,8 +76,10 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit("contributor@MacBook-Pro.local")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{head[:12]} author "contributor@MacBook-Pro.local"', result.stderr)
-        self.assertNotIn(f"{head[:12]} committer ", result.stderr)
+        self.assertIn(f"{head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("contributor", result.stderr)
+        self.assertNotIn("MacBook-Pro.local", result.stderr)
+        self.assertNotIn(f"{head[:12]} committer", result.stderr)
         self.assertNotIn("quoted", result.stderr)
         self.assertEqual(1, result.stderr.count("Fix:"))
         self.assertIn("user.email", result.stderr)
@@ -89,8 +91,9 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit(committer="committer@example.invalid")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{head[:12]} committer "committer@example.invalid"', result.stderr)
-        self.assertNotIn(f"{head[:12]} author ", result.stderr)
+        self.assertIn(f"{head[:12]} committer: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("committer@example.invalid", result.stderr)
+        self.assertNotIn(f"{head[:12]} author", result.stderr)
 
     def test_allowlist_pattern_passes_for_both_roles_case_insensitively(self):
         head = self.repo.commit("author@EXAMPLE.invalid", "committer@example.INVALID")
@@ -114,13 +117,13 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit("author@one.invalid", "committer@two.invalid")
         result = self.repo.cli(head, "--mode", "noreply", "--allow", "or@one.invalid")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f"{head[:12]} author ", result.stderr)
-        self.assertIn(f"{head[:12]} committer ", result.stderr)
+        self.assertIn(f"{head[:12]} author:", result.stderr)
+        self.assertIn(f"{head[:12]} committer:", result.stderr)
         result = self.repo.cli(head, "--mode", "noreply", "--allow",
                                "or@one.invalid, ,\n, *@ONE.invalid")
         self.assertEqual(1, result.returncode)
-        self.assertNotIn(f"{head[:12]} author ", result.stderr)
-        self.assertIn(f"{head[:12]} committer ", result.stderr)
+        self.assertNotIn(f"{head[:12]} author:", result.stderr)
+        self.assertIn(f"{head[:12]} committer:", result.stderr)
 
     def test_noreply_domain_suffix_spoof_fails(self):
         head = self.repo.commit(NOREPLY + ".invalid")
@@ -156,8 +159,8 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit("noreply@github.com", "noreply@github.com")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f"{head[:12]} author ", result.stderr)
-        self.assertNotIn(f"{head[:12]} committer ", result.stderr)
+        self.assertIn(f"{head[:12]} author:", result.stderr)
+        self.assertNotIn(f"{head[:12]} committer:", result.stderr)
         self.assertEqual(0, self.repo.cli(head, "--mode", "noreply",
                                          "--allow", "noreply@github.com").returncode)
 
@@ -191,7 +194,9 @@ class CommitIdentityTests(unittest.TestCase):
                 result = self.repo.cli(head, base="HEAD^")
                 self.assertEqual(1, result.returncode, result.stderr)
                 for role in ("author", "committer"):
-                    self.assertIn(f"{head[:12]} {role} {json.dumps(email)}: {reason}", result.stderr)
+                    self.assertIn(f"{head[:12]} {role}: {reason}", result.stderr)
+                if email:
+                    self.assertNotIn(email, result.stderr)
                 self.assertNotIn("\x1b", result.stderr)
                 self.assertEqual(1, result.stderr.count("Fix:"))
                 self.assertIn("user.email to a valid email address with a non-local, dotted domain",
@@ -259,8 +264,9 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit("author\x1b@host.local", "committer@host.local")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{head[:12]} author "author\\u001b@host.local"', result.stderr)
-        self.assertIn(f'{head[:12]} committer "committer@host.local"', result.stderr)
+        self.assertIn(f"{head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertIn(f"{head[:12]} committer: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("host.local", result.stderr)
         self.assertNotIn("\x1b", result.stderr)
         self.assertEqual(1, result.stderr.count("Fix:"))
 
@@ -270,7 +276,8 @@ class CommitIdentityTests(unittest.TestCase):
         self.repo.git("replace", bad, good)
         result = self.repo.cli(bad, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{bad[:12]} author "author@host.local"', result.stderr)
+        self.assertIn(f"{bad[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("host.local", result.stderr)
 
     def test_bad_revisions_and_empty_endpoints_exit_two(self):
         for base, head in (("unknown", self.repo.base), (self.repo.base, "unknown"),
@@ -302,9 +309,11 @@ class CommitIdentityTests(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         findings = [line for line in result.stderr.splitlines() if line.startswith("commit-identity:")]
         self.assertCountEqual([
-            f'commit-identity: {bad_author[:12]} author "author@host.local": not a GitHub noreply address',
-            f'commit-identity: {bad_committer[:12]} committer "committer@example.invalid": not a GitHub noreply address',
+            f"commit-identity: {bad_author[:12]} author: not a GitHub noreply address",
+            f"commit-identity: {bad_committer[:12]} committer: not a GitHub noreply address",
         ], findings)
+        self.assertNotIn("author@host.local", result.stderr)
+        self.assertNotIn("committer@example.invalid", result.stderr)
         for sha in (self.repo.base, good, head):
             self.assertNotIn(sha[:12], result.stderr)
 
@@ -316,8 +325,29 @@ class CommitIdentityTests(unittest.TestCase):
         self.repo.git("config", "format.pretty", "fuller")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn("author@host.local", result.stderr)
+        self.assertIn(f"{head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("author@host.local", result.stderr)
         self.assertNotIn("quoted", result.stderr)
+
+    def test_rejected_identities_never_leak_email_addresses_or_names_to_logs(self):
+        # Local domain fails in basic mode; valid domain fails in noreply mode.
+        local_author = "confidential-author@private.local"
+        local_committer = "confidential-committer@private.local"
+        head_basic = self.repo.commit(local_author, local_committer)
+        result_basic = self.repo.cli(head_basic, "--mode", "basic", base="HEAD^")
+        self.assertEqual(1, result_basic.returncode)
+        for val in (local_author, local_committer, "private.local", "quoted"):
+            self.assertNotIn(val, result_basic.stdout)
+            self.assertNotIn(val, result_basic.stderr)
+
+        noreply_author = "confidential-author@private-domain.com"
+        noreply_committer = "confidential-committer@private-domain.com"
+        head_noreply = self.repo.commit(noreply_author, noreply_committer)
+        result_noreply = self.repo.cli(head_noreply, "--mode", "noreply", base="HEAD^")
+        self.assertEqual(1, result_noreply.returncode)
+        for val in (noreply_author, noreply_committer, "private-domain.com", "quoted"):
+            self.assertNotIn(val, result_noreply.stdout)
+            self.assertNotIn(val, result_noreply.stderr)
 
     def test_merge_commits_and_side_branch_commits_are_checked(self):
         self.repo.git("checkout", "-q", "-b", "side")
@@ -330,8 +360,10 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.git("rev-parse", "HEAD")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{side[:12]} author "side@host.local"', result.stderr)
-        self.assertIn(f'{head[:12]} committer "merge@host.local"', result.stderr)
+        self.assertIn(f"{side[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertIn(f"{head[:12]} committer: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("side@host.local", result.stderr)
+        self.assertNotIn("merge@host.local", result.stderr)
 
 
 class WorkflowTests(unittest.TestCase):
