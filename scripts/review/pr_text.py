@@ -24,13 +24,12 @@ def render(title: str, body: str) -> str:
         if len(encoded) > limit:
             text = encoded[:limit].decode("utf-8", "ignore")
             markers.append(f"(PR {label} truncated to {limit} UTF-8 bytes.)")
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
         text = re.sub(r"\{{2,}", lambda match: " ".join(match.group()), text)
         text = re.sub(r"={4,}", lambda match: " ".join(match.group()), text)
         texts.append(text)
     title, body = texts
-    lines = ["> Title: " + title.replace("\n", " "), "> "]
-    lines.extend("> " + line for line in body.split("\n"))
+    lines = ["> Title: " + " ".join(title.splitlines()), "> Body:"]
+    lines.extend("> " + line for line in (body.splitlines() or [""]))
     return "\n".join(lines + markers)
 
 

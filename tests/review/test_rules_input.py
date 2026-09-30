@@ -214,7 +214,7 @@ class RulesInputTests(unittest.TestCase):
         self.assertNotIn("unavailable", comment)
         self.assertIn("BASE POLICY\nEND POLICY\n\n", prompt)
         self.assertIn("src/app/main.py -> App", prompt)
-        self.assertIn("<<<PR_TEXT\n> Title: Review context\n> \n> A harmless change.\nPR_TEXT>>>", prompt)
+        self.assertIn("<<<PR_TEXT\n> Title: Review context\n> Body:\n> A harmless change.\nPR_TEXT>>>", prompt)
         self.assertEqual("", provider_git("status", "--porcelain", "--ignored"))
         self.assertFalse(list(self.provider.rglob("__pycache__")))
         self.assertEqual(before, self.repo.git("status", "--porcelain").stdout)

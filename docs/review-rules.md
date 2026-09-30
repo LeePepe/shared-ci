@@ -52,8 +52,10 @@ objects and stub model/GH commands, not hosted or product-adoption evidence.
 ## Owner decision comments
 
 PR title and description are fetched at review time as untrusted author input,
-never as instructions or Owner decisions; the body is capped at 8,000 UTF-8 bytes
-with a truncation marker. `review.yml` triggers on `opened`, `synchronize`,
+never as instructions or Owner decisions; the title is capped at 300 UTF-8 bytes
+and the body at 8,000 UTF-8 bytes, with generated truncation markers. The title is
+flattened to one line and the body is quoted per line with `> `, under distinct
+`> Title:` and `> Body:` labels. `review.yml` triggers on `opened`, `synchronize`,
 `reopened` and `edited`, so title/body/base edits re-run review and gate (a base
 change changes the diff). PR-keyed concurrency cancels superseded runs; a
 cancelled run's gate is cancelled, not successful, and only the newest run's gate
@@ -66,8 +68,9 @@ Rationale (W5): in the 2026-09 zero-knowledge workflow test (probe P4), an agent
 PR stated in its description that the Owner had requested the change, without
 any Owner-authored source. The reviewer then received only the diff, so the
 claim was not visible to it, and neither review nor CI flagged it. Supplying the
-title and description as quoted untrusted data, admitting only verified
-`Owner decision:` comments as authority, and re-running review on edits close
+title (capped at 300 UTF-8 bytes) and description (capped at 8,000 UTF-8 bytes)
+as quoted untrusted data, admitting only verified
+`Owner decision:` comments as authority, and re-running review on edits narrow
 that gap. Remaining risks: a claim confined to commit messages is still not
 supplied to the reviewer; the stale-green window above; and callers are covered
 only after they adopt this version and the updated `templates/review.yml`.

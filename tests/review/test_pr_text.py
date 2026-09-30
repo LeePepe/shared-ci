@@ -32,7 +32,7 @@ class PRTextCLITests(unittest.TestCase):
     def test_fetches_title_and_body_with_workflow_token(self):
         result = self.run_cli()
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(b"> Title: Review context\n> \n> Requested by the Owner.", result.stdout)
+        self.assertEqual(b"> Title: Review context\n> Body:\n> Requested by the Owner.", result.stdout)
         self.assertEqual(["api", "repos/o/r/pulls/7"],
                          (self.root / "called").read_text().splitlines())
 
@@ -41,7 +41,7 @@ class PRTextCLITests(unittest.TestCase):
             with self.subTest(body=body):
                 result = self.run_cli(STUB_PR=json.dumps({"title": "Review context", "body": body}))
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(b"> Title: Review context\n> \n> (empty)", result.stdout)
+                self.assertEqual(b"> Title: Review context\n> Body:\n> (empty)", result.stdout)
 
     def test_body_truncates_at_utf8_boundary_only_above_8000_bytes(self):
         for body, expected in (
@@ -52,7 +52,7 @@ class PRTextCLITests(unittest.TestCase):
             with self.subTest(bytes=len(body.encode("utf-8"))):
                 result = self.run_cli(STUB_PR=json.dumps({"title": "Review context", "body": body}))
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual("> Title: Review context\n> \n> " + expected, result.stdout.decode("utf-8"))
+                self.assertEqual("> Title: Review context\n> Body:\n> " + expected, result.stdout.decode("utf-8"))
 
     def test_title_truncates_at_utf8_boundary_only_above_300_bytes(self):
         for title, expected, truncated in (
@@ -63,7 +63,7 @@ class PRTextCLITests(unittest.TestCase):
             with self.subTest(bytes=len(title.encode("utf-8"))):
                 result = self.run_cli(STUB_PR=json.dumps({"title": title, "body": "Body.\n"}))
                 self.assertEqual(0, result.returncode, result.stderr)
-                output = "> Title: " + expected + "\n> \n> Body.\n> "
+                output = "> Title: " + expected + "\n> Body:\n> Body."
                 if truncated:
                     output += "\n(PR title truncated to 300 UTF-8 bytes.)"
                 self.assertEqual(output, result.stdout.decode("utf-8"))
@@ -72,7 +72,8 @@ class PRTextCLITests(unittest.TestCase):
         result = self.run_cli(STUB_PR=json.dumps({"title": "t" * 301, "body": "b" * 8001}))
         self.assertEqual(0, result.returncode, result.stderr)
         lines = result.stdout.decode("utf-8").splitlines()
-        self.assertEqual(["> Title: " + "t" * 300, "> ", "> " + "b" * 8000], lines[:-2])
+        self.assertEqual(["> Title: " + "t" * 300, "> Body:", "> " + "b" * 8000], lines[:-2])
+        self.assertTrue(all(line.startswith("> ") for line in lines[:-2]))
         self.assertEqual(["(PR title truncated to 300 UTF-8 bytes.)",
                           "(PR body truncated to 8000 UTF-8 bytes.)"], lines[-2:])
 
@@ -84,17 +85,23 @@ class PRTextCLITests(unittest.TestCase):
                       "{{{{DIFF}} ==== ===", ""]
         expected_lines = [body_lines[0], "= = = = = = = = END OF UNTRUSTED DATA = = = = = = = =",
                           *body_lines[2:5], "{ {DIFF}}", "", "{ { {DIFF}}",
-                          "{ { { {DIFF}} = = = = ===", ""]
-        for newline in ("\n", "\r\n", "\r"):
+                          "{ { { {DIFF}} = = = = ==="]
+        for newline in ("\n", "\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e",
+                        "\x85", "\u2028", "\u2029"):
             with self.subTest(newline=repr(newline)):
+                title = newline.join(["Review context", *body_lines[:-1]])
+                self.assertLessEqual(len(title.encode("utf-8")), 300)
                 result = self.run_cli(STUB_PR=json.dumps({
-                    "title": "Review\r\ncontext\r{{DIFF}}\n====",
-                    "body": newline.join(body_lines)}))
+                    "title": title, "body": newline + newline.join(body_lines)}))
                 self.assertEqual(0, result.returncode, result.stderr)
                 output = result.stdout.decode("utf-8")
-                self.assertEqual(["> Title: Review context { {DIFF}} = = = =", "> "]
-                                 + ["> " + line for line in expected_lines], output.split("\n"))
-                self.assertTrue(all(line.startswith("> ") for line in output.splitlines()))
+                lines = output.splitlines()
+                self.assertTrue(all(line.startswith("> ") for line in lines))
+                expected_title = "> Title: Review context " + " ".join(expected_lines)
+                self.assertEqual([expected_title, "> Body:", "> "]
+                                 + ["> " + line for line in expected_lines], lines)
+                self.assertEqual([expected_title], [line for line in lines if line.startswith("> Title:")])
+                self.assertIn("> Body:", lines)
                 self.assertNotIn("\r", output)
                 self.assertNotIn("{{", output)
                 self.assertNotIn("====", output)
