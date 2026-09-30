@@ -68,6 +68,7 @@ git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null \
 
 # Admit the complete diff, never a prefix. Compare decimal strings in Python
 # to avoid shell integer overflow (the budget is configurable, not a PR policy).
+# With python3 -c, sys.argv[0] is "-c"; the arguments after the program are sys.argv[1:].
 BUDGET_ERROR="$(python3 -I -B -c '
 import os
 import re

@@ -64,6 +64,7 @@ provider_git() (
 )
 # Normalize the parent (including platform temp aliases), reject a symlink cache. Never
 # delete, reset, fetch into or checkout an existing caller-owned cache.
+# With python3 -c, sys.argv[0] is "-c"; the arguments after the program are sys.argv[1:].
 shared_ci="$(python3 -I -B -c '
 import os
 import pathlib
