@@ -71,7 +71,10 @@ def allow_patterns(values: list[str]) -> list[str]:
     return patterns
 
 
-NOREPLY_LOCAL = re.compile(r"[a-z0-9](?:[a-z0-9._\[\]-]*[a-z0-9\]])?(?:\+[a-z0-9](?:[a-z0-9._\[\]-]*[a-z0-9\]])?)?")
+# GitHub login: alphanumerics with single inner hyphens, at most 39 chars; Apps add "[bot]".
+GITHUB_LOGIN = r"[a-z0-9](?:-?[a-z0-9]){0,38}"
+NOREPLY_LOCAL = re.compile(r"(?:[1-9][0-9]*\+)?(?=[a-z0-9-]{1,39}(?:\[bot\])?$)"
+                           + GITHUB_LOGIN + r"(?:\[bot\])?")
 
 
 def basic_reason(email: str) -> Optional[str]:

@@ -128,7 +128,13 @@ class CommitIdentityTests(unittest.TestCase):
 
     def test_noreply_mode_rejects_malformed_noreply_local_parts(self):
         for email in ("@users.noreply.github.com", "+name@users.noreply.github.com",
-                      "x@y@users.noreply.github.com", "1+@users.noreply.github.com"):
+                      "x@y@users.noreply.github.com", "1+@users.noreply.github.com",
+                      "fake_user@users.noreply.github.com", "a.b@users.noreply.github.com",
+                      "a[b@users.noreply.github.com", "a--b@users.noreply.github.com",
+                      "-ab@users.noreply.github.com", "ab-@users.noreply.github.com",
+                      "a[bot]x@users.noreply.github.com", "0+ab@users.noreply.github.com",
+                      "a" * 40 + "@users.noreply.github.com",
+                      "a-" * 20 + "a@users.noreply.github.com"):
             with self.subTest(email=email):
                 for role in ("author", "committer"):
                     head = self.repo.commit(**{role: email})
@@ -138,7 +144,8 @@ class CommitIdentityTests(unittest.TestCase):
 
     def test_noreply_mode_accepts_github_noreply_local_part_shapes(self):
         for email in ("name@users.noreply.github.com", "123+name@users.noreply.github.com",
-                      "123+some-app[bot]@users.noreply.github.com"):
+                      "123+some-app[bot]@users.noreply.github.com", "a-b-c@users.noreply.github.com",
+                      "a" * 39 + "@users.noreply.github.com"):
             with self.subTest(email=email):
                 result = self.repo.cli(self.repo.commit(email, email), "--mode", "noreply")
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)

@@ -31,9 +31,11 @@ check, not full email syntax, deliverability, ownership or privacy validation.
 (case-insensitive):
 
 - `<user>@users.noreply.github.com` or `<id>+<user>@users.noreply.github.com`,
-  including bot addresses (`<id>+<name>[bot]@...`). The local part must be a
-  well-formed GitHub noreply name; `@users.noreply.github.com` alone, a leading
-  `+`, or an extra `@` is rejected, and basic-mode malformations never pass.
+  including bot addresses (`<id>+<name>[bot]@...`). The local part must follow
+  GitHub login rules (letters, digits and single inner hyphens, at most 39
+  characters, optional `[bot]` suffix) with an optional positive numeric `<id>+`
+  prefix; anything else (empty, `_`, `.`, brackets, doubled or edge hyphens) is
+  rejected, and basic-mode malformations never pass.
 - `noreply@github.com` for **committers only**: GitHub's web-flow committer is
   used for web merges and Update branch. Authors still need their own noreply
   address, unless explicitly allowlisted.
