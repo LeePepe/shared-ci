@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,28 @@ def isolated_environment(inherited=None):
         "PATH": "/usr/bin:/bin", "LC_ALL": "C",
     })
     return environment
+
+
+def run_bounded(args, *, timeout, input=None, check=False, **kwargs) -> subprocess.CompletedProcess:
+    """Capture a command; kill and reap its entire group on timeout/interruption."""
+    kwargs.setdefault("text", True)
+    if input is not None:
+        kwargs["stdin"] = subprocess.PIPE
+    with subprocess.Popen(args, start_new_session=True, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+            result = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+            if check:
+                result.check_returncode()
+            return result
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+            raise
 
 
 class Fixture:
@@ -70,19 +93,19 @@ class Fixture:
         target.write_text(content, encoding="utf-8")
 
     def git(self, *arguments):
-        return subprocess.run(
+        return run_bounded(
             ["/usr/bin/git", *arguments],
             cwd=self.root, env=self.environment, check=True, text=True,
-            capture_output=True, timeout=10,
+            timeout=10,
         )
 
     def cli(self, command, *arguments, input=None, wrapper=False):
         assert command in {"audit", "resolve", "layers", "field", "contexts", "run"}
         argv = ([str(REPO / "scripts/context" / command)] if wrapper else
                 [PYTHON, "-I", "-B", str(MODULE), command])
-        return subprocess.run(
+        return run_bounded(
             argv + list(arguments), cwd=self.root, env=self.environment,
-            input=input, text=True, capture_output=True, timeout=10,
+            input=input, text=True, timeout=10,
         )
 
     def context(self, path, data):

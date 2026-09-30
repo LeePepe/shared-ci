@@ -13,7 +13,7 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 REVIEW = REPO / "scripts" / "review"
 sys.path.insert(0, str(REPO / "tests" / "repo"))
-from fixture import ContractRepo, environment  # noqa: E402
+from fixture import ContractRepo, environment, run_bounded  # noqa: E402
 
 
 def load(name):
@@ -315,8 +315,8 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
                    STUB_FAIL=fail, CODEX_REVIEW_HOME=str(self.out / "home"))
         env.pop("OWNER_DECISION_USER_ID", None)
         env.update(overrides)
-        result = subprocess.run(["bash", str(REVIEW / script)], cwd=self.repo.root, env=env,
-                                capture_output=True, text=True, timeout=60)
+        result = run_bounded(["bash", str(REVIEW / script)], cwd=self.repo.root, env=env,
+                             timeout=60)
         comment = (self.out / "comment").read_text() if (self.out / "comment").exists() else ""
         return result, comment
 
@@ -603,12 +603,12 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
         self.repo.git("add", "re.py")
         self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base module")
         self.base = self.repo.git("rev-parse", "HEAD").stdout.strip()
-        # Poison only the new stdin validator, not unrelated script-path
+        # Poison only the inline validator, not unrelated script-path
         # launchers (such as immutable rules admission before this step).
         dispatcher = self.tools / "python3"
         dispatcher.write_text("""#!/bin/sh
 for arg in "$@"; do
-    if [ "$arg" = "-" ]; then
+    if [ "$arg" = "-c" ]; then
         printf '%s\\n' "$@" > "$STUB_OUT/budget-python-argv"
         export PYTHONPATH="$STUB_POISON_PATH"
         break
@@ -621,8 +621,8 @@ exec "$STUB_PYTHON" "$@"
             "codex-review.sh", json.dumps(PASS), HEAD_SHA=self.base,
             STUB_POISON_PATH=str(self.repo.root), STUB_PYTHON=sys.executable)
         invocation = self.out / "budget-python-argv"
-        self.assertTrue(invocation.exists(), "actual stdin validator must be invoked")
-        self.assertIn("-", invocation.read_text().splitlines())
+        self.assertTrue(invocation.exists(), "actual inline validator must be invoked")
+        self.assertIn("-c", invocation.read_text().splitlines())
         self.assertFalse((self.repo.root / "poison-imported").exists(), result.stderr)
         self.assertFalse((self.repo.root / "__pycache__").exists())
         self.assertEqual(0, result.returncode, result.stderr)
@@ -630,11 +630,11 @@ exec "$STUB_PYTHON" "$@"
         self.assertFalse((self.out / "prompt").exists())
 
     def test_codex_budget_validator_ignores_pythonpath(self):
-        # Execute the actual new here-doc and prefix, not a copy of its logic.
+        # Execute the actual inline program and prefix, not a copy of its logic.
         # Other existing Python invocations intentionally remain outside scope.
         source = (REVIEW / "codex-review.sh").read_text()
         start = source.index('BUDGET_ERROR="$(') + len('BUDGET_ERROR="$(')
-        validator = source[start:source.index('\n)" || fail_closed', start)]
+        validator = source[start:source.index(')" || fail_closed', start)]
         poison = self.out / "pythonpath"
         poison.mkdir()
         (poison / "re.py").write_text(
@@ -644,8 +644,8 @@ exec "$STUB_PYTHON" "$@"
             with self.subTest(budget=budget):
                 (self.repo.root / "poison-imported").unlink(missing_ok=True)
                 env = dict(self.repo.env, WORK=str(self.out), MAX_BYTES=budget, PYTHONPATH=str(poison))
-                result = subprocess.run(["bash", "-c", validator], cwd=self.repo.root, env=env,
-                                        capture_output=True, text=True, timeout=20)
+                result = run_bounded(["bash", "-c", validator], cwd=self.repo.root, env=env,
+                                     timeout=20)
                 self.assertFalse((self.repo.root / "poison-imported").exists(), result.stderr)
                 self.assertFalse((poison / "__pycache__").exists())
                 self.assertEqual(expected, result.returncode, result.stderr)
