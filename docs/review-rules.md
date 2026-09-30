@@ -62,6 +62,16 @@ behavior. Residual risk: between an edit and creation of the new run's checks,
 an earlier green result may briefly remain visible; auto-merge could race in
 that window.
 
+Rationale (W5): in the 2026-09 zero-knowledge workflow test (probe P4), an agent
+PR stated in its description that the Owner had requested the change, without
+any Owner-authored source. The reviewer then received only the diff, so the
+claim was not visible to it, and neither review nor CI flagged it. Supplying the
+title and description as quoted untrusted data, admitting only verified
+`Owner decision:` comments as authority, and re-running review on edits close
+that gap. Remaining risks: a claim confined to commit messages is still not
+supplied to the reviewer; the stale-green window above; and callers are covered
+only after they adopt this version and the updated `templates/review.yml`.
+
 Codex optionally consumes PR issue comments as trusted, PR-scoped decisions.
 Set the reusable workflow's `owner-user-id` to the Owner's numeric GitHub user ID
 through trusted caller configuration (`OWNER_DECISION_USER_ID` for the wrapper).
