@@ -11,7 +11,27 @@ import re
 import subprocess
 import sys
 
+MAX_TITLE_BYTES = 300
 MAX_BODY_BYTES = 8000
+
+
+def render(title: str, body: str) -> str:
+    """Bound author text before escaping, quote every line, then report truncation."""
+    texts, markers = [], []
+    for label, text, limit in (("title", title, MAX_TITLE_BYTES),
+                               ("body", body, MAX_BODY_BYTES)):
+        encoded = text.encode("utf-8")
+        if len(encoded) > limit:
+            text = encoded[:limit].decode("utf-8", "ignore")
+            markers.append(f"(PR {label} truncated to {limit} UTF-8 bytes.)")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"\{{2,}", lambda match: " ".join(match.group()), text)
+        text = re.sub(r"={4,}", lambda match: " ".join(match.group()), text)
+        texts.append(text)
+    title, body = texts
+    lines = ["> Title: " + title.replace("\n", " "), "> "]
+    lines.extend("> " + line for line in body.split("\n"))
+    return "\n".join(lines + markers)
 
 
 def main() -> int:
@@ -34,12 +54,8 @@ def main() -> int:
                 or "body" not in record
                 or (record["body"] is not None and not isinstance(record["body"], str))):
             raise ValueError("PR record has missing fields or wrong types.")
-        body = record["body"] or "(empty)"
-        encoded = body.encode("utf-8")
-        if len(encoded) > MAX_BODY_BYTES:
-            body = encoded[:MAX_BODY_BYTES].decode("utf-8", "ignore")
-            body += f"\n\n(PR body truncated to {MAX_BODY_BYTES} UTF-8 bytes.)"
-        sys.stdout.buffer.write(f"Title: {record['title']}\n\n{body}".encode("utf-8"))
+        output = render(record["title"], record["body"] or "(empty)")
+        sys.stdout.buffer.write(output.encode("utf-8"))
     except (ValueError, UnicodeError):
         print("pr-text: invalid PR JSON or title/body text.", file=sys.stderr)
         return 1
