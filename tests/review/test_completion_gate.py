@@ -5,8 +5,9 @@ These are local configuration/shell checks, not hosted Actions scheduler evidenc
 import importlib.util
 import os
 import pathlib
-import subprocess
 import unittest
+
+from test_review import run_bounded
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -95,12 +96,12 @@ class CompletionGateTests(unittest.TestCase):
         env.pop("CODEX_RESULT", None)
         if result is not None:
             env["CODEX_RESULT"] = result
-        return subprocess.run([self.step()["shell"], "-eu", "-c", self.step()["run"]],
-                              env=env, capture_output=True, text=True, timeout=10)
+        return run_bounded([self.step()["shell"], "-eu", "-c", self.step()["run"]],
+                           env=env, timeout=10)
 
     def test_actual_inline_shell_syntax(self):
-        result = subprocess.run([self.step()["shell"], "-n"], input=self.step()["run"],
-                                capture_output=True, text=True, timeout=10)
+        result = run_bounded([self.step()["shell"], "-n"], input=self.step()["run"],
+                             timeout=10)
         self.assertEqual(0, result.returncode, result.stderr)
 
     def test_explicit_success_passes(self):

@@ -68,7 +68,7 @@ git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null \
 
 # Admit the complete diff, never a prefix. Compare decimal strings in Python
 # to avoid shell integer overflow (the budget is configurable, not a PR policy).
-BUDGET_ERROR="$(python3 -I -B - "$MAX_BYTES" "$WORK/diff" <<'PYTHON'
+BUDGET_ERROR="$(python3 -I -B -c '
 import os
 import re
 import sys
@@ -83,8 +83,7 @@ if (len(size), size) > (len(limit), limit):
     print(f"Full PR diff ({size} bytes) exceeds REVIEW_MAX_BYTES ({budget} bytes). "
           "Complete review unavailable; configure sufficient reviewer capacity and rerun.")
     sys.exit(1)
-PYTHON
-)" || fail_closed "${BUDGET_ERROR:-Could not validate the complete diff byte budget.}"
+' "$MAX_BYTES" "$WORK/diff")" || fail_closed "${BUDGET_ERROR:-Could not validate the complete diff byte budget.}"
 
 if [ ! -s "$WORK/diff" ]; then
     post_sticky "$MARKER" "$MARKER

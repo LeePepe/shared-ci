@@ -1,11 +1,10 @@
 """The versioned documentation bundle stays navigable and examples stay real."""
 import json
 import re
-import subprocess
 import sys
 import unittest
 
-from fixture import ContractRepo, REPO
+from fixture import ContractRepo, REPO, run_bounded
 
 
 BUNDLE = ("USAGE", "INTEGRATION", "COMPATIBILITY", "MIGRATION")
@@ -53,14 +52,14 @@ class AIBundleTests(unittest.TestCase):
         caller = ContractRepo()
         self.addCleanup(caller.close)
         env = dict(caller.env, ADMITTED_PYTHON=sys.executable, PROVIDER_DIR=str(REPO))
-        result = subprocess.run(["/bin/sh", "-eu", "-c", blocks[0]], cwd=caller.root,
-                                env=env, text=True, capture_output=True, timeout=30)
+        result = run_bounded(["/bin/sh", "-eu", "-c", blocks[0]], cwd=caller.root,
+                             env=env, timeout=30)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue(json.loads(result.stdout)["ok"])
         # Run the exact documented command with a missing required caller artifact.
         caller.remove("AGENTS.md")
-        result = subprocess.run(["/bin/sh", "-eu", "-c", blocks[0]], cwd=caller.root,
-                                env=env, text=True, capture_output=True, timeout=30)
+        result = run_bounded(["/bin/sh", "-eu", "-c", blocks[0]], cwd=caller.root,
+                             env=env, timeout=30)
         self.assertEqual(1, result.returncode, result.stderr)
         self.assertIn("contract_agents", result.stderr)
 

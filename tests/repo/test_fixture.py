@@ -1,11 +1,70 @@
 """Disposable Git repositories must not leave automatic writers at teardown."""
 import json
+import os
 import pathlib
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
-from fixture import ContractRepo
+from fixture import ContractRepo, run_bounded
+
+
+class BoundedRunnerTests(unittest.TestCase):
+    def test_capture_input_exit_status_and_check(self):
+        args = [sys.executable, "-I", "-B", "-c",
+                'import sys; print(sys.stdin.read()); print("error", file=sys.stderr); sys.exit(7)']
+        result = run_bounded(args, input="hello", timeout=5)
+        self.assertEqual((7, "hello\n", "error\n"),
+                         (result.returncode, result.stdout, result.stderr))
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            run_bounded(args, input="hello", check=True, timeout=5)
+        self.assertEqual((7, "hello\n", "error\n"),
+                         (caught.exception.returncode, caught.exception.stdout, caught.exception.stderr))
+
+    def test_timeout_kills_shell_and_descendant(self):
+        self.assert_group_cleanup()
+
+    def test_interruption_kills_shell_and_descendant(self):
+        self.assert_group_cleanup(interrupt=True)
+
+    def assert_group_cleanup(self, interrupt=False):
+        communicate = subprocess.Popen.communicate
+        pids = []
+        drained = []
+
+        def capture(process, *args, **kwargs):
+            try:
+                output = communicate(process, *args, **kwargs)
+                drained.append(output[0])
+                return output
+            except subprocess.TimeoutExpired as error:
+                pids.extend(int(pid) for pid in error.output.split())
+                if interrupt:
+                    raise KeyboardInterrupt("interrupted while waiting") from error
+                raise
+
+        # The descendant inherits captured pipes and outlives a direct-child kill.
+        # A finite sleep keeps a broken regression from leaving permanent orphans.
+        with patch.object(subprocess.Popen, "communicate", capture):
+            with self.assertRaises(KeyboardInterrupt if interrupt else subprocess.TimeoutExpired):
+                run_bounded(
+                    ["bash", "-c", 'bash -c "sleep 5; echo survived" & '
+                     'printf "%s %s\\n" "$$" "$!"; wait'], timeout=0.5)
+        self.assertNotIn("survived", "".join(drained), "descendant survived the timeout")
+        self.assertEqual(2, len(pids), "shell must start its descendant before timeout")
+        deadline = time.monotonic() + 2
+        for pid in pids:
+            while True:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                if time.monotonic() >= deadline:
+                    self.fail(f"runner left process {pid} alive after cleanup")
+                time.sleep(0.01)
 
 
 class FixtureLifecycleTests(unittest.TestCase):

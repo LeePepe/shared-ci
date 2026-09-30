@@ -15,47 +15,46 @@ cd "$root"
 shared_ci="${SHARED_CI:-$root/.shared-ci}"
 # Bootstrap reads only the pin envelope; the pinned audit validates the complete
 # metadata/guide/workflow contract before any caller gate runs.
-pin="$(python3 -I -B - <<'PY_PIN'
+pin="$(python3 -I -B -c '
 import json
 import pathlib
 import re
 import subprocess
 
-metadata = pathlib.Path('.github/repo-contract.json')
+metadata = pathlib.Path(".github/repo-contract.json")
 if metadata.is_symlink() or metadata.parent.is_symlink():
-    raise SystemExit('repository metadata must not traverse a symlink')
+    raise SystemExit("repository metadata must not traverse a symlink")
 if metadata.exists():
     if not metadata.is_file():
-        raise SystemExit('repository metadata must be a regular file')
-    rows = subprocess.check_output(['git', 'ls-files', '--stage', '--', str(metadata)], text=True).splitlines()
-    if len(rows) != 1 or not re.fullmatch(r'100(?:644|755) [0-9a-f]+ 0\t\.github/repo-contract\.json', rows[0]):
-        raise SystemExit('repository metadata must be tracked and unconflicted')
+        raise SystemExit("repository metadata must be a regular file")
+    rows = subprocess.check_output(["git", "ls-files", "--stage", "--", str(metadata)], text=True).splitlines()
+    if len(rows) != 1 or not re.fullmatch(r"100(?:644|755) [0-9a-f]+ 0\t\.github/repo-contract\.json", rows[0]):
+        raise SystemExit("repository metadata must be tracked and unconflicted")
     def unique(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError('duplicate metadata key: ' + key)
+                raise ValueError("duplicate metadata key: " + key)
             result[key] = value
         return result
-    data = json.loads(metadata.read_text(encoding='utf-8'), object_pairs_hook=unique)
-    if not isinstance(data, dict) or set(data) != {'schema', 'guide', 'shared_ci', 'dependencies'}:
-        raise SystemExit('invalid repository metadata fields')
-    if type(data['schema']) is not int or data['schema'] != 1:
-        raise SystemExit('unsupported repository metadata schema')
-    if not isinstance(data['guide'], str) or not isinstance(data['dependencies'], dict):
-        raise SystemExit('invalid repository metadata types')
-    pin = data['shared_ci']
+    data = json.loads(metadata.read_text(encoding="utf-8"), object_pairs_hook=unique)
+    if not isinstance(data, dict) or set(data) != {"schema", "guide", "shared_ci", "dependencies"}:
+        raise SystemExit("invalid repository metadata fields")
+    if type(data["schema"]) is not int or data["schema"] != 1:
+        raise SystemExit("unsupported repository metadata schema")
+    if not isinstance(data["guide"], str) or not isinstance(data["dependencies"], dict):
+        raise SystemExit("invalid repository metadata types")
+    pin = data["shared_ci"]
 else:
-    text = pathlib.Path('AGENTS.md').read_text(encoding='utf-8')
-    pins = set(re.findall(r'(?:LeePepe/shared-ci@|github\.com/LeePepe/shared-ci/blob/)([0-9a-f]{40})/ai/agent-protocol\.md', text))
+    text = pathlib.Path("AGENTS.md").read_text(encoding="utf-8")
+    pins = set(re.findall(r"(?:LeePepe/shared-ci@|github\.com/LeePepe/shared-ci/blob/)([0-9a-f]{40})/ai/agent-protocol\.md", text))
     if len(pins) != 1:
-        raise SystemExit('expected one legacy shared-ci pin or .github/repo-contract.json')
+        raise SystemExit("expected one legacy shared-ci pin or .github/repo-contract.json")
     pin = pins.pop()
-if not isinstance(pin, str) or not re.fullmatch(r'[0-9a-f]{40}', pin):
-    raise SystemExit('shared_ci must be a full lowercase 40-char SHA')
+if not isinstance(pin, str) or not re.fullmatch(r"[0-9a-f]{40}", pin):
+    raise SystemExit("shared_ci must be a full lowercase 40-char SHA")
 print(pin)
-PY_PIN
-)"
+')"
 
 # Hook-local Git variables belong to the caller, never the provider. Keep the
 # caller environment unchanged for its index/audit and verification commands.
@@ -65,16 +64,15 @@ provider_git() (
 )
 # Normalize the parent (including platform temp aliases), reject a symlink cache. Never
 # delete, reset, fetch into or checkout an existing caller-owned cache.
-shared_ci="$(python3 -I -B - "$shared_ci" <<'PY_PATH'
+shared_ci="$(python3 -I -B -c '
 import os
 import pathlib
 import sys
 path = pathlib.Path(os.path.abspath(sys.argv[1]))
 if path.is_symlink():
-    raise SystemExit('provider path must not traverse a symlink')
+    raise SystemExit("provider path must not traverse a symlink")
 print(path.parent.resolve() / path.name)
-PY_PATH
-)"
+' "$shared_ci")"
 if [ ! -e "$shared_ci" ]; then
     if [ -n "${SHARED_CI:-}" ]; then
         echo "[verify] supplied SHARED_CI must already exist at the declared pin" >&2; exit 1

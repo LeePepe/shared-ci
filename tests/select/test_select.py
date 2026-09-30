@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -67,6 +68,28 @@ def environment() -> dict[str, str]:
                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
                 "LC_ALL": "C.UTF-8"})
     return env
+
+
+def run_bounded(args, *, timeout, input=None, check=False, **kwargs) -> subprocess.CompletedProcess:
+    """Capture a command; kill and reap its entire group on timeout/interruption."""
+    kwargs.setdefault("text", True)
+    if input is not None:
+        kwargs["stdin"] = subprocess.PIPE
+    with subprocess.Popen(args, start_new_session=True, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+            result = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+            if check:
+                result.check_returncode()
+            return result
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+            raise
 
 
 class Fixture:
@@ -381,8 +404,8 @@ class TemplateVerifySelectedTests(unittest.TestCase):
         environment = {key: value for key, value in self.repo.env.items()
                        if key not in ("CI_SELECTION_FULL", "CI_SELECTED_LAYERS")}
         environment.update(SHARED_CI=self.checkout, **env)
-        return subprocess.run(["bash", "scripts/verify", *args], cwd=self.repo.root, env=environment,
-                              capture_output=True, text=True, timeout=120)
+        return run_bounded(["bash", "scripts/verify", *args], cwd=self.repo.root, env=environment,
+                           timeout=120)
 
     def gates(self, result: subprocess.CompletedProcess) -> list[str]:
         return sorted(line for line in result.stdout.splitlines() if line.startswith("gate-"))

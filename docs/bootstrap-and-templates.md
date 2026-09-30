@@ -52,6 +52,9 @@ No ruleset, runner or server enforcement is installed by copying these files.
 
 ## Bootstrap behavior and compatibility
 
+Shell entry points must not use here-documents: Bash 5.x pipe heredocs can
+deadlock on macOS. Pass embedded Python programs with `python3 -I -B -c`.
+
 The script requires Python 3.9+, Git and Bash. With metadata present, the
 bootstrap checks a tracked regular metadata envelope, schema integer 1, unique
 JSON keys and a full lowercase SHA. Malformed/untracked/symlink metadata fails

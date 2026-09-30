@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from test_review import ContractRepo, PASS, REPO, REVIEW, STUB_CODEX, STUB_GH, render_prompt
+from test_review import ContractRepo, PASS, REPO, REVIEW, STUB_CODEX, STUB_GH, render_prompt, run_bounded
 
 KIMI = '''#!/bin/sh
 prev=""
@@ -62,8 +62,8 @@ class RulesInputTests(unittest.TestCase):
         env.pop("REVIEW_RULES_FILE", None)
         if path is not None:
             env["REVIEW_RULES_FILE"] = path
-        result = subprocess.run(["bash", str(REVIEW / (tool + "-review.sh"))], cwd=self.repo.root,
-                                env=env, capture_output=True, text=True, timeout=30)
+        result = run_bounded(["bash", str(REVIEW / (tool + "-review.sh"))], cwd=self.repo.root,
+                             env=env, timeout=30)
         comment = (self.tools / "comment").read_text() if (self.tools / "comment").exists() else ""
         prompt = (self.tools / "prompt").read_text() if (self.tools / "prompt").exists() else None
         return result, comment, prompt
