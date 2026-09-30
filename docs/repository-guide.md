@@ -120,6 +120,11 @@ not a separate Owner test class. Actual gate/policy/permission changes remain
 protected. Local supplied-body checks do not prove live PR-body acceptance;
 the lexical detector's limits require independent review.
 
+Candidate commit identity defaults to `basic` (malformed/local-email rejection).
+Once the Owner switches local Git and GitHub web commit emails to noreply,
+enable strict mode per repo with `commit-identity-mode: noreply` in its quality
+caller; see [both modes](commit-identity.md).
+
 `tests/contracts` is **not** run by `scripts/verify`. Registry isolation,
 behaviour and schema-engine fixtures require separate external tool/source and
 envelope admission, then independent D1 acceptance before behaviour execution,

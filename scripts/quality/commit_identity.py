@@ -54,25 +54,62 @@ def identities(root: str, base: str, head: str) -> list[tuple[str, str, str]]:
     return rows
 
 
-def allowed(email: str, role: str, patterns: list[str]) -> bool:
+def allow_patterns(values: list[str]) -> list[str]:
+    patterns = []
+    for value in values:
+        for part in re.split(r"[,\r\n]", value):
+            pattern = part.strip()
+            if not pattern:
+                continue
+            local, separator, domain = pattern.rpartition("@")
+            if not separator:
+                raise ValueError(f"invalid allow pattern {json.dumps(pattern)}: must contain @")
+            if local and domain and set(local + domain) <= {"*", "?"}:
+                raise ValueError(f"invalid allow pattern {json.dumps(pattern)}: too broad; "
+                                 "both sides of @ contain only wildcards")
+            patterns.append(pattern.lower())
+    return patterns
+
+
+def rejection_reason(email: str, role: str, patterns: list[str], mode: str) -> Optional[str]:
     email = email.lower()
-    return (fnmatch.fnmatchcase(email, "*@users.noreply.github.com")
-            # GitHub web-flow writes committer metadata, not contributor identity.
-            or role == "committer" and email == "noreply@github.com"
-            or any(fnmatch.fnmatchcase(email, pattern) for pattern in patterns))
+    if any(fnmatch.fnmatchcase(email, pattern) for pattern in patterns):
+        return None
+    if mode == "noreply":
+        if (fnmatch.fnmatchcase(email, "*@users.noreply.github.com")
+                # GitHub web-flow writes committer metadata, not contributor identity.
+                or role == "committer" and email == "noreply@github.com"):
+            return None
+        return "not a GitHub noreply address"
+    local, separator, domain = email.rpartition("@")
+    if not separator:
+        return "missing @"
+    if not local:
+        return "missing local part"
+    domain = domain.removesuffix(".")
+    if not domain:
+        return "missing domain"
+    if domain.endswith(("localhost", ".local", ".localdomain")):
+        return "local hostname domain"
+    if "." not in domain:
+        return "domain has no dot"
+    return None
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
+    parser.add_argument("--mode", choices=("basic", "noreply"), default="basic",
+                        help="identity policy (default: basic)")
     parser.add_argument("--allow", action="append", default=[],
                         help="case-insensitive email glob(s), comma/newline separated; repeatable")
     parser.add_argument("--root", default=".")
     args = parser.parse_args(argv)
-    patterns = [pattern.strip().lower() for value in args.allow
-                for pattern in re.split(r"[,\r\n]", value) if pattern.strip()]
     try:
+        patterns = allow_patterns(args.allow)
+        print(f"commit-identity: mode {args.mode}", flush=True)
+        print(f"commit-identity: allow patterns {json.dumps(patterns)}", flush=True)
         rows = identities(args.root, args.base, args.head)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"commit-identity: {error}", file=sys.stderr)
@@ -80,12 +117,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     offenders = 0
     for sha, author, committer in rows:
         for role, email in (("author", author), ("committer", committer)):
-            if not allowed(email, role, patterns):
+            reason = rejection_reason(email, role, patterns, args.mode)
+            if reason is not None:
                 # Escape controls so an email cannot inject workflow log commands.
-                print(f"commit-identity: {sha[:12]} {role} {json.dumps(email)}", file=sys.stderr)
+                print(f"commit-identity: {sha[:12]} {role} {json.dumps(email)}: {reason}",
+                      file=sys.stderr)
                 offenders += 1
     if offenders:
-        print("Fix: set git user.email to your GitHub noreply address and rewrite the branch commits "
+        identity = ("your GitHub noreply address" if args.mode == "noreply"
+                    else "a valid email address with a non-local, dotted domain")
+        print(f"Fix: set git user.email to {identity} and rewrite the branch commits "
               "to correct both author and committer emails.", file=sys.stderr)
         return 1
     print(f"commit-identity: ok ({len(rows)} commits)")

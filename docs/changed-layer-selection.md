@@ -167,8 +167,9 @@ The existing `select` job also hosts the default-on
 [commit-identity step](commit-identity.md), implemented by Quality's
 [`commit_identity.py`](../scripts/quality/commit_identity.py). It checks the full PR commit range
 even when selection is disabled or no layer is selected. The independent inputs
-are `commit-identity` (boolean, default `true`) and `commit-identity-allow`
-(string, default empty); neither changes layer-selection output. Its failure
+are `commit-identity` (boolean, default `true`), `commit-identity-mode` (string,
+default `basic`; `noreply` opts into strict checking) and `commit-identity-allow`
+(string, default empty); none changes layer-selection output. Its failure
 propagates through the existing requirement that `select` succeed.
 
 The aggregate needs `select` too. Each lane reports a `ran` output (`true`
