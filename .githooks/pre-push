@@ -1,4 +1,34 @@
 #!/usr/bin/env bash
 # Same entry as CI. Enable once per clone: git config core.hooksPath .githooks
+# --no-verify skips this hook; the server ruleset is the backstop.
 set -euo pipefail
+
+remote="${1:-}"
+default_branch=main
+if [[ -n "$remote" ]] && remote_head="$(git symbolic-ref --quiet "refs/remotes/$remote/HEAD" 2>/dev/null)"; then
+    case "$remote_head" in
+        "refs/remotes/$remote/"*) default_branch="${remote_head#"refs/remotes/$remote/"}" ;;
+    esac
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # All-zero object IDs are deletions, independent of hash length.
+    if [[ "$local_sha" == *[!0]* ]] &&
+       [[ "$remote_ref" == refs/heads/main || "$remote_ref" == "refs/heads/$default_branch" ]]; then
+        branch="${remote_ref#refs/heads/}"
+        {
+            printf '[pre-push] direct pushes to %s are not allowed; open a PR\n' "$branch"
+            printf '%s\n' 'For example (replace origin with your remote):' \
+                '  git switch -c <topic-branch>' \
+                '  git push -u origin <topic-branch>' \
+                '  gh pr create --fill'
+            printf '%s\n' 'If you committed on the local default branch, optionally switch back and run:'
+            printf '  git reset --hard origin/%q\n' "$branch"
+            printf '%s\n' 'Only after preserving those commits on the topic branch, saving uncommitted work,' \
+                'and confirming the remote-tracking tip; reset --hard discards local changes.'
+        } >&2
+        exit 1
+    fi
+done
+
 exec "$(git rev-parse --show-toplevel)/scripts/verify"
