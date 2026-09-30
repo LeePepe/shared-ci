@@ -24,6 +24,9 @@ and `kind: "contract_<item>"`.
 | 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
 | 8 `identity` | No personal account names, credential-profile paths or local home paths | red line | audit scans every tracked text file for the `forbidden_patterns` | account names in prose that the patterns do not cover |
 
+The template pre-push guard rejects non-deletion pushes to `main` and the remote
+HEAD default branch before verification; the server ruleset remains the backstop.
+
 ## Opt-in metadata and directory audit
 
 Callers with `.github/repo-contract.json` opt into the directory-only audit
