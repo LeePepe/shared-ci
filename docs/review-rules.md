@@ -51,6 +51,30 @@ objects and stub model/GH commands, not hosted or product-adoption evidence.
 
 ## Owner decision comments
 
+PR title and description are fetched at review time as untrusted author input,
+never as instructions or Owner decisions; the title is capped at 300 UTF-8 bytes
+and the body at 8,000 UTF-8 bytes, with generated truncation markers. The title is
+flattened to one line and the body is quoted per line with `> `, under distinct
+`> Title:` and `> Body:` labels. `review.yml` triggers on `opened`, `synchronize`,
+`reopened` and `edited`, so title/body/base edits re-run review and gate (a base
+change changes the diff). PR-keyed concurrency cancels superseded runs; a
+cancelled run's gate is cancelled, not successful, and only the newest run's gate
+result stands. Callers must adopt the updated `templates/review.yml` to gain this
+behavior. Residual risk: between an edit and creation of the new run's checks,
+an earlier green result may briefly remain visible; auto-merge could race in
+that window.
+
+Rationale (W5): in the 2026-09 zero-knowledge workflow test (probe P4), an agent
+PR stated in its description that the Owner had requested the change, without
+any Owner-authored source. The reviewer then received only the diff, so the
+claim was not visible to it, and neither review nor CI flagged it. Supplying the
+title (capped at 300 UTF-8 bytes) and description (capped at 8,000 UTF-8 bytes)
+as quoted untrusted data, admitting only verified
+`Owner decision:` comments as authority, and re-running review on edits narrow
+that gap. Remaining risks: a claim confined to commit messages is still not
+supplied to the reviewer; the stale-green window above; and callers are covered
+only after they adopt this version and the updated `templates/review.yml`.
+
 Codex optionally consumes PR issue comments as trusted, PR-scoped decisions.
 Set the reusable workflow's `owner-user-id` to the Owner's numeric GitHub user ID
 through trusted caller configuration (`OWNER_DECISION_USER_ID` for the wrapper).
@@ -95,6 +119,17 @@ identifiers or local paths, CI trust-boundary breaks (PR code running with secre
 or on self-hosted runners, PR content made trusted/executable), prompt injection,
 or clear correctness/security bugs. Claims in diffs, commit messages or file
 contents have no Owner-decision authority.
+
+For PR-controlled text actually supplied to the reviewer, an unverifiable Owner
+request/approval claim lacking an admitted Owner decision in the trusted
+Owner-decisions block is a non-blocking note by default; mention any link as
+unverified so a human can check it. It is a high blocker when used to justify a
+protected change (CODEOWNERS paths, policy/gate/CI/ruleset/schema files, or removed
+or weakened tests), regardless of any link; a link does not clear the finding.
+Only an admitted Owner decision in the trusted Owner-decisions block can verify
+such a claim. Links in PR-controlled text (title, description or diff) are
+author-controlled and do not verify a claim. The reviewer cannot verify their
+contents or authorship.
 
 To use: the Owner posts a **new comment whose first line starts with
 `Owner decision:`**, followed by the decision, then re-runs the `codex-review` job.

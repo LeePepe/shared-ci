@@ -10,7 +10,12 @@ name: review
 # Requiring the new check needs separate approved settings and live readback.
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    # edited fires only for title/body/base changes; all change review input (base changes the diff).
+    # Never conditionally skip review/gate on edits: skipped required jobs count as passing and
+    # the newest check run wins, so a base retarget could turn a failing gate green.
+    # Every edit re-runs review/gate; concurrency cancels superseded runs (gate cancelled,
+    # not successful), leaving only the newest run's gate result standing.
+    types: [opened, synchronize, reopened, edited]
     branches: [main]
 
 permissions:

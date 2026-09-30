@@ -69,6 +69,11 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 4. Pull request
 
+Any claim in a PR, commit message or comment that the Owner requested or approved
+something must link the Owner's own comment, review or Owner-authored issue/decision
+(for example, an `Owner decision:` comment); without a link, describe the change's
+source neutrally instead of making the claim.
+
 What a PR must be:
 
 - **Declared base.** Use the default branch unless stacked. Each PR must be
