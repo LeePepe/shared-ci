@@ -53,8 +53,14 @@ objects and stub model/GH commands, not hosted or product-adoption evidence.
 
 PR title and description are fetched at review time as untrusted author input,
 never as instructions or Owner decisions; the body is capped at 8,000 UTF-8 bytes
-with a truncation marker. `review.yml` triggers on `opened`, `synchronize` and
-`reopened`, so a title/body-only edit does not re-run review: re-run the job or push.
+with a truncation marker. `review.yml` triggers on `opened`, `synchronize`,
+`reopened` and `edited`, so title/body/base edits re-run review and gate (a base
+change changes the diff). PR-keyed concurrency cancels superseded runs; a
+cancelled run's gate is cancelled, not successful, and only the newest run's gate
+result stands. Callers must adopt the updated `templates/review.yml` to gain this
+behavior. Residual risk: between an edit and creation of the new run's checks,
+an earlier green result may briefly remain visible; auto-merge could race in
+that window.
 
 Codex optionally consumes PR issue comments as trusted, PR-scoped decisions.
 Set the reusable workflow's `owner-user-id` to the Owner's numeric GitHub user ID

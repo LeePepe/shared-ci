@@ -4,7 +4,12 @@ name: review
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    # edited fires only for title/body/base changes; all change review input (base changes the diff).
+    # Never conditionally skip review/gate on edits: skipped required jobs count as passing and
+    # the newest check run wins, so a base retarget could turn a failing gate green.
+    # Every edit re-runs review/gate; concurrency cancels superseded runs (gate cancelled,
+    # not successful), leaving only the newest run's gate result standing.
+    types: [opened, synchronize, reopened, edited]
     branches: [main]
 
 permissions:
@@ -22,6 +27,30 @@ jobs:
       rules-file: docs/repository-guide.md
       codex-launcher: ""   # e.g. "python3 scripts/ci/review-raven.py" (base-tree file)
       owner-user-id: ""   # numeric ID of the human Owner account (never an App/bot); enables PR-scoped 'Owner decision:' comments
+
+  codex-review-gate:
+    if: ${{ always() }}
+    needs: [codex-review-target]
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: Require completed Codex review
+        shell: sh
+        env:
+          CODEX_RESULT: ${{ needs.codex-review-target.result }}
+        run: |
+          case "${CODEX_RESULT:-}" in
+            success)
+              echo "Codex review completed successfully."
+              ;;
+            *)
+              echo "::error::Codex review must complete with success; skipped, failed, cancelled or unavailable review cannot pass."
+              echo "Check SHARED_CI_REVIEW_RUNNER and trusted runner availability, inspect the Codex review job, then re-run review for this PR head."
+              echo "Owner approval and Kimi success do not substitute for completed Codex review."
+              exit 1
+              ;;
+          esac
 
   kimi-review:
     uses: LeePepe/shared-ci/.github/workflows/kimi-review.yml@<40-char-sha>

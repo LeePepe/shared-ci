@@ -166,7 +166,7 @@ class SelfAdoptionTests(unittest.TestCase):
         review = yaml.parse((self.repo.root / ".github/workflows/review.yml").read_text(encoding="utf-8"))
         self.assertEqual({"contents": "read", "pull-requests": "write"}, review["permissions"])
         self.assertEqual({"pull_request_target": {
-            "types": ["opened", "synchronize", "reopened"], "branches": ["main"]}}, review["on"])
+            "types": ["opened", "synchronize", "reopened", "edited"], "branches": ["main"]}}, review["on"])
         self.assertEqual({"codex-review-target", "codex-review-gate", "kimi-review"},
                          set(review["jobs"]))
         gate = review["jobs"]["codex-review-gate"]
