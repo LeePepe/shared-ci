@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-from fixture import ContractRepo, OTHER, REPO, environment
+from fixture import ContractRepo, OTHER, REPO, environment, run_bounded
 
 
 PROVIDER = "6e354f476bc53d68f0f09fc231d5cd938466af9c"
@@ -166,7 +166,7 @@ class SelfAdoptionTests(unittest.TestCase):
         review = yaml.parse((self.repo.root / ".github/workflows/review.yml").read_text(encoding="utf-8"))
         self.assertEqual({"contents": "read", "pull-requests": "write"}, review["permissions"])
         self.assertEqual({"pull_request_target": {
-            "types": ["opened", "synchronize", "reopened"], "branches": ["main"]}}, review["on"])
+            "types": ["opened", "synchronize", "reopened", "edited"], "branches": ["main"]}}, review["on"])
         self.assertEqual({"codex-review-target", "codex-review-gate", "kimi-review"},
                          set(review["jobs"]))
         gate = review["jobs"]["codex-review-gate"]
@@ -270,9 +270,9 @@ class SelectedProviderGuideTransportTests(unittest.TestCase):
                    CODEX_LAUNCHER="", CODEX_REVIEW_HOME=str(output / "review-home"),
                    STUB_OUT=str(output), STUB_VERDICT=json.dumps(self.fixtures.PASS),
                    STUB_FAIL="", STUB_PUBLISH_FAIL="", STUB_COMMENT_ID="")
-        result = subprocess.run(
+        result = run_bounded(
             ["bash", str(self.provider / "scripts/review" / (tool + "-review.sh"))],
-            cwd=repo.root, env=env, capture_output=True, text=True, timeout=30)
+            cwd=repo.root, env=env, timeout=30)
         self.assertEqual(base, repo.git("rev-parse", "HEAD").stdout.strip())
         self.assertEqual(b"# WORKTREE_ONLY_GUIDE\n", (repo.root / GUIDE).read_bytes())
         self.assertEqual("# INDEX_ONLY_GUIDE\n", repo.git("show", ":" + GUIDE).stdout)

@@ -5,12 +5,11 @@ These are local configuration/shell checks, not hosted Actions scheduler evidenc
 import importlib.util
 import os
 import pathlib
-import subprocess
 import sys
 import tempfile
 import unittest
 
-from test_review import STUB_GH
+from test_review import STUB_GH, run_bounded
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -56,7 +55,7 @@ class CompletionGateTests(unittest.TestCase):
 
     def test_review_trigger_and_conditional_pinned_callers_are_preserved(self):
         self.assertEqual({"pull_request_target": {
-            "types": ["opened", "synchronize", "reopened"], "branches": ["main"]}},
+            "types": ["opened", "synchronize", "reopened", "edited"], "branches": ["main"]}},
             self.workflow["on"])
         self.assertEqual({"codex-review-target", "codex-review-gate", "kimi-review"},
                          set(self.jobs))
@@ -99,12 +98,12 @@ class CompletionGateTests(unittest.TestCase):
         env.pop("CODEX_RESULT", None)
         if result is not None:
             env["CODEX_RESULT"] = result
-        return subprocess.run([self.step()["shell"], "-eu", "-c", self.step()["run"]],
-                              env=env, capture_output=True, text=True, timeout=10)
+        return run_bounded([self.step()["shell"], "-eu", "-c", self.step()["run"]],
+                           env=env, timeout=10)
 
     def test_actual_inline_shell_syntax(self):
-        result = subprocess.run([self.step()["shell"], "-n"], input=self.step()["run"],
-                                capture_output=True, text=True, timeout=10)
+        result = run_bounded([self.step()["shell"], "-n"], input=self.step()["run"],
+                             timeout=10)
         self.assertEqual(0, result.returncode, result.stderr)
 
     def test_explicit_success_passes(self):
@@ -190,8 +189,8 @@ class KimiAvailabilityWorkflowTests(unittest.TestCase):
                     for name in ("output", "summary"):
                         (root / name).unlink(missing_ok=True)
                     env["KIMI_BIN"] = binary
-                    result = subprocess.run(["/bin/bash", "-e", "-o", "pipefail", "-c", check["run"]],
-                                            cwd=root, env=env, capture_output=True, text=True, timeout=10)
+                    result = run_bounded(["/bin/bash", "-e", "-o", "pipefail", "-c", check["run"]],
+                                         cwd=root, env=env, timeout=10)
                     self.assertEqual(0, result.returncode, result.stderr)
                     self.assertEqual("available=" + expected + "\n", (root / "output").read_text())
                     self.assertFalse((root / "injected").exists())
@@ -206,8 +205,8 @@ class KimiAvailabilityWorkflowTests(unittest.TestCase):
                 with self.subTest(comment_id=comment_id, failure=failure):
                     (root / "publish-attempts").unlink(missing_ok=True)
                     env.update(STUB_COMMENT_ID=comment_id, STUB_PUBLISH_FAIL=failure)
-                    result = subprocess.run(["/bin/bash", "-e", "-o", "pipefail", "-c", publish["run"]],
-                                            cwd=root, env=env, capture_output=True, text=True, timeout=10)
+                    result = run_bounded(["/bin/bash", "-e", "-o", "pipefail", "-c", publish["run"]],
+                                         cwd=root, env=env, timeout=10)
                     self.assertEqual(0, result.returncode, result.stderr)
                     comment = (root / "attempted-comment").read_text()
                     self.assertTrue(comment.startswith("<!-- shared-ci-kimi-review -->\n## kimi review unavailable\n"))
@@ -215,6 +214,52 @@ class KimiAvailabilityWorkflowTests(unittest.TestCase):
                     self.assertIn("does not block merge", comment)
                     self.assertEqual("PATCH\nPOST\n" if failure else "PATCH\n" if comment_id else "POST\n",
                                      (root / "publish-attempts").read_text())
+
+
+class ReviewEditWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.workflows = {
+            path: frontmatter.parse((REPO / path).read_text())
+            for path in (".github/workflows/review.yml", "templates/review.yml")
+        }
+
+    def test_review_events_include_all_input_edits(self):
+        for path, workflow in self.workflows.items():
+            with self.subTest(workflow=path):
+                self.assertEqual(
+                    ["opened", "synchronize", "reopened", "edited"],
+                    workflow["on"]["pull_request_target"]["types"])
+
+    def test_review_callers_and_gate_never_skip_based_on_event(self):
+        for path, workflow in self.workflows.items():
+            for job_id in ("codex-review-target", "codex-review-gate", "kimi-review"):
+                with self.subTest(workflow=path, job=job_id):
+                    self.assertIn(job_id, workflow["jobs"])
+                    condition = workflow["jobs"][job_id].get("if", "")
+                    self.assertNotRegex(
+                        condition, r"\bgithub\s*\.\s*(?:event|event_name)\b",
+                        "Title/body/base edits must not skip review or its required gate")
+
+    def test_both_gates_always_wait_for_codex_and_use_same_fail_closed_gate(self):
+        provider_gate = self.workflows[".github/workflows/review.yml"]["jobs"][
+            "codex-review-gate"]
+        for path, workflow in self.workflows.items():
+            with self.subTest(workflow=path):
+                self.assertIn("codex-review-gate", workflow["jobs"])
+                gate = workflow["jobs"]["codex-review-gate"]
+                self.assertEqual("${{ always() }}", gate["if"])
+                self.assertEqual(["codex-review-target"], gate["needs"])
+                # CompletionGateTests executes this exact gate's shell for
+                # success and every non-success result, including cancellation.
+                self.assertEqual(provider_gate, gate)
+
+    def test_superseded_runs_are_cancelled_per_pull_request(self):
+        for path, workflow in self.workflows.items():
+            with self.subTest(workflow=path):
+                self.assertEqual({
+                    "group": "review-${{ github.event.pull_request.number }}",
+                    "cancel-in-progress": True,
+                }, workflow["concurrency"])
 
 
 if __name__ == "__main__":

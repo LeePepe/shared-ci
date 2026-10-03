@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 
-from fixture import AGENTS, ContractRepo, PIN, REPO, environment
+from fixture import AGENTS, ContractRepo, PIN, REPO, environment, run_bounded
 
 # Published provider supporting the metadata/index contract and versioned AI docs.
 PROVIDER = "d8fe8e3c68182e3d8435120814bae955ee327372"
@@ -60,8 +60,8 @@ class BootstrapTests(unittest.TestCase):
                if k not in ("CI_SELECTION_FULL", "CI_SELECTED_LAYERS", "SHARED_CI")}
         env["SHARED_CI"] = str(self.provider)
         env.update(updates)
-        return subprocess.run(["bash", "scripts/verify", *args], cwd=self.repo.root,
-                              env=env, capture_output=True, text=True, timeout=120)
+        return run_bounded(["bash", "scripts/verify", *args], cwd=self.repo.root,
+                           env=env, timeout=120)
 
     def assert_pass(self, result):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -227,8 +227,8 @@ class BootstrapTests(unittest.TestCase):
         self.repo.git("config", "core.hooksPath", ".githooks")
         env = dict(self.repo.env, SHARED_CI=str(self.provider), VERIFY_BASE="baseline",
                    GIT_DIR=str(self.repo.root / ".git"))
-        result = subprocess.run(["git", "hook", "run", "pre-push"], cwd=self.repo.root,
-                                env=env, capture_output=True, text=True, timeout=120)
+        result = run_bounded(["git", "hook", "run", "pre-push"], cwd=self.repo.root,
+                             env=env, timeout=120)
         self.assert_pass(result)
 
     def contract_url(self):

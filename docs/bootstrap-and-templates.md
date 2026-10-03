@@ -22,6 +22,9 @@ Copy the following from `templates/`, retaining executable bits on both scripts:
 | tech-context.leaf.md | each actual layer's `tech-context.md` |
 | scripts/verify, githooks/pre-push | `scripts/verify`, `.githooks/pre-push` |
 
+Before verification, the pre-push hook refuses non-deletion pushes to `main` and
+the remote HEAD default branch (falling back to `main`); server rules remain the backstop.
+
 Replace every `<40-char-sha>` with the same supported full lowercase provider
 SHA and `@OWNER` with the actual review owner. Choose real repository layer
 responsibilities, ownership (including tests), dependencies and gate commands;
@@ -51,6 +54,10 @@ review input. Bootstrap/protection changes remain important Owner-reviewed PRs.
 No ruleset, runner or server enforcement is installed by copying these files.
 
 ## Bootstrap behavior and compatibility
+
+The template passes embedded Python with `python3 -I -B -c` instead of
+here-documents because Bash 5.x pipe-backed heredocs larger than the pipe
+capacity can deadlock on macOS.
 
 The script requires Python 3.9+, Git and Bash. With metadata present, the
 bootstrap checks a tracked regular metadata envelope, schema integer 1, unique

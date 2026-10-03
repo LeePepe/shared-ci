@@ -57,6 +57,9 @@ python3 -I -B "$REVIEW_DIR/owner_decisions.py" >"$WORK/owner" \
 # Body lines are quoted, so only generated headers can contribute to this count.
 echo "[codex-review] admitted Owner decisions: $(grep -c '^### Owner decision comment ' "$WORK/owner")"
 
+python3 -I -B "$REVIEW_DIR/pr_text.py" >"$WORK/pr" \
+    || fail_closed "PR title/body could not be fetched."
+
 git diff --no-ext-diff "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
     || git diff --no-ext-diff "$BASE_SHA..$HEAD_SHA" >"$WORK/diff" \
     || fail_closed "Could not compute the PR diff."
@@ -65,7 +68,8 @@ git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null \
 
 # Admit the complete diff, never a prefix. Compare decimal strings in Python
 # to avoid shell integer overflow (the budget is configurable, not a PR policy).
-BUDGET_ERROR="$(python3 -I -B - "$MAX_BYTES" "$WORK/diff" <<'PYTHON'
+# With python3 -c, sys.argv[0] is "-c"; the arguments after the program are sys.argv[1:].
+BUDGET_ERROR="$(python3 -I -B -c '
 import os
 import re
 import sys
@@ -80,8 +84,7 @@ if (len(size), size) > (len(limit), limit):
     print(f"Full PR diff ({size} bytes) exceeds REVIEW_MAX_BYTES ({budget} bytes). "
           "Complete review unavailable; configure sufficient reviewer capacity and rerun.")
     sys.exit(1)
-PYTHON
-)" || fail_closed "${BUDGET_ERROR:-Could not validate the complete diff byte budget.}"
+' "$MAX_BYTES" "$WORK/diff")" || fail_closed "${BUDGET_ERROR:-Could not validate the complete diff byte budget.}"
 
 if [ ! -s "$WORK/diff" ]; then
     post_sticky "$MARKER" "$MARKER
@@ -102,7 +105,7 @@ ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c
 PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
     TRUNCATED="" DIFF="$(cat "$WORK/diff")" \
     python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" \
-        --rules-file "$WORK/rules" --owner-file "$WORK/owner")" \
+        --rules-file "$WORK/rules" --owner-file "$WORK/owner" --pr-file "$WORK/pr")" \
     || fail_closed "Prompt rendering failed."
 
 EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"

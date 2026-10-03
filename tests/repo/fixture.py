@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,28 @@ CONTEXT = REPO / "scripts" / "context" / "_context.py"
 PIN = "1" * 40
 OTHER = "2" * 40
 PYTHON = sys.executable
+
+
+def run_bounded(args, *, timeout, input=None, check=False, **kwargs) -> subprocess.CompletedProcess:
+    """Capture a command; kill and reap its entire group on timeout/interruption."""
+    kwargs.setdefault("text", True)
+    if input is not None:
+        kwargs["stdin"] = subprocess.PIPE
+    with subprocess.Popen(args, start_new_session=True, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+            result = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+            if check:
+                result.check_returncode()
+            return result
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+            raise
 
 
 def environment() -> dict[str, str]:
@@ -148,8 +171,7 @@ class ContractRepo:
         (self.root / path).unlink()
 
     def git(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=self.root, env=self.env, check=True,
-                              capture_output=True, text=True, timeout=20)
+        return run_bounded(["git", *args], cwd=self.root, env=self.env, check=True, timeout=20)
 
     def add(self) -> None:
         self.git("add", "-A")

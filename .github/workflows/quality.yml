@@ -68,6 +68,18 @@ on:
         description: Detect test losses (per assertion and test, no netting) and require each affected file in the PR explanation. Test edits/deletions do not require Owner approval (pull_request events; candidate).
         type: boolean
         default: true
+      commit-identity:
+        description: Check author and committer emails in the PR commit range using commit-identity-mode.
+        type: boolean
+        default: true
+      commit-identity-mode:
+        description: Email policy, basic (reject malformed/local identities) or noreply (require GitHub noreply).
+        type: string
+        default: basic
+      commit-identity-allow:
+        description: Additional case-insensitive email globs, comma or newline separated; must contain @ and not be wildcard-only on both sides.
+        type: string
+        default: ""
       check-pr-body:
         description: Require the PR template's sections to be filled (pull_request events).
         type: boolean
@@ -107,7 +119,7 @@ jobs:
       layers-space: ${{ steps.select.outputs.layers-space }}
       reason: ${{ steps.select.outputs.reason }}
     steps:
-      - if: inputs.changed-only
+      - if: inputs.changed-only || (inputs.commit-identity && github.event_name == 'pull_request')
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -140,6 +152,29 @@ jobs:
           python3 .shared-ci/scripts/select/layers.py --mode "$MODE" --event "$EVENT" \
             --base "$BASE_SHA" --head "$HEAD_SHA" --force-full-paths "$FORCE_FULL_PATHS" \
             --github-output "$GITHUB_OUTPUT" --step-summary "$GITHUB_STEP_SUMMARY"
+      - name: Check commit author and committer emails
+        env:
+          EVENT: ${{ github.event_name }}
+          ENABLED: ${{ inputs.commit-identity }}
+          MODE: ${{ inputs.commit-identity-mode }}
+          ALLOW: ${{ inputs.commit-identity-allow }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          case "$MODE" in
+            basic|noreply) ;;
+            *) echo 'commit-identity: invalid mode; expected basic or noreply' >&2; exit 2 ;;
+          esac
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "commit-identity: skipped (not a pull_request event: $EVENT)"
+            exit 0
+          fi
+          if [ "$ENABLED" != "true" ]; then
+            echo "commit-identity: skipped (disabled by input)"
+            exit 0
+          fi
+          python3 -I -B .shared-ci/scripts/quality/commit_identity.py \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --mode "$MODE" --allow "$ALLOW" --root .
 
   verify:
     needs: select

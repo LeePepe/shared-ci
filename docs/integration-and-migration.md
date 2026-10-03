@@ -88,6 +88,31 @@ cases are defined only in the [policy](policy-validation-contract.md) and
 [quality](quality-aggregation-contract.md) contracts. A valid policy exception
 can still require semantics unsupported by aggregation.
 
+### Commit identity policy
+
+The Quality layer's default-on `commit-identity: true` step checks both raw
+author and committer emails across the PR range. `commit-identity-mode: basic`
+is the default: reject missing email parts, dotless domains and local-hostname
+domains. `commit-identity-mode: noreply` enables the strict GitHub noreply policy,
+including the committer-only `noreply@github.com` exception. Valid explicit
+allowlist patterns apply to both roles in either mode; see the
+[identity contract](commit-identity.md) for exact checks and validation rules.
+
+Before a repository enables strict mode, the Owner switches local Git's
+`user.email` and GitHub web commit emails to a noreply address such as
+`<id>+<user>@users.noreply.github.com`, then repairs existing offending PR commits.
+Add this to that repository's pinned quality caller's `with` block:
+
+```yaml
+commit-identity: true
+commit-identity-mode: noreply
+```
+
+Consumers keep their existing behavior until the provider pin is updated.
+When adopting this version, set `noreply` explicitly to retain strict enforcement;
+omitting the mode selects `basic`. The step remains in `select`, independent of
+layer selection, and still feeds the existing `quality / aggregate` check.
+
 ## Compatibility
 
 | Surface | Declared/source scope | Evidence boundary |
@@ -95,6 +120,7 @@ can still require semantics unsupported by aggregation.
 | Context CLI | Python 3.9+, stdlib, Git, POSIX shell; context/finding v1 | Synthetic worktree, routing and subprocess fixtures exist. No cross-platform consumer certification is established here. |
 | Selection | Python 3.9+ stdlib and Git; optional changed-only mode, full-run fallback; workflow/CLI details in the [selection contract](changed-layer-selection.md) | Selector fixtures and provider CI are not caller matrix/required-check certification. |
 | Test integrity | Python 3.9+ stdlib and Git; default-on lane, loss JSON and CLI exit behavior in the [integrity contract](test-integrity.md) | Owner approval is not required merely for test changes; per-file rationale and AI review remain. Lexical evidence does not prove semantic strength. |
+| Commit identity | Python 3.9+ stdlib and Git; default-on quality-workflow step with `basic` default / `noreply` opt-in, raw PR-range emails and CLI exit behavior in the [identity contract](commit-identity.md) | Isolated Git/workflow fixtures do not establish live enforcement; consumers retain pinned behavior until a reviewed provider update. |
 | Policy | Python 3.9+, stdlib; policy input/exception v1 and finding-v1 output shape | The [bounded verification record](policy-validation-contract.md#authored-coverage-and-bounded-verification) covers 38 synthetic tests, not a packaged importer or authentic approvals. |
 | Quality | Stdlib Python source, policy public-function dependency; quality input/result v1; Actions-data semantics only | The [bounded verification record](quality-aggregation-contract.md#synthetic-tests-and-execution-hold) reports Python 3.9.6 and 32 tests using a private loader, not general namespace import, CI or a runtime matrix. |
 | Registry resolution | Python 3.9+ stdlib, admitted Git; standalone detached nonshallow SHA-1 Git-source distribution; registry/result/finding v1 | Isolated parity, negative and bundle-consumer test source authored; NOT RUN. No schema-engine/runtime matrix evidence. |
@@ -117,6 +143,7 @@ These are real test sources to inspect, not executions performed by this guide:
 | [Fixture-hook regression](../tests/context/test_fixture_hooks.py) | Git honors a fixture-local `post-index-change` hook without changing parent/source state | Not a consumer pre-commit/pre-push installer or required-gate demonstration. |
 | [Selector tests](../tests/select/test_select.py), [gate tests](../tests/quality/test_gate.py) | Whole-PR selection, fallback and aggregate/short-circuit rules | Synthetic callers and supplied lane outcomes, not consumer matrix execution or remote enforcement. |
 | [Integrity tests](../tests/quality/test_test_integrity.py) | Unexplained loss negatives; rationale-without-Owner positives; movement/reformatting, comment/literal context and quoted paths | Isolated Git fixtures, not semantic proof or real-consumer adoption. |
+| [Commit identity tests](../tests/quality/test_commit_identity.py) | Author/committer checks across the PR range, allowlists, raw metadata and quality-workflow step behavior | Isolated Git fixtures and local step execution, not hosted enforcement or consumer adoption. |
 | [Policy tests](../tests/policy/test_validation.py) | Exact pins and literal paths, weaker rules, complete approvals, expiry and unknown observations | Explicit source read/compile loader; synthetic external records do not establish approval authenticity. |
 | [Quality tests](../tests/quality/test_aggregation.py) | `fixture()` supplies six dimension receipts; tests cover mismatched binding, missing evidence, finite predicates and isolation observations | Private loader calls the actual policy evaluator; synthetic no-I/O records do not execute six workloads or prove isolation. |
 | [Registry isolation](../tests/contracts/test_isolation.py), [behavior](../tests/contracts/test_resolution.py), [schema consistency](../tests/contracts/test_registry_consistency.py) | External-envelope refusal/concurrency/cleanup; all selections/negatives; wrapper/direct parity; bundle consumption/restoration; offline schema validation | Separate stages, NOT RUN. Independent source/D1 review precedes behavior; no ambient dependencies, real caller or pure-function importer. |

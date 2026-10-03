@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from test_review import ContractRepo, PASS, REPO, REVIEW, STUB_CODEX, STUB_GH, render_prompt
+from test_review import ContractRepo, PASS, REPO, REVIEW, STUB_CODEX, STUB_GH, render_prompt, run_bounded
 
 KIMI = '''#!/bin/sh
 prev=""
@@ -62,8 +62,8 @@ class RulesInputTests(unittest.TestCase):
         env.pop("REVIEW_RULES_FILE", None)
         if path is not None:
             env["REVIEW_RULES_FILE"] = path
-        result = subprocess.run(["bash", str(REVIEW / (tool + "-review.sh"))], cwd=self.repo.root,
-                                env=env, capture_output=True, text=True, timeout=30)
+        result = run_bounded(["bash", str(REVIEW / (tool + "-review.sh"))], cwd=self.repo.root,
+                             env=env, timeout=30)
         comment = (self.tools / "comment").read_text() if (self.tools / "comment").exists() else ""
         prompt = (self.tools / "prompt").read_text() if (self.tools / "prompt").exists() else None
         return result, comment, prompt
@@ -194,7 +194,8 @@ class RulesInputTests(unittest.TestCase):
         subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(REPO), str(self.provider)],
                        env=self.repo.env, check=True, capture_output=True)
         # Include the current review implementation, even before an author commit.
-        paths = subprocess.check_output(["git", "ls-files", "scripts/review"], cwd=REPO,
+        paths = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard",
+                                         "scripts/review"], cwd=REPO,
                                         env=self.repo.env, text=True).splitlines()
         for path in paths:
             shutil.copy2(REPO / path, self.provider / path)
@@ -213,6 +214,7 @@ class RulesInputTests(unittest.TestCase):
         self.assertNotIn("unavailable", comment)
         self.assertIn("BASE POLICY\nEND POLICY\n\n", prompt)
         self.assertIn("src/app/main.py -> App", prompt)
+        self.assertIn("<<<PR_TEXT\n> Title: Review context\n> Body:\n> A harmless change.\nPR_TEXT>>>", prompt)
         self.assertEqual("", provider_git("status", "--porcelain", "--ignored"))
         self.assertFalse(list(self.provider.rglob("__pycache__")))
         self.assertEqual(before, self.repo.git("status", "--porcelain").stdout)
