@@ -1,40 +1,38 @@
 # shared-ci repository guide
 
-shared-ci provides the repository agent protocol, repository contract and its
-checker, layer-map resolver, fail-closed quality gate, AI review workflows and
-workflow-lint. Other repositories consume it by full commit SHA. This guide owns
-shared-ci's repository-specific development and PR rules; AGENTS is its index.
+shared-ci provides the agent protocol, repository contract/checker, layer-map
+resolver, fail-closed quality gate, AI review workflows and workflow-lint.
+Consumers pin full commit SHAs. This guide owns repository-specific development
+and PR rules; AGENTS is its index.
 
 ## Protocol
 
 The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/agent-protocol.md)
 and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/repo-contract.md)
-govern development. The local [protocol source](../ai/agent-protocol.md),
-[contract source](../ai/repo-contract.md) and surface contracts linked below are
-the candidate being developed, not an override of the pinned common rules.
-The complete selected protocol is included below for tool-free review; only its
-relative contract link is rebased to the immutable provider URL. Refresh that
-snapshot with the pin, not from an unapproved candidate or a linked document at
-review time. Repository-specific choices remain authoritative in this guide.
+govern development; local [protocol source](../ai/agent-protocol.md),
+[contract source](../ai/repo-contract.md) and surface contracts below are
+candidates, not overrides of pinned common rules. The complete selected protocol
+below supports tool-free review; only its relative contract link is rebased to
+the immutable provider URL. Refresh it with the pin, not an unapproved candidate
+or review-time linked document. This guide's repository-specific choices remain
+authoritative.
 
-Dogfood rule: the external calls in [CI](../.github/workflows/ci.yml) and
-[review](../.github/workflows/review.yml) pin an **earlier published commit** of
-this repository, never the commit under test. Update those pins, the AGENTS
-protocol route, [metadata](../.github/repo-contract.json) and this guide together
-in a separate reviewed adoption PR after the selected provider is published.
-The local candidate workflow calls are advisory tests, not approval of their
-own gate. Rollback restores the coordinated consumer configuration to its
-recorded compatible baseline; it does not rewrite provider history or waive
-required checks.
+Dogfood: external [CI](../.github/workflows/ci.yml) and
+[review](../.github/workflows/review.yml) calls pin an **earlier published commit**
+of this repo, never the commit under test. After selected-provider publication,
+update those pins, the AGENTS protocol route, [metadata](../.github/repo-contract.json)
+and this guide together in a separate reviewed adoption PR. Local candidate
+workflow calls are advisory tests, not self-approval of their gate. Rollback
+restores coordinated consumer configuration to its recorded compatible baseline;
+it neither rewrites provider history nor waives required checks.
 
 ## Architecture
 
-Read the [root layer map](architecture/tech-context.md), the leaf context of
-every affected layer, and its surface contract before editing. The root and
-leaves own layer IDs, implementation/test paths and allowed dependencies; this
-guide references them rather than duplicating their glob lists. Tests belong
-to the responsibility they exercise. Support paths cover documentation,
-templates and CI wiring and are still verified.
+Before editing, read the [root layer map](architecture/tech-context.md), every
+affected layer's leaf context and surface contract. Root and leaves own layer
+IDs, implementation/test paths and allowed dependencies; their globs are not
+duplicated here. Tests belong to the responsibility they exercise. Support paths
+cover documentation, templates and CI wiring and remain verified.
 
 Use the [Context CLI](context-cli-contract.md) to resolve planned paths:
 
@@ -43,19 +41,18 @@ scripts/context/resolve scripts/context/_contract.py --format layer
 scripts/context/contexts tests/repo/test_self_adoption.py
 ```
 
-Declared ownership/dependency checks do not prove arbitrary language import
-boundaries. Behaviour and interface tests below provide additional evidence;
-there is no general import-boundary linter in this repository. New dependency
-edges require an explicit architecture change under existing Owner review.
+Declared ownership/dependency checks do not prove arbitrary import boundaries;
+there is no general import-boundary linter. Behaviour/interface tests below add
+evidence. New dependency edges require an explicit architecture change under
+existing Owner review.
 
 ## PR work units
 
-One task uses one dedicated branch/worktree and one independently acceptable
-PR purpose within a unit below. Necessary tests and interface documentation
-travel with the change. Independent requirements remain separate even when
-they share a layer. Cross-layer features use interface-based, dependency-ordered
-PRs that each build and test independently; changing a boundary is an explicit
-contract change, not a new task-local layer or permission to expand scope.
+Each task uses a dedicated branch/worktree and one independently acceptable PR
+purpose from the units below, with necessary tests and interface docs. Separate
+independent requirements even within one layer. Cross-layer features use
+interface-based, dependency-ordered PRs that build/test independently. Boundary
+changes are explicit contract changes, not task-local layers or scope expansion.
 
 | Unit and responsibility | Ownership / interface source | Necessary companions | Verification and review |
 | --- | --- | --- | --- |
@@ -72,11 +69,10 @@ contract change, not a new task-local layer or permission to expand scope.
 | Common protocol / repository contract: change one shared development rule | [Protocol source](../ai/agent-protocol.md), [contract source](../ai/repo-contract.md) | Necessary contract tests and matching template/versioned documentation | Repo suite plus affected checks; Owner review; consumer repinning is a later PR |
 | Docs / spec: one documentation topic or requirement | The relevant document and root support declaration | Its diagrams/examples and documentation regressions | Link/contract checks and topic review; actual policy changes still need Owner review |
 
-These PR boundaries are **manual** planning/code-review rules. The aggregate
-does not infer purpose or validate this table. There is no universal file/line
-ceiling, package-equals-layer rule, one-layer-only requirement or additional PR
-Manager scope gate. PR Manager consumes existing check/review evidence and
-manages lifecycle.
+PR boundaries are **manual** planning/code-review rules; the aggregate neither
+infers purpose nor validates this table. No universal file/line ceiling,
+package-equals-layer rule, one-layer-only requirement or extra PR Manager scope
+gate applies. PR Manager uses existing check/review evidence to manage lifecycle.
 
 ## Verify
 
@@ -88,13 +84,13 @@ scripts/verify
 scripts/verify --all                 # same full run
 ```
 
-This repository runs its full suites; it does not use the template bootstrap
-or narrow local verification by layer. The entry checks shell/Python/JSON syntax,
-the actual layer map and repository contract, workflow-lint, Context, repo,
-Lint, Review, Ruleset, Select, Quality (including test integrity and commit identity) and Policy tests, then committed-tree
-whitespace. For edits not yet committed, also run `git diff --check` and
-`git diff --cached --check`. New metadata/documents must be staged for the
-tracked-file audit. Staging is not proof that worktree content equals a commit.
+Native verification runs full suites, never narrowed by layer: shell/Python/JSON
+syntax, the actual layer map and repository contract, workflow-lint, Context,
+repo, Lint, Review, Ruleset, Select, Quality (including test integrity and commit
+identity) and Policy tests, then committed-tree whitespace. Before committing,
+also run `git diff --check` and `git diff --cached --check`. Stage new
+metadata/documents for the tracked-file audit; staging does not prove equality
+between worktree content and a commit.
 
 For a focused iteration, use the corresponding suite from the entry, for example:
 
@@ -104,33 +100,31 @@ python3 -I -B scripts/context/_context.py audit
 python3 -I -B scripts/lint/workflows.py --root .
 ```
 
-The selected-provider tests require the recorded historical Git objects locally.
-CI's caller checkout fetches full history; the tests do not fetch missing objects
-or substitute candidate provider code. This is not a shallow/partial-checkout
-compatibility claim. The [metadata-aware template bootstrap](bootstrap-and-templates.md)
-is a separate caller surface: it validates metadata and clean exact-pin caches,
-preserves existing wrong/dirty caches and isolates provider Git state. This
-repository retains its native full verify entry, not that template bootstrap.
+Selected-provider tests require local historical Git objects. CI fetches full
+history; tests neither fetch missing objects nor substitute candidate code.
+Shallow/partial checkouts are not certified. The separate caller
+[metadata-aware template bootstrap](bootstrap-and-templates.md) validates metadata
+and clean exact-pin caches, preserves wrong/dirty caches and isolates provider
+Git state. This repo uses native full verification, not that bootstrap.
 
 The pinned quality workflow's default-on test-integrity lane compares recognized
-test losses from immutable Git data and requires substantive per-file rationale
-in the PR body. Missing or stale selected results fail the aggregate. This is
-distinct from ordinary test approval: test edits need rationale, CI and review,
-not a separate Owner test class. Actual gate/policy/permission changes remain
-protected. Local supplied-body checks do not prove live PR-body acceptance;
-the lexical detector's limits require independent review.
+test losses from immutable Git data and requires substantive per-file PR-body
+rationale. Missing/stale selected results fail the aggregate. Test edits need
+rationale, CI and review, not a separate Owner test class; actual gate/policy/
+permission changes remain protected. Local supplied-body checks do not prove
+live PR-body acceptance; lexical detector limits require independent review.
 
 Candidate commit identity defaults to `basic` (malformed/local-email rejection).
 Once the Owner switches local Git and GitHub web commit emails to noreply,
 enable strict mode per repo with `commit-identity-mode: noreply` in its quality
 caller; see [both modes](commit-identity.md).
 
-`tests/contracts` is **not** run by `scripts/verify`. Registry isolation,
-behaviour and schema-engine fixtures require separate external tool/source and
-envelope admission, then independent D1 acceptance before behaviour execution,
-as specified in [registry verification](registry-resolution-contract.md#isolated-verification-source-and-admission).
-Do not turn ordinary unittest discovery into registry execution. Source checks
-do not certify registry distribution, real consumers, recovery or full 6DQ.
+`scripts/verify` excludes `tests/contracts`. Registry isolation, behaviour and
+schema-engine fixtures need separate external tool/source and envelope admission,
+then independent D1 acceptance before behaviour execution; see
+[registry verification](registry-resolution-contract.md#isolated-verification-source-and-admission).
+Ordinary unittest discovery must not execute registry fixtures. Source checks do
+not certify registry distribution, real consumers, recovery or full 6DQ.
 
 | Rule | Status and evidence boundary |
 | --- | --- |
