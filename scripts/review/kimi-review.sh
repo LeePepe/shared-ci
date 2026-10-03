@@ -14,18 +14,19 @@ KIMI_BIN="${KIMI_BIN:-kimi}"
 KIMI_MODEL="${KIMI_MODEL:-kimi-code/k3}"
 
 advisory_unavailable() {
-    local body
+    local body="${2:-}"
     # Report before attempting publication: missing env/auth must not hide this conclusion.
-    printf '::warning::kimi review unavailable: %s\n' "$1"
+    # Escape workflow-command data; keep the original sanitized reason elsewhere.
+    printf '::warning::kimi review unavailable: %s\n' "${1//%/%25}"
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         printf 'kimi review unavailable: %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
     fi
     if [ -n "${PR_NUMBER:-}" ] && [ -n "${BASE_REPO:-}" ] && [ -n "${SHARED_CI_DIR:-}" ]; then
-        body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
-            --head "${HEAD_SHA:-unknown}" --unavailable "$1")" && {
+        if [ -n "$body" ] || body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
+            --head "${HEAD_SHA:-unknown}" --unavailable "$1")"; then
             # shellcheck source=scripts/review/sticky.sh
-            . "$REVIEW_DIR/sticky.sh" && post_sticky "$MARKER" "$body"
-        } || true
+            . "$REVIEW_DIR/sticky.sh" && post_sticky "$MARKER" "$body" || true
+        fi
     fi
     echo "[kimi-review] advisory unavailable: $1"
     exit 0
@@ -83,11 +84,13 @@ KIMI_DISABLE_TELEMETRY=1 "$KIMI_BIN" --agent-file "$REVIEW_DIR/kimi-agent.md" \
     || advisory_unavailable "kimi CLI exited non-zero."
 
 BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
-    --head "$HEAD_SHA" "$WORK/out")" || advisory_unavailable "Could not render the review verdict."
-# Advisory rendering exits zero even for invalid output; do not log completion for it.
-case "$BODY" in
-    "$MARKER"$'\n## kimi review unavailable\n'*) advisory_unavailable "kimi CLI returned an invalid verdict." ;;
-esac
+    --head "$HEAD_SHA" --unavailable-reason-file "$WORK/unavailable" "$WORK/out")" \
+    || advisory_unavailable "Could not render the review verdict."
+# Advisory exit status stays zero; use the separate reason, not Markdown wording.
+if [ -s "$WORK/unavailable" ]; then
+    REASON="$(cat "$WORK/unavailable")" || advisory_unavailable "Could not read the review diagnostic."
+    advisory_unavailable "$REASON" "$BODY"
+fi
 post_sticky "$MARKER" "$BODY" || true
 echo "[kimi-review] advisory complete; never blocking"
 exit 0

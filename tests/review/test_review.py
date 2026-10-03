@@ -36,13 +36,13 @@ CHANGES = {"verdict": "changes", "summary": "bad", "notes": [],
 
 
 class VerdictTests(unittest.TestCase):
-    def run_verdict(self, raw, mode="gate"):
+    def run_verdict(self, raw, mode="gate", *options):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
             handle.write(raw)
         self.addCleanup(os.unlink, handle.name)
-        return subprocess.run([sys.executable, "-I", "-B", str(REVIEW / "verdict.py"), "--tool", "codex",
-                               "--mode", mode, "--marker", "<!-- m -->", "--head", "h" * 40, handle.name],
-                              capture_output=True, text=True, timeout=20)
+        return run_bounded([sys.executable, "-I", "-B", str(REVIEW / "verdict.py"), "--tool", "codex",
+                            "--mode", mode, "--marker", "<!-- m -->", "--head", "h" * 40,
+                            *options, handle.name], timeout=20)
 
     def test_pass_exits_zero(self):
         result = self.run_verdict(json.dumps(PASS))
@@ -67,6 +67,32 @@ class VerdictTests(unittest.TestCase):
     def test_advisory_never_fails(self):
         self.assertEqual(0, self.run_verdict(json.dumps(CHANGES), mode="advisory").returncode)
         self.assertEqual(0, self.run_verdict("garbage", mode="advisory").returncode)
+
+    def test_unavailable_reason_file_preserves_output_and_exit_status(self):
+        with tempfile.TemporaryDirectory(prefix="verdict-reason-") as temp:
+            path = pathlib.Path(temp) / "reason"
+            for mode in ("gate", "advisory"):
+                for raw, expected_status, reason in (
+                        (json.dumps(PASS), 0, ""),
+                        (json.dumps(CHANGES), 1 if mode == "gate" else 0, ""),
+                        ("junk", 3 if mode == "gate" else 0,
+                         "The reviewer returned an invalid verdict (verdict must be pass or changes).\n")):
+                    with self.subTest(mode=mode, raw=raw):
+                        path.write_text("stale reason")
+                        baseline = self.run_verdict(raw, mode)
+                        result = self.run_verdict(raw, mode, "--unavailable-reason-file", str(path))
+                        self.assertEqual(expected_status, result.returncode)
+                        self.assertEqual((baseline.stdout, baseline.stderr), (result.stdout, result.stderr))
+                        self.assertEqual(reason, path.read_text())
+                for raw_reason, safe_reason in (("@reviewer <b> `x`\nnext", "＠reviewer ‹b> ´x´ next"),
+                                                ("", "")):
+                    with self.subTest(mode=mode, unavailable=raw_reason):
+                        baseline = self.run_verdict("", mode, "--unavailable", raw_reason)
+                        result = self.run_verdict("", mode, "--unavailable", raw_reason,
+                                                  "--unavailable-reason-file", str(path))
+                        self.assertEqual(3 if mode == "gate" else 0, result.returncode)
+                        self.assertEqual(baseline.stdout, result.stdout)
+                        self.assertEqual(safe_reason + "\n", path.read_text())
 
     def test_stream_json_extraction(self):
         stream = "\n".join([json.dumps({"role": "user", "content": "x"}),
@@ -264,6 +290,9 @@ case "$*" in
     done
     printf '%s\\n' "$method" >> "$STUB_OUT/publish-attempts"
     printf '%s' "$body" > "$STUB_OUT/attempted-comment"
+    if [ "${STUB_CAPTURE_SUMMARY:-}" = "1" ]; then
+      cat "$GITHUB_STEP_SUMMARY" > "$STUB_OUT/summary-at-publication"
+    fi
     [ "${STUB_PUBLISH_FAIL:-}" = "all" ] && exit 1
     [ "${STUB_PUBLISH_FAIL:-}" = "$method" ] && exit 1
     printf '%s' "$body" > "$STUB_OUT/comment"
@@ -308,7 +337,8 @@ class ReviewScriptEndToEndTests(unittest.TestCase):
             path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
     def run_script(self, script, verdict_json, fail="", **overrides):
-        for name in ("comment", "attempted-comment", "publish-attempts", "prompt", "summary"):
+        for name in ("comment", "attempted-comment", "publish-attempts", "prompt", "summary",
+                     "summary-at-publication"):
             (self.out / name).unlink(missing_ok=True)
         env = dict(self.repo.env, PATH=f"{self.tools}:{os.environ.get('PATH', '/usr/bin:/bin')}",
                    PR_NUMBER="7", BASE_SHA=self.base, HEAD_SHA=self.head, BASE_REPO="o/r",
@@ -741,8 +771,70 @@ exec "$STUB_PYTHON" "$@"
 
     def test_kimi_invalid_verdict_is_unavailable(self):
         result, comment = self.run_script("kimi-review.sh", "junk")
-        self.assert_kimi_unavailable(result, comment, "kimi CLI returned an invalid verdict.")
+        self.assert_kimi_unavailable(
+            result, comment, "The reviewer returned an invalid verdict (verdict must be pass or changes).")
         self.assertIn("## kimi review unavailable", comment)
+
+    def test_kimi_preserves_validation_diagnostic(self):
+        reason = "The reviewer returned an invalid verdict (summary must be a string)."
+        for publication_failure in ("", "all"):
+            with self.subTest(publication_failure=publication_failure):
+                result, comment = self.run_script(
+                    "kimi-review.sh", json.dumps({**PASS, "summary": None}),
+                    STUB_PUBLISH_FAIL=publication_failure, STUB_CAPTURE_SUMMARY="1")
+                self.assert_kimi_unavailable(result, comment, reason)
+                self.assertIn(reason, (self.out / "attempted-comment").read_text())
+                self.assertIn(reason, (self.out / "summary-at-publication").read_text())
+                if publication_failure:
+                    self.assertEqual("", comment)
+                    self.assertIn("could not post", result.stderr)
+                else:
+                    self.assertIn(reason, comment)
+
+    def test_kimi_preserves_output_read_diagnostic(self):
+        # The fake CLI removes its own output; the real wrapper/renderer must
+        # preserve the resulting file-read error, including sanitized path text.
+        work = self.out / "output-@reviewer-<b>-`x`-%0A"
+        for name, body in (
+                ("mktemp", "#!/bin/sh\nprintf '%s\\n' \"$STUB_WORK\"\n"),
+                ("kimi", "#!/bin/sh\nrm -- \"$STUB_WORK/out\"\n")):
+            tool = self.tools / name
+            tool.write_text(body)
+            tool.chmod(0o755)
+        for publication_failure in ("", "all"):
+            with self.subTest(publication_failure=publication_failure):
+                work.mkdir()
+                result, comment = self.run_script(
+                    "kimi-review.sh", json.dumps(PASS), STUB_WORK=str(work),
+                    STUB_PUBLISH_FAIL=publication_failure, STUB_CAPTURE_SUMMARY="1")
+                attempted = (self.out / "attempted-comment").read_text()
+                self.assertIn("[Errno 2] No such file or directory", attempted)
+                self.assertIn("output-＠reviewer-‹b>-´x´-%0A/out", attempted)
+                self.assert_kimi_unavailable(result, comment, "The reviewer returned an invalid verdict (")
+                self.assertIn("[Errno 2] No such file or directory",
+                              (self.out / "summary-at-publication").read_text())
+                warnings = [line for line in result.stdout.splitlines() if line.startswith("::warning::")]
+                self.assertEqual(1, len(warnings))
+                self.assertIn("output-＠reviewer-‹b>-´x´-%250A/out", warnings[0])
+                for text in (attempted, result.stdout, (self.out / "summary").read_text()):
+                    self.assertNotIn("@reviewer", text)
+                    self.assertNotIn("<b>", text)
+                    self.assertNotIn("`x`", text)
+                if publication_failure:
+                    self.assertEqual("", comment)
+                    self.assertIn("could not post", result.stderr)
+                else:
+                    self.assertEqual(attempted, comment)
+
+    def test_kimi_valid_verdicts_still_complete_without_unavailable_warning(self):
+        for data, title in ((PASS, "pass"), (CHANGES, "findings")):
+            with self.subTest(verdict=data["verdict"]):
+                result, comment = self.run_script("kimi-review.sh", json.dumps(data))
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("kimi advisory review: " + title, comment)
+                self.assertIn("advisory complete", result.stdout)
+                self.assertNotIn("::warning::", result.stdout)
+                self.assertFalse((self.out / "summary").exists())
 
     def test_kimi_unavailable_without_summary_or_comment_publication(self):
         result, comment = self.run_script(
