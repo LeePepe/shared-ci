@@ -1,0 +1,152 @@
+# Construction template, not an enabled workflow. Read docs/automated-release.md
+# from the same delivered shared-ci commit before adapting this file.
+name: release-testflight
+on:
+  workflow_run:
+    workflows: [REPLACE_WITH_RELEASE_CHECK_WORKFLOW]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  admit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      candidate: ${{ steps.candidate.outputs.candidate }}
+      release: ${{ steps.eligible.outputs.release }}
+    env:
+      CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - id: candidate
+        name: Admit the completed default-branch push
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_RESULT: ${{ github.event.workflow_run.conclusion }}
+          RUN_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ ! "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$EVENT_NAME" != workflow_run ] || [ "$RUN_EVENT" != push ] ||
+             [ "$RUN_RESULT" != success ] || [ -z "$REPOSITORY" ] ||
+             [ "$RUN_REPOSITORY" != "$REPOSITORY" ] || [ -z "$DEFAULT_BRANCH" ] ||
+             [ "$RUN_BRANCH" != "$DEFAULT_BRANCH" ]; then
+            echo '::error::Release candidate is not a successful same-repository default-branch push.'
+            exit 1
+          fi
+          printf 'candidate=%s\n' "$CANDIDATE" >> "$GITHUB_OUTPUT"
+      - name: Checkout admitted candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: prepare
+        name: Resolve TestFlight checks and cumulative release content
+        shell: bash
+        run: |
+          echo '::error::TestFlight release adapter not configured; read the versioned automated-release guide.'
+          exit 1
+      - id: eligible
+        name: Bind checks and cumulative baseline to the current candidate
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CHECKED_SHA: ${{ steps.prepare.outputs.checked-sha }}
+          REQUIRED_CHECKS: ${{ steps.prepare.outputs.required-checks }}
+          BASELINE: ${{ steps.prepare.outputs.baseline }}
+          PUBLISHABLE: ${{ steps.prepare.outputs.publishable }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] && [[ "$BASELINE" =~ ^[0-9a-f]{40}$ ]] || fail 'Exact candidate and last successful release baseline required.'
+          [ "$CHECKED_SHA" = "$CANDIDATE" ] && [ "$REQUIRED_CHECKS" = success ] || fail 'Necessary checks are missing, unsuccessful or for another candidate.'
+          [ -n "$DEFAULT_BRANCH" ] &&
+            [ "$(git rev-parse HEAD)" = "$CANDIDATE" ] &&
+            [ "$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")" = "$CANDIDATE" ] || fail 'Candidate checkout is not the current default-branch tip.'
+          git merge-base --is-ancestor "$BASELINE" "$CANDIDATE" || fail 'Release baseline is not an ancestor of the candidate.'
+          case "$PUBLISHABLE" in
+            true) [ "$BASELINE" != "$CANDIDATE" ] || fail 'No unreleased candidate range.' ;;
+            false) ;;
+            *) fail 'Cumulative release-content decision is missing or invalid.' ;;
+          esac
+          printf 'release=%s\n' "$PUBLISHABLE" >> "$GITHUB_OUTPUT"
+  release:
+    needs: admit
+    if: needs.admit.outputs.release == 'true'
+    concurrency:
+      group: release-testflight
+      queue: max
+      cancel-in-progress: false
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      CANDIDATE: ${{ needs.admit.outputs.candidate }}
+    steps:
+      - name: Checkout admitted candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: prepare
+        name: Revalidate after queue wait - TestFlight checks and cumulative release content
+        shell: bash
+        run: |
+          echo '::error::TestFlight release adapter not configured; read the versioned automated-release guide.'
+          exit 1
+      - id: eligible
+        name: Bind checks and cumulative baseline to the current candidate
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CHECKED_SHA: ${{ steps.prepare.outputs.checked-sha }}
+          REQUIRED_CHECKS: ${{ steps.prepare.outputs.required-checks }}
+          BASELINE: ${{ steps.prepare.outputs.baseline }}
+          PUBLISHABLE: ${{ steps.prepare.outputs.publishable }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] && [[ "$BASELINE" =~ ^[0-9a-f]{40}$ ]] || fail 'Exact candidate and last successful release baseline required.'
+          [ "$CHECKED_SHA" = "$CANDIDATE" ] && [ "$REQUIRED_CHECKS" = success ] || fail 'Necessary checks are missing, unsuccessful or for another candidate.'
+          [ -n "$DEFAULT_BRANCH" ] &&
+            [ "$(git rev-parse HEAD)" = "$CANDIDATE" ] &&
+            [ "$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")" = "$CANDIDATE" ] || fail 'Candidate checkout is not the current default-branch tip.'
+          git merge-base --is-ancestor "$BASELINE" "$CANDIDATE" || fail 'Release baseline is not an ancestor of the candidate.'
+          case "$PUBLISHABLE" in
+            true) [ "$BASELINE" != "$CANDIDATE" ] || fail 'No unreleased candidate range.' ;;
+            false) ;;
+            *) fail 'Cumulative release-content decision is missing or invalid.' ;;
+          esac
+          printf 'release=%s\n' "$PUBLISHABLE" >> "$GITHUB_OUTPUT"
+      - id: publish
+        name: Build upload and query the internal TestFlight build
+        if: steps.eligible.outputs.release == 'true'
+        shell: bash
+        run: |
+          echo '::error::TestFlight upload and exact-build availability queries not configured.'
+          exit 1
+      - id: confirmed
+        name: Confirm the TestFlight release result
+        if: steps.eligible.outputs.release == 'true'
+        shell: bash
+        env:
+          PUBLISHED_SHA: ${{ steps.publish.outputs.published-sha }}
+          EXPECTED_APP: ${{ steps.publish.outputs.expected-app }}
+          EXPECTED_PLATFORM: ${{ steps.publish.outputs.expected-platform }}
+          EXPECTED_BUILD: ${{ steps.publish.outputs.expected-build }}
+          ACTUAL_APP: ${{ steps.publish.outputs.actual-app }}
+          ACTUAL_PLATFORM: ${{ steps.publish.outputs.actual-platform }}
+          ACTUAL_BUILD: ${{ steps.publish.outputs.actual-build }}
+          PROCESSING: ${{ steps.publish.outputs.processing }}
+          INTERNAL_GROUPS: ${{ steps.publish.outputs.internal-groups }}
+        run: |
+          if [ "$PUBLISHED_SHA" != "$CANDIDATE" ] ||
+             [ -z "$EXPECTED_APP" ] || [ "$ACTUAL_APP" != "$EXPECTED_APP" ] ||
+             [ -z "$EXPECTED_PLATFORM" ] || [ "$ACTUAL_PLATFORM" != "$EXPECTED_PLATFORM" ] ||
+             [ -z "$EXPECTED_BUILD" ] || [ "$ACTUAL_BUILD" != "$EXPECTED_BUILD" ] ||
+             [ "$PROCESSING" != complete ] || [ "$INTERNAL_GROUPS" != available ]; then
+            echo '::error::TestFlight exact build is not confirmed processed and available to all agreed internal groups.'
+            exit 1
+          fi
