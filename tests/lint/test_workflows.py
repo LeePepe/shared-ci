@@ -85,6 +85,12 @@ class ForkGuardTests(unittest.TestCase):
     def test_guard_with_extra_conjunct_accepted(self):
         self.assertEqual([], kinds(self_hosted(f"github.event_name == 'pull_request_target' && {GUARD}")))
 
+    def test_kimi_probe_dependency_preserves_required_fork_guard(self):
+        text = (REPO / ".github/workflows/kimi-review.yml").read_text()
+        self.assertEqual([], kinds(text))
+        self.assertEqual(["self_hosted_unguarded", "self_hosted_unguarded"],
+                         kinds(text.replace(GUARD, "needs.kimi-probe.outputs.available == 'true'")))
+
     def test_guard_in_expression_syntax_accepted(self):
         self.assertEqual([], kinds(self_hosted("${{ " + GUARD + " }}")))
 

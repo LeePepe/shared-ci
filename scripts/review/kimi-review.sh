@@ -13,24 +13,35 @@ MAX_BYTES="${REVIEW_MAX_BYTES:-80000}"
 KIMI_BIN="${KIMI_BIN:-kimi}"
 KIMI_MODEL="${KIMI_MODEL:-kimi-code/k3}"
 
-WORK="$(mktemp -d -t kimi-review.XXXXXX)"
-trap 'rm -rf "$WORK"' EXIT
-
-# shellcheck source=scripts/review/sticky.sh
-. "$REVIEW_DIR/sticky.sh"
-
 advisory_unavailable() {
-    local body
-    body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
-        --head "${HEAD_SHA:-unknown}" --unavailable "$1")"
-    post_sticky "$MARKER" "$body" || true
+    local body="${2:-}"
+    # Report before attempting publication: missing env/auth must not hide this conclusion.
+    # Escape workflow-command data; keep the original sanitized reason elsewhere.
+    printf '::warning::kimi review unavailable: %s\n' "${1//%/%25}"
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        printf 'kimi review unavailable: %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    if [ -n "${PR_NUMBER:-}" ] && [ -n "${BASE_REPO:-}" ] && [ -n "${SHARED_CI_DIR:-}" ]; then
+        if [ -n "$body" ] || body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
+            --head "${HEAD_SHA:-unknown}" --unavailable "$1")"; then
+            # shellcheck source=scripts/review/sticky.sh
+            . "$REVIEW_DIR/sticky.sh" && post_sticky "$MARKER" "$body" || true
+        fi
+    fi
     echo "[kimi-review] advisory unavailable: $1"
     exit 0
 }
 
 for name in PR_NUMBER BASE_SHA HEAD_SHA BASE_REPO SHARED_CI_DIR; do
-    [ -n "${!name:-}" ] || { echo "[kimi-review] missing $name; advisory skipped"; exit 0; }
+    [ -n "${!name:-}" ] || advisory_unavailable "Missing required environment: $name."
 done
+
+WORK="$(mktemp -d -t kimi-review.XXXXXX)" || advisory_unavailable "Could not create review workspace."
+trap 'rm -rf "$WORK"' EXIT
+
+# shellcheck source=scripts/review/sticky.sh
+. "$REVIEW_DIR/sticky.sh" || advisory_unavailable "Review comment helper is unavailable."
+
 command -v "$KIMI_BIN" >/dev/null 2>&1 || advisory_unavailable "kimi CLI is not installed on the runner."
 git fetch --no-tags --depth=200 origin "$BASE_SHA" "$HEAD_SHA" >/dev/null 2>&1 \
     || advisory_unavailable "Could not fetch the exact PR revisions."
@@ -73,7 +84,13 @@ KIMI_DISABLE_TELEMETRY=1 "$KIMI_BIN" --agent-file "$REVIEW_DIR/kimi-agent.md" \
     || advisory_unavailable "kimi CLI exited non-zero."
 
 BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
-    --head "$HEAD_SHA" "$WORK/out")"
+    --head "$HEAD_SHA" --unavailable-reason-file "$WORK/unavailable" "$WORK/out")" \
+    || advisory_unavailable "Could not render the review verdict."
+# Advisory exit status stays zero; use the separate reason, not Markdown wording.
+if [ -s "$WORK/unavailable" ]; then
+    REASON="$(cat "$WORK/unavailable")" || advisory_unavailable "Could not read the review diagnostic."
+    advisory_unavailable "$REASON" "$BODY"
+fi
 post_sticky "$MARKER" "$BODY" || true
 echo "[kimi-review] advisory complete; never blocking"
 exit 0

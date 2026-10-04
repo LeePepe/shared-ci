@@ -6,6 +6,8 @@ Stdout: comment body. Exit: 0 pass; 1 blocking findings (gate mode only);
 3 unparseable/invalid verdict (gate callers must fail closed).
 Advisory mode never returns 1: findings are posted, the check stays green.
 Rendered text is neutralised (no @-mentions, HTML or code fences from model output).
+Optional --unavailable-reason-file writes a separate sanitized reason line, or
+an empty file for a valid verdict, without changing stdout or exit status.
 """
 
 from __future__ import annotations
@@ -113,18 +115,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--marker", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--unavailable", help="render an unavailable notice with this reason")
+    parser.add_argument("--unavailable-reason-file",
+                        help="write a sanitized unavailable reason line, empty for valid verdicts")
     parser.add_argument("raw", nargs="?")
     args = parser.parse_args(argv)
-    if args.unavailable is not None:
-        sys.stdout.write(unavailable(args.tool, args.mode, args.marker, args.head, args.unavailable))
+    if args.unavailable_reason_file:
+        with open(args.unavailable_reason_file, "w", encoding="utf-8"):
+            pass
+
+    def report_unavailable(reason: str) -> int:
+        if args.unavailable_reason_file:
+            with open(args.unavailable_reason_file, "w", encoding="utf-8") as handle:
+                handle.write(safe(reason) + "\n")
+        sys.stdout.write(unavailable(args.tool, args.mode, args.marker, args.head, reason))
         return 0 if args.mode == "advisory" else 3
+
+    if args.unavailable is not None:
+        return report_unavailable(args.unavailable)
     try:
         with open(args.raw, encoding="utf-8", errors="replace") as handle:
             data = validate(_extract(handle.read()))
     except (OSError, TypeError, ValueError) as error:
-        sys.stdout.write(unavailable(args.tool, args.mode, args.marker, args.head,
-                                     f"The reviewer returned an invalid verdict ({error})."))
-        return 0 if args.mode == "advisory" else 3
+        return report_unavailable(f"The reviewer returned an invalid verdict ({error}).")
     sys.stdout.write(render(args.tool, args.mode, args.marker, args.head, data))
     if args.mode == "gate" and data["verdict"] == "changes":
         return 1

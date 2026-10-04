@@ -2,7 +2,8 @@ name: kimi-review
 
 # Reusable ADVISORY AI review. Same trust model as codex-review.yml (fork guard,
 # trusted base checkout, diff read as data). Findings are posted as a sticky PR
-# comment; the job always succeeds and must never be a required check.
+# comment; unavailable reviews are skipped or clearly reported, never a pass.
+# Kimi never blocks and must never be a required check.
 
 on:
   workflow_call:
@@ -32,8 +33,64 @@ permissions:
   pull-requests: write
 
 jobs:
-  kimi-review:
+  kimi-probe:
+    name: Kimi CLI availability
     if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    continue-on-error: true
+    outputs:
+      available: ${{ steps.probe.outputs.available }}
+    steps:
+      - name: Probe kimi CLI availability (not a review)
+        id: probe
+        shell: bash
+        env:
+          KIMI_BIN: ${{ inputs.kimi-bin }}
+        run: |
+          KIMI_BIN="${KIMI_BIN:-kimi}"
+          if command -v "$KIMI_BIN" >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::kimi review unavailable: kimi CLI is not installed on the runner"
+            echo "kimi review unavailable: kimi CLI is not installed on the runner" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Check out shared-ci review scripts at the pinned SHA
+        if: steps.probe.outputs.available == 'false'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        if: steps.probe.outputs.available == 'false'
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Publish unavailable advisory comment
+        if: steps.probe.outputs.available == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          MARKER="<!-- shared-ci-kimi-review -->"
+          BODY="$(python3 -B .shared-ci/scripts/review/verdict.py --tool kimi --mode advisory \
+            --marker "$MARKER" --head "$HEAD_SHA" --unavailable "kimi CLI is not installed on the runner")"
+          . .shared-ci/scripts/review/sticky.sh
+          post_sticky "$MARKER" "$BODY" || true
+
+  kimi-review:
+    needs: [kimi-probe]
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && needs.kimi-probe.outputs.available == 'true'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     continue-on-error: true
@@ -70,4 +127,4 @@ jobs:
           KIMI_MODEL: ${{ inputs.kimi-model }}
           REVIEW_RULES_FILE: ${{ inputs.rules-file }}
           REVIEW_MAX_BYTES: ${{ inputs.max-diff-bytes }}
-        run: bash .shared-ci/scripts/review/kimi-review.sh || true
+        run: bash .shared-ci/scripts/review/kimi-review.sh
