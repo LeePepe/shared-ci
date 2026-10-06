@@ -33,14 +33,14 @@ permissions:
   pull-requests: write
 
 jobs:
-  kimi-probe:
-    name: Kimi CLI availability
+  kimi-execute:
+    name: Kimi advisory execution (not the completion check)
     if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     continue-on-error: true
     outputs:
-      available: ${{ steps.probe.outputs.available }}
+      completed: ${{ steps.review.outputs.completed }}
     steps:
       - name: Probe kimi CLI availability (not a review)
         id: probe
@@ -56,8 +56,13 @@ jobs:
             echo "::warning::kimi review unavailable: kimi CLI is not installed on the runner"
             echo "kimi review unavailable: kimi CLI is not installed on the runner" >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Check out trusted base (never the PR head)
+        if: steps.probe.outputs.available == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
       - name: Check out shared-ci review scripts at the pinned SHA
-        if: steps.probe.outputs.available == 'false'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ job.workflow_repository }}
@@ -65,7 +70,6 @@ jobs:
           path: .shared-ci
           persist-credentials: false
       - name: Confirm shared-ci revision
-        if: steps.probe.outputs.available == 'false'
         env:
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
@@ -88,34 +92,9 @@ jobs:
           . .shared-ci/scripts/review/sticky.sh
           post_sticky "$MARKER" "$BODY" || true
 
-  kimi-review:
-    needs: [kimi-probe]
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && needs.kimi-probe.outputs.available == 'true'
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: ${{ inputs.timeout-minutes }}
-    continue-on-error: true
-    steps:
-      - name: Check out trusted base (never the PR head)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-      - name: Check out shared-ci review scripts at the pinned SHA
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .shared-ci
-          persist-credentials: false
-      - name: Confirm shared-ci revision
-        env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
-          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
-          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
       - name: Run advisory kimi review on the PR diff
+        id: review
+        if: steps.probe.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -128,3 +107,14 @@ jobs:
           REVIEW_RULES_FILE: ${{ inputs.rules-file }}
           REVIEW_MAX_BYTES: ${{ inputs.max-diff-bytes }}
         run: bash .shared-ci/scripts/review/kimi-review.sh
+
+  kimi-review:
+    needs: [kimi-execute]
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && needs.kimi-execute.outputs.completed == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    continue-on-error: true
+    steps:
+      - name: Report completed advisory review
+        run: echo "Kimi advisory review completed; findings never block merge."
