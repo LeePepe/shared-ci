@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -30,7 +31,20 @@ class BoundedRunnerTests(unittest.TestCase):
     def test_interruption_kills_shell_and_descendant(self):
         self.assert_group_cleanup(interrupt=True)
 
-    def assert_group_cleanup(self, interrupt=False):
+    def test_killed_sleep_does_not_report_survival(self):
+        for interrupt in (False, True):
+            with self.subTest(interrupt=interrupt):
+                self.assert_group_cleanup(interrupt=interrupt, kill_sleep_first=True)
+
+    def test_direct_child_kill_still_reports_survival(self):
+        for interrupt in (False, True):
+            with self.subTest(interrupt=interrupt):
+                # Deliberately break cleanup: only the Popen child is killed.
+                with patch.object(os, "killpg", side_effect=os.kill):
+                    with self.assertRaisesRegex(AssertionError, "descendant survived the timeout"):
+                        self.assert_group_cleanup(interrupt=interrupt)
+
+    def assert_group_cleanup(self, interrupt=False, kill_sleep_first=False):
         communicate = subprocess.Popen.communicate
         pids = []
         drained = []
@@ -42,19 +56,29 @@ class BoundedRunnerTests(unittest.TestCase):
                 return output
             except subprocess.TimeoutExpired as error:
                 pids.extend(int(pid) for pid in error.output.split())
+                self.assertEqual(3, len(pids), "both shells and sleep must start before timeout")
+                self.assertEqual(process.pid, pids[0])
+                self.assertEqual([process.pid] * 3, [os.getpgid(pid) for pid in pids])
+                if kill_sleep_first:
+                    # Force the race's ordering: let the inner shell finish its
+                    # wait after sleep is killed, before the runner kills the group.
+                    os.kill(pids[2], signal.SIGKILL)
+                    drained.append(communicate(process, timeout=2)[0])
                 if interrupt:
                     raise KeyboardInterrupt("interrupted while waiting") from error
                 raise
 
         # The descendant inherits captured pipes and outlives a direct-child kill.
         # A finite sleep keeps a broken regression from leaving permanent orphans.
+        # A killed sleep can wake its shell before group SIGKILL reaches that
+        # shell. Emit the marker only after a successful wait, not unconditionally.
         with patch.object(subprocess.Popen, "communicate", capture):
             with self.assertRaises(KeyboardInterrupt if interrupt else subprocess.TimeoutExpired):
                 run_bounded(
-                    ["bash", "-c", 'bash -c "sleep 5; echo survived" & '
-                     'printf "%s %s\\n" "$$" "$!"; wait'], timeout=0.5)
-        self.assertNotIn("survived", "".join(drained), "descendant survived the timeout")
-        self.assertEqual(2, len(pids), "shell must start its descendant before timeout")
+                    ["bash", "-c", """bash -c 'sleep 5 & sleeper=$!;
+                     printf "%s %s %s\\n" "$PPID" "$$" "$sleeper";
+                     wait "$sleeper" && echo survived' & wait"""], timeout=0.5)
+        self.assertEqual(3, len(pids), "both shells and sleep must start before timeout")
         deadline = time.monotonic() + 2
         for pid in pids:
             while True:
@@ -65,6 +89,7 @@ class BoundedRunnerTests(unittest.TestCase):
                 if time.monotonic() >= deadline:
                     self.fail(f"runner left process {pid} alive after cleanup")
                 time.sleep(0.01)
+        self.assertNotIn("survived", "".join(drained), "descendant survived the timeout")
 
 
 class FixtureLifecycleTests(unittest.TestCase):
