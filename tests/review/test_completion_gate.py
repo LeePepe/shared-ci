@@ -3,12 +3,14 @@
 These are local configuration/shell checks, not hosted Actions scheduler evidence.
 """
 import importlib.util
+import json
 import os
 import pathlib
 import sys
 import tempfile
 import unittest
 
+import test_review
 from test_review import STUB_GH, run_bounded
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -132,18 +134,23 @@ class KimiAvailabilityWorkflowTests(unittest.TestCase):
     def test_missing_cli_skips_review_without_changing_trust_or_permissions(self):
         workflow = self.workflow
         jobs = workflow["jobs"]
-        self.assertIn("kimi-probe", jobs)
-        probe, review = jobs["kimi-probe"], jobs["kimi-review"]
+        self.assertEqual({"kimi-execute", "kimi-review"}, set(jobs))
+        probe, review = jobs["kimi-execute"], jobs["kimi-review"]
         guard = ("github.event_name == 'pull_request_target' && "
                  "github.event.pull_request.head.repo.full_name == github.repository")
         self.assertEqual(guard, probe["if"])
-        self.assertEqual(["kimi-probe"], review["needs"])
-        self.assertEqual(guard + " && needs.kimi-probe.outputs.available == 'true'", review["if"])
-        self.assertEqual({"available": "${{ steps.probe.outputs.available }}"}, probe["outputs"])
+        self.assertEqual(["kimi-execute"], review["needs"])
+        self.assertEqual(guard + " && needs.kimi-execute.outputs.completed == 'true'", review["if"])
+        self.assertEqual({"completed": "${{ steps.review.outputs.completed }}"}, probe["outputs"])
         self.assertEqual({"contents": "read", "pull-requests": "write"}, workflow["permissions"])
+        self.assertEqual("${{ fromJSON(inputs.runs-on) }}", probe["runs-on"])
+        self.assertEqual("ubuntu-latest", review["runs-on"])
+        self.assertEqual({}, review["permissions"])
+        self.assertEqual(2, review["timeout-minutes"])
+        self.assertEqual(1, len(review["steps"]))
+        self.assertEqual({"name", "run"}, set(review["steps"][0]))
         for job in (probe, review):
             self.assertIs(True, job["continue-on-error"])
-            self.assertEqual("${{ fromJSON(inputs.runs-on) }}", job["runs-on"])
             for step in job["steps"]:
                 self.assertNotIn("${{", step.get("run", ""))
                 if step.get("uses", "").startswith("actions/checkout@"):
@@ -151,22 +158,35 @@ class KimiAvailabilityWorkflowTests(unittest.TestCase):
                         "${{ github.event.pull_request.base.sha }}", "${{ job.workflow_sha }}"))
                 if "kimi-review.sh" in step.get("run", ""):
                     self.assertEqual("bash .shared-ci/scripts/review/kimi-review.sh", step["run"])
+                    self.assertEqual("review", step["id"])
+                    self.assertEqual("steps.probe.outputs.available == 'true'", step["if"])
+                    self.assertIs(probe, job, "Probe and execution must share the same runner job")
         check = next(step for step in probe["steps"] if step.get("id") == "probe")
         self.assertEqual("${{ inputs.kimi-bin }}", check["env"]["KIMI_BIN"])
         self.assertIn('command -v "$KIMI_BIN"', check["run"])
-        shared = next(step for step in probe["steps"] if "uses" in step)
+        checkouts = [step for step in probe["steps"] if "uses" in step]
+        self.assertEqual(2, len(checkouts))
+        base, shared = checkouts
+        self.assertEqual({"ref": "${{ github.event.pull_request.base.sha }}", "fetch-depth": 0}, base["with"])
+        self.assertEqual("steps.probe.outputs.available == 'true'", base["if"])
         self.assertEqual({"repository": "${{ job.workflow_repository }}",
                           "ref": "${{ job.workflow_sha }}", "path": ".shared-ci",
                           "persist-credentials": False}, shared["with"])
-        for step in probe["steps"][1:]:
-            self.assertEqual("steps.probe.outputs.available == 'false'", step["if"])
+        self.assertNotIn("if", shared)
+        confirm = next(step for step in probe["steps"] if step["name"] == "Confirm shared-ci revision")
+        self.assertNotIn("if", confirm)
+        execution = next(step for step in probe["steps"] if step.get("id") == "review")
+        self.assertLess(probe["steps"].index(check), probe["steps"].index(execution))
+        self.assertLess(probe["steps"].index(confirm), probe["steps"].index(execution))
+        publish = next(step for step in probe["steps"] if "post_sticky" in step.get("run", ""))
+        self.assertEqual("steps.probe.outputs.available == 'false'", publish["if"])
         inputs = workflow["on"]["workflow_call"]["inputs"]
         self.assertEqual({"runs-on", "kimi-bin", "kimi-model", "rules-file",
                           "max-diff-bytes", "timeout-minutes"}, set(inputs))
         self.assertTrue(all(not value.get("required", False) for value in inputs.values()))
 
     def test_actual_probe_shell_and_unavailable_sticky_comment(self):
-        steps = self.workflow["jobs"]["kimi-probe"]["steps"]
+        steps = self.workflow["jobs"]["kimi-execute"]["steps"]
         check = next(step for step in steps if step.get("id") == "probe")
         publish = next(step for step in steps if "post_sticky" in step.get("run", ""))
         with tempfile.TemporaryDirectory(prefix="kimi-probe-") as temp:
@@ -214,6 +234,99 @@ class KimiAvailabilityWorkflowTests(unittest.TestCase):
                     self.assertIn("does not block merge", comment)
                     self.assertEqual("PATCH\nPOST\n" if failure else "PATCH\n" if comment_id else "POST\n",
                                      (root / "publish-attempts").read_text())
+
+
+class KimiExecutionCompletionTests(unittest.TestCase):
+    """Run the real probe and wrapper, then resolve the final job's condition.
+
+    Only this workflow's equality/conjunction subset is evaluated here. This
+    locks its output wiring, not the hosted Actions scheduler's implementation.
+    """
+
+    def setUp(self):
+        self.jobs = frontmatter.parse(
+            (REPO / ".github/workflows/kimi-review.yml").read_text())["jobs"]
+        self.fixture = test_review.ReviewScriptEndToEndTests()
+        self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
+
+    def final_result(self, step_outputs, execution_result="success"):
+        values = {"github.event_name": "pull_request_target",
+                  "github.event.pull_request.head.repo.full_name": "o/r",
+                  "github.repository": "o/r"}
+        for job_id, job in self.jobs.items():
+            values[f"needs.{job_id}.result"] = execution_result
+            for name, expression in job.get("outputs", {}).items():
+                self.assertTrue(expression.startswith("${{ steps."))
+                self.assertTrue(expression.endswith(" }}"))
+                _, step, _, output = expression[4:-3].split(".")
+                values[f"needs.{job_id}.outputs.{name}"] = step_outputs.get(step, {}).get(output, "")
+
+        def value(term):
+            term = term.strip()
+            if term.startswith("'") and term.endswith("'"):
+                return term[1:-1]
+            return values[term]  # Unknown/new expression syntax fails the test.
+
+        enabled = all(value(left) == value(right) for left, right in (
+            clause.split(" == ") for clause in self.jobs["kimi-review"]["if"].split(" && ")))
+        return execution_result if enabled else "skipped"
+
+    def run_execution(self, *, remove_cli=False, raw=None, **overrides):
+        fixture = self.fixture
+        probe = next(step for job in self.jobs.values() for step in job["steps"]
+                     if step.get("id") == "probe")
+        execution = next(step for job in self.jobs.values() for step in job["steps"]
+                         if "kimi-review.sh" in step.get("run", ""))
+        self.assertEqual("bash .shared-ci/scripts/review/kimi-review.sh", execution["run"])
+        binary, output = fixture.tools / "kimi", fixture.out / "probe-output"
+        for name in ("probe-output", "review-output", "prompt"):
+            (fixture.out / name).unlink(missing_ok=True)
+        result = run_bounded(["/bin/bash", "-e", "-o", "pipefail", "-c", probe["run"]],
+                             env=dict(fixture.repo.env, KIMI_BIN=str(binary),
+                                      GITHUB_OUTPUT=str(output)), timeout=10)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("available=true\n", output.read_text())
+        self.assertFalse((fixture.out / "prompt").exists())
+        if remove_cli:
+            binary.unlink()  # Available at probe time, absent in the actual execution environment.
+        completion = fixture.out / "review-output"
+        result, comment = fixture.run_script(
+            "kimi-review.sh", json.dumps(test_review.PASS) if raw is None else raw,
+            KIMI_BIN=str(binary), GITHUB_OUTPUT=str(completion), **overrides)
+        self.assertEqual(0, result.returncode, result.stderr)  # Still advisory.
+        outputs = (dict(line.split("=", 1) for line in completion.read_text().splitlines())
+                   if completion.exists() else {})
+        final = self.final_result({"probe": {"available": "true"}, execution.get("id", ""): outputs})
+        return final, result, comment
+
+    def test_probe_available_but_execution_cli_missing_never_reports_success(self):
+        final, result, comment = self.run_execution(remove_cli=True)
+        self.fixture.assert_kimi_unavailable(result, comment, "kimi CLI is not installed on the runner")
+        self.assertFalse((self.fixture.out / "prompt").exists())
+        self.assertEqual("skipped", final, "An advisory exit 0 is not a completed model review")
+
+    def test_unavailable_and_empty_diff_do_not_claim_model_completion(self):
+        for overrides in ({"raw": "junk"}, {"fail": "1"},
+                          {"REVIEW_RULES_FILE": "missing.md"}, {"HEAD_SHA": self.fixture.base},
+                          {"raw": "junk", "STUB_PUBLISH_FAIL": "all"}):
+            with self.subTest(overrides=overrides):
+                final, _, _ = self.run_execution(**overrides)
+                self.assertEqual("skipped", final)
+
+    def test_valid_pass_and_findings_complete_even_if_comment_publication_fails(self):
+        for verdict in (test_review.PASS, test_review.CHANGES):
+            for failure in ("", "all"):
+                with self.subTest(verdict=verdict["verdict"], publication=failure):
+                    final, result, _ = self.run_execution(raw=json.dumps(verdict), STUB_PUBLISH_FAIL=failure)
+                    self.assertEqual("success", final)
+                    self.assertIn("advisory complete", result.stdout)
+
+    def test_absent_or_nontrue_completion_never_enables_final_check(self):
+        for completed in ("", "false", "unknown", "True"):
+            with self.subTest(completed=completed):
+                self.assertEqual("skipped", self.final_result(
+                    {"probe": {"available": "true"}, "review": {"completed": completed}}))
 
 
 class ReviewEditWorkflowTests(unittest.TestCase):

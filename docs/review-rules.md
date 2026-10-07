@@ -32,6 +32,13 @@ the review job **skipped**, with an unavailable warning, step summary and sticky
 PR comment. Later review failures report **unavailable**, never pass, in the
 warning, summary and comment (when publication is possible). Neither case fails
 the workflow or blocks merge; a successful availability probe is not a review.
+The probe and wrapper run in the same execution job. The final `kimi-review`
+check runs only when that wrapper emits `completed=true` after validating an
+actual model verdict (pass or advisory findings). Missing CLI, later unavailable
+results and empty diffs leave that check skipped, even if the advisory execution
+job exits zero. A CLI disappearing after the probe cannot produce a successful
+review check. Comment publication remains best-effort; no caller input,
+permission or required Codex gate changes are needed.
 
 ## Directory-mode adoption
 

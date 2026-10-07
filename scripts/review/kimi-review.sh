@@ -13,6 +13,12 @@ MAX_BYTES="${REVIEW_MAX_BYTES:-80000}"
 KIMI_BIN="${KIMI_BIN:-kimi}"
 KIMI_MODEL="${KIMI_MODEL:-kimi-code/k3}"
 
+# Exit 0 is advisory, not proof of model completion. Only a validated model
+# verdict can enable the workflow's final review check; direct callers need no output file.
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    echo "completed=false" >> "$GITHUB_OUTPUT"
+fi
+
 advisory_unavailable() {
     local body="${2:-}"
     # Report before attempting publication: missing env/auth must not hide this conclusion.
@@ -92,5 +98,8 @@ if [ -s "$WORK/unavailable" ]; then
     advisory_unavailable "$REASON" "$BODY"
 fi
 post_sticky "$MARKER" "$BODY" || true
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    echo "completed=true" >> "$GITHUB_OUTPUT"
+fi
 echo "[kimi-review] advisory complete; never blocking"
 exit 0

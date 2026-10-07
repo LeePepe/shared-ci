@@ -88,8 +88,10 @@ class ForkGuardTests(unittest.TestCase):
     def test_kimi_probe_dependency_preserves_required_fork_guard(self):
         text = (REPO / ".github/workflows/kimi-review.yml").read_text()
         self.assertEqual([], kinds(text))
-        self.assertEqual(["self_hosted_unguarded", "self_hosted_unguarded"],
-                         kinds(text.replace(GUARD, "needs.kimi-probe.outputs.available == 'true'")))
+        # Probe + execution now share one self-hosted job. The completion-only
+        # job is hosted, with no checkout and no permissions.
+        self.assertEqual(["self_hosted_unguarded"],
+                         kinds(text.replace(GUARD, "needs.kimi-execute.outputs.completed == 'true'")))
 
     def test_guard_in_expression_syntax_accepted(self):
         self.assertEqual([], kinds(self_hosted("${{ " + GUARD + " }}")))
