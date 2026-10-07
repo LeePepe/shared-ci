@@ -129,6 +129,23 @@ contract, not invent a new layer model or PR policy for each assignment.
 | Scripts, caller CI and CODEOWNERS | Executable project checks and effective review protection |
 | `AGENTS.md` | Task-oriented pointers to those sources, not copies of their rules |
 
+### Task plans and versioned guides
+
+Where the repository's existing process uses a task plan, keep task-specific
+facts there: the task and its version, dependency versions and update order,
+completion conditions and next actions. Reuse a sufficiently concrete existing
+plan: check it against current code, dependencies and verification, then fill
+gaps instead of rewriting the same plan. Existing spec/plan review and required
+approvals still apply; this clarification adds no plan requirement or exemption.
+
+Follow `AGENTS.md` → repository guide → shared contract at the selected immutable
+version. General update/migration rules belong in the repository guide or
+versioned shared documentation; the plan references the applicable immutable
+versions instead of maintaining duplicate policy. Distinguish the selected
+dependency version from a proposed target: a source candidate does not replace
+the contract at the selected pin. For actual upgrades and rollback, use the
+existing [migration procedure](MIGRATION.md).
+
 ### Define layers by responsibility
 
 - A layer is a unit with its own verification command and a dependency direction

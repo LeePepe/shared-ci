@@ -19,6 +19,10 @@ own published provider and migration evidence, not a speculative configuration.
 
 ## Execute one consumer upgrade
 
+For task-plan ownership and version-matched references, follow
+[Task plans and versioned guides](repo-contract.md#task-plans-and-versioned-guides)
+when preparing an upgrade under the repository's existing process.
+
 1. Record the old provider SHA, consumer baseline, effective required checks,
    commands, caller adapters and configuration. Preserve a recoverable baseline.
 2. Compare target contracts, schema semantics, outputs and failure behavior.

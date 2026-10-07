@@ -52,6 +52,11 @@ Metadata records exact versions and versioned AI documentation. Inspect real
 manifests/lockfiles for parity; the shared-ci pin has only one metadata authority.
 A published source commit is not a release, product adoption or live protection.
 
+For a task plan under this repository's existing process, consult the selected
+provider's [repository development contract](https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/repo-contract.md#repository-development-contract).
+Use its task-plan clarification only if present at that SHA; a newer source
+candidate does not amend the selected contract.
+
 ## Delivery
 
 The repository's docs/development.md owns PR work units and companion changes.
