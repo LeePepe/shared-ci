@@ -14,6 +14,7 @@ or human-readable release tag is not a shared-ci consumption pin.
 | Upgrade or roll back | [MIGRATION](MIGRATION.md) | Old/new pins, adaptations, negative checks and a compatible rollback target |
 | Change or diagnose an API | [API task map](../docs/ai-usage.md) | Exact interface, observed finding/status and its contract |
 | Develop in a consumer | [Agent protocol](agent-protocol.md), [repository contract](repo-contract.md) | One goal, repository PR kind, verification and required review at the tested SHA |
+| Create or update SDK / internal TestFlight Actions | [Automated release construction](../docs/automated-release.md) | Fixed provider, reviewed repo adapters, authorized enablement and actual distribution/build availability; source templates alone are not publication |
 
 The repository owns layer responsibilities, allowed dependencies and PR kinds;
 each PR serves one goal, not one layer.
