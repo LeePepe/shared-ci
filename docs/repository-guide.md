@@ -76,7 +76,10 @@ gate applies. PR Manager uses existing check/review evidence to manage lifecycle
 For staged plans and multi-stage feature contracts, the in-tree contract is the
 matching documentation for intermediate declaration/schema PRs; surface-document
 updates (such as CLI contracts or architecture guides) belong to their designated
-staged tasks after implementation lands.
+staged tasks after implementation lands. This exception exists so declaration
+and schema work remains independently reviewable in its own PR while the
+user-facing contract text lands with the implementation task that actually ships
+those interfaces, avoiding a premature docs-only gate in the staging line.
 
 ## Verify
 
