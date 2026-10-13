@@ -123,8 +123,30 @@ The `quality / aggregate` check rejects empty or placeholder sections.
   the commit it names. **Every new push invalidates the old evidence.** Wait
   for the new required checks and a new review before you claim the work is
   done.
-- "Done" means the required checks are green on the PR head SHA. A finished
-  local run is not "done", and a sent message is not an accepted handoff.
+- Handing over a PR is an intermediate lifecycle event, not "done". A finished
+  local run is not "done", and a sent message alone is not an accepted
+  handoff or completion signal.
+- After PR handoff, the author may either:
+  - remain active to wait for the required checks on the current PR head and
+    repair failures; or
+  - stop after handoff. The protocol does not require continued waiting.
+- When an author remains active, it waits only for required checks and concrete
+  repair results; it never waits for human approvals or merge. Required
+  approvals, reviews, auto-merge behavior and merge eligibility remain
+  mandatory.
+- PR Manager handles lifecycle as defined in §4 and serves as the backstop when
+  the author is not waiting or is unavailable. PR Manager follows current-head
+  CI, review and approval evidence, and routes concrete repair findings through
+  the original path. It does not write to the branch and gains no new gate.
+- During repair, the author remains the sole branch writer under §1; nobody
+  else is assigned to write concurrently, and unexpected writers still require
+  stopping and reporting. Every repair push must follow §3 verification before
+  pushing. Because each push invalidates prior checks, reviews and tested-SHA
+  evidence, any later completion claim requires fresh evidence for the new
+  PR head.
+- "Done" means the required checks are green on the exact PR head SHA plus any
+  existing repository-required approval and review evidence. PR handoff never
+  waives these gates.
 
 ## 6. Important PRs need the Owner
 
