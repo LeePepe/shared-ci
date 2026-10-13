@@ -24,6 +24,17 @@ from typing import Any
 ROOT_CONTEXT = "CONTEXT.md"
 VALID_GATE_KINDS = {"build", "check", "lint", "test"}
 VALID_GATE_MODES = {"both", "ci", "local"}
+VALID_REACH_ADAPTERS = {
+    "swiftpm-v1",
+    "xcodegen-v1",
+    "python-unittest-v1",
+    "pytest-v1",
+    "node-test-v1",
+    "vitest-v1",
+    "ruby-v1",
+    "shell-v1",
+    "declared-glob-v1",
+}
 
 
 def _load_sibling(name: str) -> Any:
@@ -254,6 +265,170 @@ def require_utf8(value: str, field: str) -> None:
         raise ContextError(f"{field} must be encodable as UTF-8", "invalid_gate") from None
 
 
+def validate_reach_adapter(adapter_obj: Any, path: str, gate_id: str) -> None:
+    def fail(detail: str) -> None:
+        raise ContextError(f"{path}: gate {gate_id}: reaches: {detail}", "invalid_test_declaration")
+
+    if not isinstance(adapter_obj, dict):
+        fail("reach entry must be an object")
+    adapter_name = adapter_obj.get("adapter")
+    if not isinstance(adapter_name, str) or not adapter_name.strip() or "\0" in adapter_name:
+        fail("adapter must be a non-empty string")
+    if adapter_name not in VALID_REACH_ADAPTERS:
+        fail(f"unknown or unsupported reach adapter: {adapter_name!r}")
+
+    known_keys = {"adapter"}
+    if adapter_name == "swiftpm-v1":
+        known_keys.update({"package_path"})
+        if "package_path" in adapter_obj:
+            val = adapter_obj["package_path"]
+            if not isinstance(val, str) or not val.strip() or "\0" in val:
+                fail("package_path must be a non-empty string")
+    elif adapter_name == "xcodegen-v1":
+        known_keys.update({"project", "scheme"})
+        for k in ("project", "scheme"):
+            if k in adapter_obj:
+                val = adapter_obj[k]
+                if not isinstance(val, str) or not val.strip() or "\0" in val:
+                    fail(f"{k} must be a non-empty string")
+    elif adapter_name == "python-unittest-v1":
+        known_keys.update({"start_directory", "pattern"})
+        for k in ("start_directory", "pattern"):
+            if k in adapter_obj:
+                val = adapter_obj[k]
+                if not isinstance(val, str) or not val.strip() or "\0" in val:
+                    fail(f"{k} must be a non-empty string")
+    elif adapter_name == "pytest-v1":
+        known_keys.update({"root", "python_files"})
+        if "root" in adapter_obj:
+            val = adapter_obj["root"]
+            if not isinstance(val, str) or not val.strip() or "\0" in val:
+                fail("root must be a non-empty string")
+        if "python_files" in adapter_obj:
+            val = adapter_obj["python_files"]
+            if not isinstance(val, list) or not val or any(
+                    not isinstance(s, str) or not s.strip() or "\0" in s for s in val):
+                fail("python_files must be a non-empty string list")
+    elif adapter_name == "node-test-v1":
+        known_keys.update({"patterns"})
+        if "patterns" in adapter_obj:
+            val = adapter_obj["patterns"]
+            if not isinstance(val, list) or not val or any(
+                    not isinstance(s, str) or not s.strip() or "\0" in s for s in val):
+                fail("patterns must be a non-empty string list")
+    elif adapter_name == "vitest-v1":
+        known_keys.update({"include", "exclude", "config"})
+        for k in ("include", "exclude"):
+            if k in adapter_obj:
+                val = adapter_obj[k]
+                if not isinstance(val, list) or not val or any(
+                        not isinstance(s, str) or not s.strip() or "\0" in s for s in val):
+                    fail(f"{k} must be a non-empty string list")
+        if "config" in adapter_obj:
+            val = adapter_obj["config"]
+            if not isinstance(val, str) or not val.strip() or "\0" in val:
+                fail("config must be a non-empty string")
+    elif adapter_name in ("ruby-v1", "shell-v1"):
+        known_keys.update({"patterns"})
+        if "patterns" in adapter_obj:
+            val = adapter_obj["patterns"]
+            if not isinstance(val, list) or not val or any(
+                    not isinstance(s, str) or not s.strip() or "\0" in s for s in val):
+                fail("patterns must be a non-empty string list")
+    elif adapter_name == "declared-glob-v1":
+        known_keys.update({"patterns", "reason", "source"})
+        for k in ("patterns", "reason", "source"):
+            if k not in adapter_obj:
+                fail(f"declared-glob-v1 requires {k}")
+        val = adapter_obj["patterns"]
+        if not isinstance(val, list) or not val or any(
+                not isinstance(s, str) or not s.strip() or "\0" in s for s in val):
+            fail("patterns must be a non-empty string list")
+        reason = adapter_obj["reason"]
+        if not isinstance(reason, str) or not reason.strip() or "\0" in reason:
+            fail("reason must be a non-empty string")
+        source = adapter_obj["source"]
+        if not isinstance(source, str) or not source.strip() or "\0" in source:
+            fail("source must be a non-empty string")
+
+    unknown = set(adapter_obj.keys()) - known_keys
+    if unknown:
+        fail(f"unknown fields in {adapter_name} adapter: {sorted(unknown)}")
+
+
+def validate_test_reachability(data: Any, path: str) -> None:
+    def fail(detail: str) -> None:
+        raise ContextError(f"{path}: test_reachability: {detail}", "invalid_test_declaration")
+
+    if not isinstance(data, dict):
+        fail("must be an object")
+
+    allowed_keys = {"version", "inventory", "required_gates", "non_tests", "exclusions"}
+    unknown = set(data.keys()) - allowed_keys
+    if unknown:
+        fail(f"unknown fields: {sorted(unknown)}")
+
+    if "version" not in data:
+        fail("requires version")
+    version = data["version"]
+    if type(version) is not int or version != 1:
+        fail("version must be integer 1")
+
+    if "inventory" not in data:
+        fail("requires inventory")
+    inventory = data["inventory"]
+    if not isinstance(inventory, dict):
+        fail("inventory must be an object")
+    inv_unknown = set(inventory.keys()) - {"defaults", "include"}
+    if inv_unknown:
+        fail(f"unknown inventory fields: {sorted(inv_unknown)}")
+    if inventory.get("defaults") != "default-v1":
+        fail("inventory.defaults must be 'default-v1'")
+    if "include" in inventory:
+        include = inventory["include"]
+        if not isinstance(include, list) or any(
+                not isinstance(s, str) or not s.strip() or "\0" in s for s in include):
+            fail("inventory.include must be a list of non-empty strings")
+
+    if "required_gates" in data:
+        required_gates = data["required_gates"]
+        if not isinstance(required_gates, list):
+            fail("required_gates must be a list")
+        seen_gates: set[tuple[str, str, str]] = set()
+        for idx, entry in enumerate(required_gates):
+            if not isinstance(entry, dict):
+                fail(f"required_gates[{idx}] must be an object")
+            entry_unknown = set(entry.keys()) - {"layer", "gate", "aggregate_lane"}
+            if entry_unknown:
+                fail(f"required_gates[{idx}] has unknown fields: {sorted(entry_unknown)}")
+            for field in ("layer", "gate", "aggregate_lane"):
+                val = entry.get(field)
+                if not isinstance(val, str) or not val.strip() or "\0" in val:
+                    fail(f"required_gates[{idx}].{field} must be a non-empty string")
+            key = (entry["layer"], entry["gate"], entry["aggregate_lane"])
+            if key in seen_gates:
+                fail(f"duplicate required_gate entry: {key}")
+            seen_gates.add(key)
+
+    for field in ("non_tests", "exclusions"):
+        if field in data:
+            entries = data[field]
+            if not isinstance(entries, list):
+                fail(f"{field} must be a list")
+            for idx, entry in enumerate(entries):
+                if not isinstance(entry, dict):
+                    fail(f"{field}[{idx}] must be an object")
+                entry_unknown = set(entry.keys()) - {"patterns", "reason"}
+                if entry_unknown:
+                    fail(f"{field}[{idx}] has unknown fields: {sorted(entry_unknown)}")
+                if "patterns" not in entry or not isinstance(entry["patterns"], list) or not entry["patterns"] or any(
+                        not isinstance(p, str) or not p.strip() or "\0" in p for p in entry["patterns"]):
+                    fail(f"{field}[{idx}].patterns must be a non-empty list of non-empty strings")
+                reason = entry.get("reason")
+                if not isinstance(reason, str) or not reason.strip() or "\0" in reason:
+                    fail(f"{field}[{idx}].reason must be a non-empty string")
+
+
 def validate_context(data: dict[str, Any], path: str) -> None:
     """Validate the documented schema-1 subset, not arbitrary JSON Schema.
 
@@ -296,6 +471,11 @@ def validate_context(data: dict[str, Any], path: str) -> None:
                 strings(entry, "test_paths")
             else:
                 string(entry.get("reason"), "exclusion reason")
+    if "test_reachability" in data:
+        if data.get("kind") == "index":
+            validate_test_reachability(data["test_reachability"], path)
+        else:
+            fail("leaf contains index fields", "invalid_leaf")
     if data["kind"] == "index":
         if any(key in data for key in ("layer", "group", "parent", "scope", "test_paths",
                                        "dependencies", "dependents", "gates", "red_lines", "manifest")):
@@ -330,6 +510,16 @@ def validate_context(data: dict[str, Any], path: str) -> None:
             if "{" in token or "}" in token:
                 if token not in ("{test_paths}", "{owned_python_paths}") or index == 0:
                     fail(f"unknown or malformed path placeholder: {token!r}", "invalid_gate")
+        if "reaches" in gate:
+            reaches = gate["reaches"]
+            if not isinstance(reaches, list) or not reaches:
+                fail("gate reaches must be a non-empty list", "invalid_test_declaration")
+            if gate.get("kind") != "test":
+                fail("gate with reaches must have kind: test", "invalid_test_declaration")
+            if gate.get("mode") not in ("both", "ci"):
+                fail("gate with reaches must have mode ci or both", "invalid_test_declaration")
+            for reach_entry in reaches:
+                validate_reach_adapter(reach_entry, path, gate["id"])
     if "manifest" in data:
         manifest = data["manifest"]
         if not isinstance(manifest, dict):
