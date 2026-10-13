@@ -88,6 +88,9 @@
         "$ref": "#/$defs/gate"
       }
     },
+    "test_reachability": {
+      "$ref": "#/$defs/test_reachability"
+    },
     "manifest": {
       "$ref": "#/$defs/manifest"
     }
@@ -183,6 +186,11 @@
               "required": [
                 "exclusions"
               ]
+            },
+            {
+              "required": [
+                "test_reachability"
+              ]
             }
           ]
         }
@@ -245,9 +253,318 @@
           "items": {
             "$ref": "#/$defs/nonempty"
           }
+        },
+        "reaches": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/reach_adapter"
+          }
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "reaches"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "test"
+              },
+              "mode": {
+                "enum": [
+                  "both",
+                  "ci"
+                ]
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": true
+    },
+    "test_reachability": {
+      "type": "object",
+      "required": [
+        "version",
+        "inventory"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "inventory": {
+          "$ref": "#/$defs/test_inventory"
+        },
+        "required_gates": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/required_gate"
+          }
+        },
+        "non_tests": {
+          "$ref": "#/$defs/reasoned_patterns"
+        },
+        "exclusions": {
+          "$ref": "#/$defs/reasoned_patterns"
+        }
+      },
+      "additionalProperties": false
+    },
+    "test_inventory": {
+      "type": "object",
+      "required": [
+        "defaults"
+      ],
+      "properties": {
+        "defaults": {
+          "type": "string",
+          "const": "default-v1"
+        },
+        "include": {
+          "$ref": "#/$defs/strings"
+        }
+      },
+      "additionalProperties": false
+    },
+    "required_gate": {
+      "type": "object",
+      "required": [
+        "layer",
+        "gate",
+        "aggregate_lane"
+      ],
+      "properties": {
+        "layer": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "gate": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "aggregate_lane": {
+          "$ref": "#/$defs/nonempty"
+        }
+      },
+      "additionalProperties": false
+    },
+    "nonempty_strings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nonempty"
+      }
+    },
+    "reasoned_patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "patterns",
+          "reason"
+        ],
+        "properties": {
+          "patterns": {
+            "$ref": "#/$defs/nonempty_strings"
+          },
+          "reason": {
+            "$ref": "#/$defs/nonempty"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "reach_adapter": {
+      "type": "object",
+      "required": [
+        "adapter"
+      ],
+      "properties": {
+        "adapter": {
+          "enum": [
+            "swiftpm-v1",
+            "xcodegen-v1",
+            "python-unittest-v1",
+            "pytest-v1",
+            "node-test-v1",
+            "vitest-v1",
+            "ruby-v1",
+            "shell-v1",
+            "declared-glob-v1"
+          ]
+        },
+        "package_path": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "project": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "scheme": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "start_directory": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "pattern": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "root": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "python_files": {
+          "$ref": "#/$defs/strings"
+        },
+        "patterns": {
+          "$ref": "#/$defs/strings"
+        },
+        "include": {
+          "$ref": "#/$defs/strings"
+        },
+        "exclude": {
+          "$ref": "#/$defs/strings"
+        },
+        "config": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "source": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonempty"
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "adapter": {
+              "const": "swiftpm-v1"
+            },
+            "package_path": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "xcodegen-v1"
+            },
+            "project": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "scheme": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "python-unittest-v1"
+            },
+            "start_directory": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "pattern": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "pytest-v1"
+            },
+            "root": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "python_files": {
+              "$ref": "#/$defs/nonempty_strings"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "node-test-v1"
+            },
+            "patterns": {
+              "$ref": "#/$defs/nonempty_strings"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "vitest-v1"
+            },
+            "include": {
+              "$ref": "#/$defs/nonempty_strings"
+            },
+            "exclude": {
+              "$ref": "#/$defs/nonempty_strings"
+            },
+            "config": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "ruby-v1"
+            },
+            "patterns": {
+              "$ref": "#/$defs/nonempty_strings"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "shell-v1"
+            },
+            "patterns": {
+              "$ref": "#/$defs/nonempty_strings"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": [
+            "adapter",
+            "patterns",
+            "source",
+            "reason"
+          ],
+          "properties": {
+            "adapter": {
+              "const": "declared-glob-v1"
+            },
+            "patterns": {
+              "$ref": "#/$defs/nonempty_strings"
+            },
+            "source": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "reason": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "manifest": {
       "type": "object",
