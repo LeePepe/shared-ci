@@ -73,6 +73,10 @@ PR boundaries are **manual** planning/code-review rules; the aggregate neither
 infers purpose nor validates this table. No universal file/line ceiling,
 package-equals-layer rule, one-layer-only requirement or extra PR Manager scope
 gate applies. PR Manager uses existing check/review evidence to manage lifecycle.
+For staged plans and multi-stage feature contracts, the in-tree contract is the
+matching documentation for intermediate declaration/schema PRs; surface-document
+updates (such as CLI contracts or architecture guides) belong to their designated
+staged tasks after implementation lands.
 
 ## Verify
 
