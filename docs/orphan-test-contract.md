@@ -5,24 +5,28 @@ repository account for every test file in pull-request CI. It is the feature
 specification for MY-1608. The contract-document pull request is reviewed and
 merged before any implementation task below starts.
 
-The check proves declared file-level reachability from committed repository
-facts. It does not prove that an individual test case ran, that a test did not
-self-skip, or that a server ruleset actually requires a named check. Those
-separate evidence boundaries remain explicit below.
+The minimal-v1 check proves that every file in the repository-declared test
+inventory has exactly one declared required-gate mapping. It trusts that
+declaration: it does not prove runner discovery, command-line selection,
+workflow binding, individual test-case execution, self-skip behaviour, or that a
+server ruleset actually requires a named check. Those separate evidence
+boundaries remain explicit below.
 
 ## Actors and outcome
 
-- A repository maintainer declares test inventory, discovery and justified
-  exceptions in the repository's protected context map.
-- The Context audit classifies every tracked candidate test file as reached,
-  deliberately excluded or a non-test false positive.
+- A repository maintainer declares test inventory, required-gate routing and
+  justified exceptions in the repository's protected context map.
+- The Context audit maps every tracked regular file selected by normalized
+  layer `test_paths` to exactly one required-gate declaration.
 - The reusable quality workflow runs the audit on the pull-request head and the
   required aggregate accepts it only with an explicit current-head pass.
 - A reviewer can identify an orphan from one finding containing its literal
   repository-relative path and a stable reason.
 
-After adoption, adding a test-shaped file without a qualifying pull-request
-gate makes CI fail instead of silently leaving the file unexecuted.
+After adoption, adding a file under a declared test glob without exactly one
+declared required gate makes CI fail instead of silently leaving that declared
+test inventory unmapped. A file outside the repository-declared test globs is
+outside minimal-v1 inventory and is not discovered by filename heuristics.
 
 ## Stable requirements and acceptance criteria
 
@@ -30,13 +34,13 @@ gate makes CI fail instead of silently leaving the file unexecuted.
 | --- | --- |
 | FR-001 | The contract-document PR containing this specification and its repository-guide link receives exact-revision review and merges before implementation begins. |
 | FR-002 | An adopting repository declares one versioned test-reachability policy in its root context index or root `tech-context.md`, while layer-owned `test_paths` and test gates remain the authority for per-layer discovery. |
-| FR-003 | The audit inventories Git-tracked regular files using the closed `default-v1` patterns plus explicit includes; repository names are never hard-coded. |
-| FR-004 | Every candidate file has exactly one terminal classification: reached by at least one qualifying gate, explicitly excluded with a reason, or explicitly classified as a non-test with a reason. Missing or contradictory classification fails closed. |
-| FR-005 | A gate qualifies only when a selected, non-`continue-on-error` pull-request command lane invokes the pinned provider's canonical required-gate executor for that lane, the executor runs every declared gate mapped to it, and `quality / aggregate` reconciles the lane's success, `ran: true` and expected head SHA. Manual, release-only, local-only, build-only, advisory, unrelated-command or nonaggregate lanes do not count. |
-| FR-006 | Static, versioned discovery adapters cover SwiftPM test targets, XcodeGen/Xcode test schemes, pytest, unittest, `node --test`, Vitest, Ruby and shell suites. Unknown, dynamic or ambiguous discovery fails closed unless represented by the explicit reviewed-literal adapter. |
-| FR-007 | An orphan produces a deterministic finding containing the literal file path and reason; the command exits nonzero. A tree in which all candidates are reached or explicitly excepted exits zero. |
-| FR-008 | Default helper names do not become candidates. Other false positives, including a test-shaped tool such as `scripts/quality/test_integrity.py`, require a visible reasoned non-test entry. Deliberately non-PR suites require a distinct visible exclusion. |
-| FR-009 | Unit and integration tests cover an orphan, a `workflow_dispatch`-only mapping, honoured discovery globs, a reasoned exclusion, helper/non-test handling, malformed declarations, exact and false gate-to-lane bindings, and stale/current-head aggregate results. |
+| FR-003 | The audit inventories sorted Git-tracked regular files that match normalized layer `test_paths`; it has no built-in filename/default heuristic and never hard-codes repository names. |
+| FR-004 | After applying trusted, reasoned `non_tests` and `exclusions` classifications, every remaining inventoried test file maps by its owning layer to exactly one distinct `required_gates` record. No record is an orphan; more than one record is a duplicate mapping; either fails closed. Exact duplicate triples remain a T101/T102 declaration error. |
+| FR-005 | Every `required_gates` record names an existing normalized layer and gate. `run-required --lane X` selects only records declared for `X`, preflights that selected set through the existing Context runner, preserves declaration order and executes the declared commands. Unknown gates and unknown or empty selected lanes fail closed. |
+| FR-006 | Minimal v1 trusts the normalized declaration. It does not statically parse workflow YAML or argv, infer runner discovery, inspect SwiftPM `Package.swift`, or interpret `declared-glob-v1` or other `reaches` adapter semantics. |
+| FR-007 | Unmapped files, unknown gate references and duplicate file mappings produce deterministic finding-v1 records with the literal path/reason and a nonzero result. A tree in which every inventoried file has exactly one valid declared mapping exits zero. |
+| FR-008 | Summary and diagnostics say `mapped`, not `reached`, because declaration mapping is the only proof established by minimal v1. |
+| FR-009 | Unit and integration tests cover successful declaration mapping, trusted reasoned exception classification, an unmapped file, unknown layer/gate references, multiple distinct gates mapping one file, deterministic finding order, and selected-lane dispatcher preflight/order/failure. |
 | FR-010 | The reachability check is separate from test-integrity: reachability covers the head tree's file-to-required-gate graph; test-integrity continues to cover assertion/test loss and PR-body rationale across a diff. Both may block the aggregate. |
 | FR-011 | Shared-ci adopts the released provider on itself, changes brittle per-file native discovery to suite discovery, declares `tests/contracts/**` as deliberately outside native PR verification, and passes the required current-head checks. |
 | FR-012 | The reviewed implementation is released at an immutable tag/full SHA. Follow-up adoption issues are filed or linked for VoxPocket, agent-skills, shared-design-tokens, shared-design-system, shared-telemetry, VitalStride and AIDash. |
@@ -66,34 +70,35 @@ At the baseline revision `9a66e2d16d07703ea84ffd01dd60704422b7cde0`:
 
 ## Decision and rejected alternatives
 
-The selected design combines a small root policy with existing layer facts:
+The minimal-v1 design combines the existing normalized declarations without
+trying to reverse-engineer test tools:
 
-1. The root policy selects the closed default inventory, explicit includes,
-   required aggregate lanes, non-tests and deliberate exclusions.
-2. Each layer's existing `test_paths` owns its candidate test files.
-3. Each qualifying `kind: test` gate adds versioned `reaches` metadata that
-   describes its static discovery adapter. Its `aggregate_lane` is an executable
-   binding to the pinned provider's canonical Context dispatcher, not a claim
-   inferred from an arbitrary workflow command.
-4. The Context module normalizes legacy `CONTEXT.md` and simplified
-   `tech-context.md` inputs and hides framework-specific parsing behind one
-   audit interface.
+1. T101/T102 already normalize legacy `CONTEXT.md` and simplified
+   `tech-context.md` layer `test_paths`, gates and root `required_gates`.
+2. Sorted tracked regular files matching a layer's `test_paths` form that
+   layer's minimal-v1 candidates; trusted root `non_tests` and `exclusions`
+   classify their declared matches outside the gate-mapped test inventory.
+3. A root `required_gates` record maps that layer's inventoried files to its
+   named gate. Exactly one distinct record must map each file.
+4. The dispatcher selects records by declared `aggregate_lane` and delegates
+   their declared commands to the existing Context runner.
 
 This seam keeps the public declaration smaller than a second, independent test
-manifest while avoiding inference from arbitrary shell strings.
+manifest and makes the trust boundary explicit. The declaration asserts that
+the named gate runs the layer's declared test inventory; minimal v1 does not
+independently prove that assertion.
 
 The following alternatives are rejected for v1:
 
-- Defaults plus current gate commands only: arbitrary wrappers and dynamic
-  framework configuration cannot be inferred reliably, and source presence is
-  not proof of a pull-request aggregate route.
 - A standalone root manifest duplicating all layer paths and commands: it is
   expressive but creates a second ownership graph that can drift from Context.
 - Running gates in collect-only mode: the named frameworks have no common
   side-effect-free collector; Swift/Xcode manifests and custom runners can
   execute code, require unavailable toolchains or diverge from the real gate.
 
-Collect-only evidence may be proposed later under a separate reviewed contract.
+Static workflow/argv/runner/manifest proof and collect-only evidence may be
+proposed later under a separate reviewed contract. They are not minimal-v1
+acceptance.
 
 ## Declaration interface
 
@@ -136,125 +141,79 @@ gate:
       - tests/quality
       - -p
       - test_*.py
-    reaches:
-      - adapter: python-unittest-v1
 ```
 
 ### Root policy
 
 - `version` is integer `1`; unknown versions fail closed.
-- `inventory.defaults` is exactly `default-v1`. The default set cannot be
-  weakened or replaced by caller patterns.
-- `inventory.include` adds nonstandard test globs. It does not establish reach.
+- Root `inventory` retains its T101/T102 closed-shape validation and
+  compatibility meaning but is not a T103 minimal-v1 inventory source.
+- `non_tests` and `exclusions` are trusted, reasoned classifications for files
+  selected by normalized `test_paths`; T103 does not infer or independently
+  prove their semantics. Their matches do not require gate mapping and are
+  reported separately from mapped tests.
 - `required_gates` contains unique `(layer, gate, aggregate_lane)` records. A
-  referenced layer, gate and reusable Quality command lane must exist. For each
-  named lane, the caller's corresponding `<lane>-command` is exactly
-  `.shared-ci/scripts/context/run-required --lane <lane> --mode ci`, using the
-  same full-SHA provider checkout as the reusable workflow.
-- `aggregate_lane` is executable, not descriptive. Dynamic expressions,
-  prefixes or suffixes, shell operators, aliases, local wrappers, caller-supplied
-  alternate gate lists and asserted receipts fail source admission. An unrelated
-  successful command never establishes the binding.
-- `non_tests` classifies default/include matches that are not tests. Every entry
-  has nonempty patterns and a substantive reason. It cannot overlap an
-  `exclusions` entry or a reached file, and a stale entry matching no candidate
-  is a finding.
-- `exclusions` is only for real tests deliberately outside PR CI. Every entry
-  has nonempty patterns and a substantive reason. It remains visible in the
-  audit summary; exclusion is never reported as reach.
+  referenced normalized layer and gate must exist. `aggregate_lane` is trusted
+  routing data for `run-required`, not statically proven workflow admission.
+- More than one distinct required-gate record for an inventoried file is a
+  duplicate mapping even when the records name different gates or lanes. Exact
+  duplicate triples remain rejected by T101/T102 before T103 mapping.
 - The root policy lives in the CODEOWNERS-protected context map. Moving either
   exception class to an unprotected side file is not supported.
 
 ### Layer policy
 
-- `test_paths` retains its current ownership/search-scope meaning. A default or
-  included candidate outside the owning layer's `test_paths` is a finding; a
-  caller cannot hide it by omitting it from the declaration.
-- Simplified gate string/list syntax and existing context-v1 gates remain valid
-  but prove no reachability by themselves.
-- An object-form gate that claims reach has `kind: test`, `mode: ci|both`, a
-  nonempty argv command and one or more `reaches` records.
-- `reaches.adapter` is a known, versioned adapter. Its extra keys are closed by
-  adapter kind. Unknown fields, adapter versions or dynamic inputs fail closed.
-- A reach selector may return only tracked files within that layer's
-  `test_paths`. Cross-layer or outside-root results fail before set comparison.
+- `test_paths` retains its current ownership/search-scope meaning and is the
+  only T103 minimal-v1 inventory source.
+- Simplified gate string/list syntax and existing context-v1 gates remain valid.
+  A gate referenced by `required_gates` is trusted to cover its layer's declared
+  inventory; no `reaches` record is required by T103.
+- Existing `reaches` records remain normalized compatibility data. T103 neither
+  expands an adapter nor compares its fields with the gate command, manifests or
+  workflow argv.
 
-### Default-v1 candidate patterns
+### Minimal-v1 inventory and trust boundary
 
-Matching uses Git-relative POSIX paths and the Context glob rules. The contract
-uses extension families below; the schema/runtime owns their exact expansion.
+Matching uses Git-relative POSIX paths and the existing Context glob rules.
+T103 enumerates sorted Git-tracked regular files and selects a candidate only
+when it matches a normalized layer `test_paths` glob. It then applies trusted,
+reasoned root `non_tests` and `exclusions`; every remaining inventoried test
+must map exactly once. It does not apply the root `default-v1` filename
+families, infer helpers/non-tests, or inspect framework configuration.
 
-| Ecosystem | Default-v1 candidates |
-| --- | --- |
-| Python | `**/test_*.py`, `**/*_test.py` |
-| Swift / XCTest / Swift Testing | `**/*Test.swift`, `**/*Tests.swift` |
-| JavaScript / TypeScript | `**/*.test.{js,jsx,mjs,cjs,ts,tsx,mts,cts}`, `**/*.spec.{js,jsx,mjs,cjs,ts,tsx,mts,cts}`, supported source files below `**/__tests__/**` |
-| Ruby | `**/test_*.rb`, `**/*_test.rb`, `**/*_spec.rb` |
-| Shell | `**/test_*.{sh,bash,zsh}`, `**/*_test.{sh,bash,zsh}`, `**/*.bats` |
-| Go | `**/*_test.go` |
-| JVM | `**/*Test.java`, `**/*Tests.java`, `**/*Test.kt`, `**/*Tests.kt` |
-
-Exact helper basenames `__init__.py`, `conftest.py`, `fixture.py`,
-`fixtures.py`, `helper.py`, `helpers.py`, `helper.sh`, `helpers.sh`,
-`helper.bash`, `helpers.bash`, `helper.zsh` and `helpers.zsh` are not candidates
-unless an explicit include names them. Repository-specific tools whose names
-still match the defaults use a reasoned `non_tests` entry rather than a hidden
-repository-name exception.
-
-## Discovery adapters
-
-All adapters are internal seams of the Context module. They read only admitted,
-tracked local files and literal configuration; they do not run a collector.
-
-| Adapter | Static mapping |
-| --- | --- |
-| `swiftpm-v1` | `swift test --package-path <root>` reaches tracked sources of literal SwiftPM `testTarget` declarations below that package. Dynamic manifest expressions fail closed. |
-| `xcodegen-v1` | `xcodebuild test -scheme <name>` reaches source globs of test targets named by the scheme's test action in the supported `project.yml` subset. `xcodebuild build` never qualifies. |
-| `python-unittest-v1` | Parses literal `unittest discover` start directory and pattern using Python discovery semantics. |
-| `pytest-v1` | Parses literal roots and supported literal `python_files`/test path configuration. Plugin-provided or dynamic discovery fails closed. |
-| `node-test-v1` | Applies supported `node --test` literal paths/globs and documented default naming. |
-| `vitest-v1` | Applies supported literal include/exclude arrays. Dynamic JavaScript configuration fails closed. |
-| `ruby-v1` | Applies literal runner paths/globs declared by the test gate. Opaque runtime-generated lists fail closed. |
-| `shell-v1` | Reaches only literal executable test paths/globs declared by the gate; merely invoking an opaque wrapper is insufficient. |
-| `declared-glob-v1` | Escape hatch for a protected custom runner manifest containing literal globs, a source path and a substantive reason. It cannot point at generated/untracked data or assert an opaque command's behaviour. |
-
-Adding a framework means adding one reviewed adapter and fixtures behind the
-same interface; callers do not receive a new execution mechanism.
+The normalized adapter declarations admitted by T101/T102 remain valid input,
+but their semantics are outside T103 minimal v1. In particular, T103 does not
+parse SwiftPM, XcodeGen, pytest, unittest, Node, Vitest, Ruby, shell or
+`declared-glob-v1` configuration and does not compare those declarations with
+gate argv. This limitation is intentional declaration trust, not proof that the
+runner discovers every mapped file.
 
 ## Reachability and gate qualification
 
 For each candidate path, the audit evaluates in this order:
 
-1. Validate declaration shapes, UTF-8, paths, unique IDs and adapter versions.
-2. Enumerate the sorted Git-tracked regular-file inventory.
-3. Apply defaults and explicit includes, then helper/non-test classification.
-4. Resolve each remaining candidate to exactly one layer and `test_paths` set.
-5. Admit required gates and their exact canonical lane bindings from source
-   configuration.
-6. Expand each static discovery adapter and reject scope escapes.
-7. Apply reasoned deliberate exclusions as an alternate terminal state.
-8. Report every unclassified or contradictory path in literal path order.
+1. Reuse T101/T102 normalized declarations and existing Context validation.
+2. Enumerate sorted Git-tracked regular files matching normalized layer
+   `test_paths`, then classify trusted reasoned `non_tests` and `exclusions`.
+3. Validate that every root `required_gates` record names an existing normalized
+   layer and gate.
+4. Map each inventoried file to the distinct required-gate records for its
+   owning layer.
+5. Report zero mappings, more than one mapping and unknown references as
+   deterministic finding-v1 records in literal path/declaration order.
 
 A gate is qualifying only when all of these facts hold:
 
-- the referenced context gate is `kind: test` and `mode: ci|both`;
-- a caller workflow triggered by `pull_request` selects the referenced command
-  lane and its exact command invokes `run-required` for that same lane;
-- `run-required` loads the audited root policy, preflights the whole mapped set,
-  and delegates every normalized `(layer, gate)` argv to the existing Context
-  runner in declaration order; empty, extra, duplicate, wrong-lane or
-  mode-incompatible mappings fail before any gate executes;
-- the lane is not `continue-on-error`, release/manual-only or job-level skipped;
-- the lane's result and tested SHA are reconciled by `quality / aggregate`;
-- runtime evidence for the pull request reports that the lane actually ran.
+- one root `required_gates` record names the file's owning layer and an existing
+  normalized gate; and
+- no second distinct required-gate record maps the same file.
 
-`workflow_dispatch`, scheduled, release and TestFlight workflows never establish
-reachability. A test built or compiled by an Xcode build action is not reached;
-the scheme must be used by `xcodebuild test`.
-
-Source inspection establishes the committed route into the aggregate. It does
-not prove that GitHub currently requires `quality / aggregate`; adoption evidence
-must include fresh server ruleset/check readback and exact-head CI evidence.
+`aggregate_lane`, gate argv, `kind`, `mode`, workflow event/selection,
+`continue-on-error`, adapter metadata and runner discovery are trusted declared
+facts for T103 mapping. Later Quality/workflow tasks may execute and reconcile
+the declared lane, but T103 performs no static workflow or runner proof. Exact
+head CI evidence and server required-check readback remain necessary adoption
+evidence; declaration mapping alone does not establish either.
 
 ## Findings and command behaviour
 
@@ -268,11 +227,15 @@ The check extends Context audit's finding-v1 envelope. Stable kinds are:
 - `invalid_test_exception`
 - `orphan_test`
 
-An orphan finding names the literal file and one stable reason, for example
-`no matching test gate`, `gate is workflow_dispatch only`, `gate is not in the
-required aggregate`, `lane command is not the canonical dispatcher`, or
-`discovery does not include this file`. Findings and summaries never claim that
-excluded tests ran.
+T103 minimal v1 emits `invalid_test_declaration`, `unqualified_test_gate`,
+`invalid_test_exception` and `orphan_test` as applicable. Adapter/discovery
+kinds remain reserved compatibility vocabulary and are not emitted from static
+adapter interpretation in minimal v1.
+
+An orphan finding names the literal file and stable reason `no declared required
+gate mapping`. Unknown references name the declared layer/gate/lane, and a
+duplicate-mapping finding names the file and conflicting distinct records.
+Findings and summaries use `mapped`, never `reached` or `ran`.
 
 The test-specific audit returns 0 only when every candidate has one valid
 terminal classification, 1 for findings and 2 for CLI usage errors, consistent
@@ -282,11 +245,13 @@ a pass.
 
 ## Workflow placement and relationship to existing checks
 
-The Context module owns inventory, normalization, adapter expansion, findings and
-the canonical `run-required` dispatcher. The dispatcher is a deep module over the
-existing Context runner seam: it accepts only a lane and mode, reads the same
-root policy, preflights the full mapped set, and executes no caller-supplied gate
-list. The read-only reachability audit never executes caller code.
+The Context module owns declaration inventory/mapping, findings and the canonical
+`run-required` dispatcher. The dispatcher is a deep module over the existing
+Context runner seam: it accepts only a lane and mode, reads the same root policy,
+selects only records for that lane, preflights that selected gate set before its
+first execution and accepts no caller-supplied gate list. A defect in a
+nonselected lane does not block the selected lane. The read-only mapping audit
+never executes caller code.
 
 The reusable quality workflow owns orchestration and aggregate admission; Quality
 does not import Context Python code, so the declared `Quality -> Policy`
@@ -297,11 +262,11 @@ with default `false` for pin-compatible rollout. When `true`:
 
 - a dedicated hosted lane checks out the caller head and pinned provider;
 - it runs the test-specific Context audit without executing caller code;
-- it reports the tested head SHA, `ran: true` and the sorted set of admitted
+- it reports the tested head SHA, `ran: true` and the sorted set of declared
   required command lanes;
-- every admitted command lane checks out that same pinned provider, is forced to
-  run despite changed-layer short-circuiting, and uses the exact `run-required`
-  invocation admitted above;
+- every declared command lane checks out that same pinned provider, is forced to
+  run despite changed-layer short-circuiting, and invokes `run-required` for its
+  lane;
 - aggregate depends on the audit and admitted command lanes and requires each to
   report explicit success, `ran: true` and the expected SHA.
 
@@ -309,8 +274,9 @@ There is no advisory pass state. Disabled means not adopted; enabled means
 blocking. A future default-on change requires a separate reviewed contract after
 supported callers migrate.
 
-Test-integrity remains independently selected and blocking. Reachability answers
-"which required PR gate discovers this file at the head?" Test-integrity answers
+Test-integrity remains independently selected and blocking. Minimal-v1
+reachability answers "which required gate is declared for this inventoried file
+at the head?" Test-integrity answers
 "did this PR remove/weaken recognized test evidence without a per-file reason?"
 Passing either one cannot substitute for the other.
 
@@ -328,10 +294,9 @@ aggregate required before claiming orphan-test adoption.
   are additive declarations.
 - `orphan-test-check` defaults false. Enabling it without a complete declaration
   fails closed; it never silently infers a partial policy.
-- Existing free-form command inputs remain valid while the check is disabled.
-  Once enabled, every lane named by `required_gates` must use the exact canonical
-  pinned-provider dispatcher invocation; an arbitrary successful command is not
-  backward-compatible reachability evidence.
+- Existing free-form command inputs remain valid. Enabling the check adds
+  declaration mapping and declared-lane execution but does not reinterpret argv,
+  workflow source or adapter configuration.
 - Rollback restores the previous exact provider pin and caller declaration. It
   does not rewrite a tag, waive test coverage or turn old evidence into evidence
   for a new head.
@@ -341,21 +306,43 @@ aggregate required before claiming orphan-test adoption.
 
 Enabling the check deliberately removes acceptance of:
 
-- a test-shaped tracked file with no declared qualifying gate;
-- a file reached only by `workflow_dispatch`, schedule, release or TestFlight;
-- an Xcode test bundle that is built but never tested;
-- an advisory, `continue-on-error`, skipped or nonaggregate lane as evidence;
-- a passing command lane that does not invoke the admitted pinned-provider
-  dispatcher for its declared lane;
-- a reasonless, stale or overlapping non-test/exclusion entry;
-- an opaque or dynamic discovery claim that no supported adapter can verify.
+- a tracked regular file under a normalized `test_paths` glob with no required
+  gate record for its owning layer;
+- a required-gate record that names an unknown layer or gate; and
+- more than one distinct required-gate record mapping the same inventoried file.
 
-This plan removes or weakens no existing test, assertion, gate or policy.
-`tests/contracts/**` remains deliberately outside native shared-ci verification
-under its existing separate-admission contract and becomes visible as an
-exclusion; it is not reclassified as reached. Test-level skips, quarantined
-cases and environment-gated cases inside a reached file remain unchanged and
-out of scope.
+This plan removes or weakens no test, assertion, gate or policy present at the
+implementation base `54a8e64a6267ac197a3c0bb1c9899d696b83453f`.
+Candidate-only tests that assert the removed static workflow/argv/adapter/
+manifest proof may be simplified or removed solely under the 2026-10-15
+re-scope decision; every such test or assertion must be listed with its reason
+in the implementation PR body. Test discovery, test-level skips, quarantined
+cases, environment-gated cases and files outside normalized `test_paths` remain
+unchanged and out of scope.
+
+## Deferred v2 backlog
+
+After exact-revision spec-gate PASS, create one unscheduled backlog child for
+the following five deferred hardening items from the parked candidate's final
+review. They do not block or expand T103 minimal v1:
+
+- `V2-01` Provider-bound canonical lane admission: make provider form,
+  dispatcher path and literal policy agree, including full-SHA versus relative
+  self-adoption forms and dynamic `continue-on-error` handling.
+- `V2-02` Literal gate-argv binding for adapter discovery: prevent Node, Ruby,
+  shell or Vitest metadata from claiming files the executed argv does not
+  select.
+- `V2-03` Fail-closed SwiftPM parsing: bind to the literal `Package(...)`
+  targets argument and reject decoys, dynamic concatenation, unrelated arrays,
+  trailing expressions and empty sources.
+- `V2-04` Exact structured `declared-glob-v1` binding: admit only the designated
+  literal-glob field and exact normalized argv-token binding.
+- `V2-05` Complete finding-v1 conversion: prevent normalization or parsing
+  errors from leaking as generic `context_error`/exit 2 instead of stable
+  finding-v1/exit 1.
+
+Whole-map preflight is deliberately not a v2 item from that review. Minimal v1
+keeps preflight only for the selected `run-required` lane.
 
 ## Architecture, paths and prohibitions
 
@@ -363,7 +350,7 @@ out of scope.
 | --- | --- | --- | --- |
 | Docs/spec support | `docs/orphan-test-contract.md`, `docs/repository-guide.md`, later `docs/context-cli-contract.md` and `docs/architecture.md` | Normative feature and Context interface documentation | No implementation in the contract-document PR |
 | Schemas | `schemas/context-v1.schema.json` | Closed declaration shapes for legacy and normalized inputs | No runtime policy engine or new dependency |
-| Context | `scripts/context/_context.py`, `scripts/context/_techcontext.py`, `scripts/context/_test_reachability.py`, `scripts/context/run-required`, `tests/context/**`, `tests/repo/**` | Deep read-only reachability module, legacy/simplified adapters, and canonical required-gate dispatch through the existing runner seam | Audit has no network, test execution, PR-head import or Quality import; dispatcher accepts no alternate gate list |
+| Context | `scripts/context/_context.py`, `scripts/context/_test_reachability.py`, `scripts/context/run-required`, `tests/context/test_reachability.py`, `tests/context/test_runner.py` | Read-only declared file-to-gate mapping and selected-lane required-gate dispatch through the existing runner seam | Same five paths or fewer; audit has no network, test execution, workflow/argv/manifest parsing, PR-head import or Quality import; dispatcher accepts no alternate gate list |
 | Quality | `scripts/quality/gate.py`, `scripts/quality/gate_actions.py`, `tests/quality/test_gate.py` | Reconcile selected lane status, `ran` and exact SHA | No Context import and no alternative aggregate |
 | CI/self-adoption support | `.github/workflows/quality.yml`, later `.github/workflows/ci.yml`, `scripts/verify`, root/leaf `tech-context.md` files | Invoke the Context CLI, publish lane outputs, declare shared-ci's own suites | Candidate workflow cannot self-approve; published provider pin required |
 | Registry | `scripts/contracts/tech-context.md`, `tests/contracts/**` | Own contract-test inventory that remains a deliberate visible exclusion from native PR verification | Exclusion is not reach and adds no Registry test execution |
@@ -399,12 +386,19 @@ orphaned and valid fixture repositories across both context formats.
 
 - [ ] T101 [US2] Add the version-1 declaration shapes to `schemas/context-v1.schema.json` as the Schemas member of atomic group US2-A.
 - [ ] T102 [US2] Add legacy/new-shape normalization and compatibility regressions in `scripts/context/_context.py`, `scripts/context/_techcontext.py`, `tests/context/fixture.py` and `tests/context/test_reachability_declarations.py` as the Context member of atomic group US2-A.
-- [ ] T103 [US2] Implement the read-only reachability module, exact lane-binding admission, canonical `scripts/context/run-required` dispatcher, discovery adapters and findings in Context, with interface regressions in `tests/context/test_reachability.py` and `tests/context/test_runner.py`.
+- [ ] T103 [US2] Implement minimal-v1 read-only declared file-to-gate mapping, the canonical selected-lane `scripts/context/run-required` dispatcher and finding-v1 diagnostics in Context, with interface regressions in `tests/context/test_reachability.py` and `tests/context/test_runner.py`; trust rather than statically prove workflow, argv, runner and adapter semantics.
 - [ ] T104 [US2] Document the implemented CLI and data contract in `docs/context-cli-contract.md` and `docs/architecture.md`.
 
 T101 and T102 are one independently verified PR. The Context compatibility tests
 land first or in the same commit as the schema/parser behaviour; neither task is
 an independently mergeable slice.
+
+T103 reuses the registered implementation workspace but does not continue or
+push parked candidate `26e1cfda0ca8cf97811b2882cc42ddbb1b154e9a` as accepted
+evidence. Fullstack revises the candidate to this exact plan revision, then uses
+the normal maximum of two implementation-review rounds. If minimal v1 still has
+a blocking finding after round 2, park T103 and report to Team Lead without an
+Owner escalation.
 
 ### US3 — Make the audit and bound command lanes fail closed in the aggregate
 
@@ -414,7 +408,7 @@ skipped, failed, malformed or stale result.
 
 - [ ] T201 [US3] Reconcile the audit-emitted required-lane set in `scripts/quality/gate.py`, `scripts/quality/gate_actions.py` and `tests/quality/test_gate.py`.
 - [ ] T202 [US3] Add canonical executor wiring, the opt-in audit lane and aggregate outputs to `.github/workflows/quality.yml` as the root-support member of atomic group US3-B.
-- [ ] T203 [US3] Add workflow/source-admission and current-head integration regressions in `tests/repo/test_orphan_test_workflow.py` and `tests/repo/fixture.py` as the Context member of atomic group US3-B.
+- [ ] T203 [US3] Add declared-lane execution and current-head integration regressions in `tests/repo/test_orphan_test_workflow.py` and `tests/repo/fixture.py` as the Context member of atomic group US3-B, without making T103 a generic caller-workflow parser.
 
 T202 and T203 are one independently verified PR. The repo regression commit
 precedes or accompanies workflow behaviour, and neither task may merge alone.
@@ -456,11 +450,11 @@ repository claims coverage from a manual/advisory job.
 | T001 | Docs/spec support; root support declaration | `docs/orphan-test-contract.md`, `docs/repository-guide.md` | All scripts, schemas, workflows and tests | Establishes this contract only | All FR IDs mapped; `scripts/verify`; `git diff --check`; exact-revision reviewer PASS; PR merged | none |
 | T101 | Schemas; `schemas/tech-context.md` | `schemas/context-v1.schema.json` | Runtime parsing and workflow wiring | Adds closed v1 root/object shapes without changing legacy meanings | Atomic US2-A final head: JSON/schema checks, consuming Context compatibility fixtures and suite, Context audit, `scripts/verify` | G0; atomic with T102 |
 | T102 | Context; `scripts/context/tech-context.md` | `scripts/context/_context.py`, `scripts/context/_techcontext.py`, `tests/context/fixture.py`, `tests/context/test_reachability_declarations.py` | Discovery implementation, Quality and workflow YAML | Normalizes legacy and new declarations while retaining old behaviour | Old string/list gates unchanged; valid new shapes normalize; malformed/unknown fields fail closed; Context suite and `scripts/verify` on atomic US2-A head | G0; atomic with T101, tests first |
-| T103 | Context; `scripts/context/tech-context.md` | `scripts/context/_test_reachability.py`, `scripts/context/run-required`, required `scripts/context/_context.py` integration, `tests/context/test_reachability.py`, `tests/context/test_runner.py` | Quality reconciliation, workflow YAML and consumer declarations | Implements the read-only module and canonical dispatcher interface | FR-003–FR-009 fixtures; exact invocation accepted; unrelated/wrong/dynamic/composed bindings rejected; multi-gate preflight/order/failure cases; Context suite, audit, `scripts/verify` | US2-A |
-| T104 | Docs support | `docs/context-cli-contract.md`, `docs/architecture.md` | New policy or runtime behaviour | Describes implemented interface, canonical binding and evidence limits | Link/topic review; `scripts/verify`; `git diff --check` | T103 |
+| T103 | Context; `scripts/context/tech-context.md` | `scripts/context/_test_reachability.py`, `scripts/context/run-required`, required `scripts/context/_context.py` integration, `tests/context/test_reachability.py`, `tests/context/test_runner.py` | Quality reconciliation, workflow YAML, consumer declarations, static workflow/argv/runner/SwiftPM/adapter/manifest proof | Implements declared file-to-gate mapping, trusted exception classification and selected-lane dispatcher interface | FR-003–FR-009 fixtures: success, reasoned non-test/exclusion, unmapped file, unknown layer/gate, duplicate mapping, deterministic finding-v1; selected-lane-only preflight/order/failure and nonselected-lane isolation; Context reachability/declaration and runner suites, audit, `scripts/verify`, `git diff --check`; PR body enumerates every removed/simplified candidate-only static-proof test | US2-A |
+| T104 | Docs support | `docs/context-cli-contract.md`, `docs/architecture.md` | New policy or runtime behaviour | Describes implemented declaration-trust interface, dispatcher and evidence limits | Link/topic review; `scripts/verify`; `git diff --check` | T103 |
 | T201 | Quality; `scripts/quality/tech-context.md` | `scripts/quality/gate.py`, `gate_actions.py`, `tests/quality/test_gate.py` | Context imports and workflow YAML | Reconciles the audit-emitted required-lane set only | Missing/malformed/unselected lanes, `ran: false`, status and stale/current SHA regressions; Quality suite; `scripts/verify` | T103 |
 | T202 | CI/self-adoption root support | `.github/workflows/quality.yml` | Context implementation and consumer pin changes | Adds default-false audit input, pinned-provider canonical execution and aggregate needs | Atomic US3-B final head: workflow-lint; same-pin checkout/source inspection; lane/audit outputs; `scripts/verify` | T103, T201; atomic with T203 |
-| T203 | Context integration tests; `scripts/context/tech-context.md` | `tests/repo/test_orphan_test_workflow.py`, `tests/repo/fixture.py` | Engine algorithms and release operations | Proves workflow/source admission at the public seam | Exact executor route plus unrelated command, wrong lane, expression, shell composition, PR/manual/continue-on-error and current-head aggregate cases; repo suite; `scripts/verify` on atomic US3-B head | T103, T201; atomic with T202, tests first |
+| T203 | Context integration tests; `scripts/context/tech-context.md` | `tests/repo/test_orphan_test_workflow.py`, `tests/repo/fixture.py` | Engine algorithms, generic caller workflow parsing and release operations | Proves the provider workflow executes declared lanes at the public seam without making T103 a workflow-source verifier | Declared lane execution, missing/failed/malformed/stale lane results and current-head aggregate cases; repo suite; `scripts/verify` on atomic US3-B head | T103, T201; atomic with T202, tests first |
 | T308 | Release integration; no source layer | reviewed US2/US3 exact commit and immutable tag | Consumer adoption and self-adoption pin | Makes the compatible provider selectable | exact local/remote/tag SHA equality; merged implementation evidence; published immutable reference | T104, US3-B |
 | T300 | CI/self-adoption integration work unit | `.github/workflows/ci.yml`, `.github/workflows/review.yml`, `AGENTS.md`, `.github/repo-contract.json`, `docs/repository-guide.md`, `tests/repo/test_self_adoption.py`, `tests/review/test_completion_gate.py` | Root reachability policy, leaf declarations, `scripts/verify`, provider engine | Repins every parity surface without enabling the feature | Every literal pin and embedded protocol/guide route equals T308; legacy declarations pass selected-provider contract; feature absent/false; focused parity tests, Context audit, workflow-lint, `scripts/verify` | T308 |
 | T301 | Context | `scripts/context/tech-context.md` | Other leaf contexts | Declares Context-owned test scope/gates | Newly pinned provider accepts the declaration; Context audit and suite; `scripts/verify` | T300 |
@@ -500,15 +494,15 @@ parity tests are necessary companions, not hidden provider-engine work.
 | Acceptance | Slice / tasks | Evidence surface |
 | --- | --- | --- |
 | FR-001 | US1 / T001 | Exact contract commit, reviewer verdict and merged PR |
-| FR-002–FR-004 | US2 / T101–T103 | Closed schema, legacy/new normalization, inventory/classification fixtures and findings |
-| FR-005 | US2–US3 / T101–T103, T201–T203 | Closed declaration-to-lane binding, exact declared command execution, and selected/nonadvisory/current-head aggregate reconciliation |
-| FR-006 | US2 / T103–T104 | Static adapter fixtures and documented unsupported/dynamic failure modes |
-| FR-007–FR-009 | US2–US3 / T102–T103, T201–T203 | Context findings, binding negatives and aggregate/workflow regressions delivered with behaviour |
+| FR-002–FR-004 | US2 / T101–T103 | Closed schema, legacy/new normalization, declared-glob inventory, exact-one file mapping fixtures and findings |
+| FR-005 | US2–US3 / T101–T103, T201–T203 | Valid declared gate references, selected-lane execution, and current-head aggregate reconciliation |
+| FR-006 | US2 / T103–T104 | Declaration-trust boundary and explicit absence of workflow/argv/runner/adapter semantic parsing |
+| FR-007–FR-009 | US2–US3 / T102–T103, T201–T203 | Deterministic finding-v1 mapping cases, selected-lane dispatcher regressions and aggregate/workflow execution evidence |
 | FR-010 | US1–US3 / T001, T103–T104, T201–T203 | Separate Context reachability and test-integrity interfaces, distinct blocking lanes, aggregate reconciliation and workflow/repo regressions |
 | FR-011 | US4 / T300–T310 | Safe immutable repin, every layer inventory including Registry, root enablement, suite discovery, parity and current-head aggregate evidence |
 | FR-012 | US4–US5 / T308, T401–T402 | Immutable release reference and linked adoption records |
 | FR-013 | Every slice | Non-Draft PR metadata and exact-head required-check evidence |
-| FR-014 | US2–US3 / T102–T103, T202–T203 | Static fixtures, source inspection, no audit execution/network and full native verification |
+| FR-014 | US2–US3 / T102–T103, T202–T203 | Synthetic declaration fixtures, no audit execution/network and full native verification |
 
 ## Verification and evidence limits
 
