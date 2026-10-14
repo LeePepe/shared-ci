@@ -165,6 +165,7 @@ class ReachabilityDeclarationSchemaTests(unittest.TestCase):
                 "inventory": {"defaults": "default-v1"},
                 "exclusions": [{"patterns": ["tests/**"], "reason": ""}],  # empty reason
             },
+            None,  # test_reachability: null explicitly supplied
         ]
         for invalid_reach in invalid_cases:
             with self.subTest(invalid_reach=invalid_reach):
@@ -193,6 +194,21 @@ class ReachabilityDeclarationSchemaTests(unittest.TestCase):
         with self.assertRaises(layer_context.ContextError) as cm:
             layer_context.validate_context(root_data, "CONTEXT.md")
         self.assertIn("duplicate", str(cm.exception))
+
+    def test_schema_and_runtime_reject_test_reachability_in_nested_index(self) -> None:
+        nested_index_data = {
+            "schema": 1,
+            "kind": "index",
+            "test_reachability": {
+                "version": 1,
+                "inventory": {"defaults": "default-v1"},
+            },
+            "routes": [{"patterns": ["Core/**"], "context": "Core/CONTEXT.md"}],
+            "exclusions": [{"patterns": ["CONTEXT.md"], "reason": "metadata"}],
+        }
+        with self.assertRaises(layer_context.ContextError) as cm:
+            layer_context.validate_context(nested_index_data, "Packages/CONTEXT.md")
+        self.assertIn("root context index", str(cm.exception))
 
     def test_schema_forbids_test_reachability_in_leaf(self) -> None:
         leaf_data = {
@@ -567,3 +583,77 @@ class TechContextNormalizationTests(unittest.TestCase):
         self.fixture.git("add", ".")
         findings, _ = layer_context._techcontext().audit(layer_context, self.fixture.root, "docs/architecture/tech-context.md")
         self.assertTrue(any(f.kind == "invalid_gate" and "unknown fields" in f.detail for f in findings))
+
+    def test_tech_context_rejects_explicit_null_test_reachability(self) -> None:
+        self.fixture.tech_root(
+            rows=[{"layer": "Quality", "path": "scripts/quality/tech-context.md", "depends_on": []}],
+            test_reachability=None,  # will omit or if we put explicit None in frontmatter:
+        )
+        # Manually write frontmatter with explicit test_reachability: null
+        content = "---\ntest_reachability: null\n---\n\n# Layer Map\n\n| Layer | tech-context | Depends on |\n| --- | --- | --- |\n| Quality | scripts/quality/tech-context.md | none |\n"
+        self.fixture.write("docs/architecture/tech-context.md", content)
+        self.fixture.tech_leaf(
+            path="scripts/quality/tech-context.md",
+            layer="Quality",
+            owns=["scripts/quality/**"],
+        )
+        self.fixture.git("add", ".")
+        findings, _ = layer_context._techcontext().audit(layer_context, self.fixture.root, "docs/architecture/tech-context.md")
+        self.assertTrue(any(f.kind == "invalid_test_declaration" and "must be an object" in f.detail for f in findings))
+
+    def test_tech_context_leaf_rejects_explicit_null_test_paths(self) -> None:
+        self.fixture.tech_root([
+            {"layer": "Quality", "path": "scripts/quality/tech-context.md", "depends_on": []}
+        ])
+        content = "---\nlayer: Quality\nowns: [scripts/quality/**]\ntest_paths: null\n---\n\n# Leaf\n"
+        self.fixture.write("scripts/quality/tech-context.md", content)
+        self.fixture.git("add", ".")
+        findings, _ = layer_context._techcontext().audit(layer_context, self.fixture.root, "docs/architecture/tech-context.md")
+        self.assertTrue(any(f.kind == "invalid_leaf" and "test_paths" in f.detail for f in findings))
+
+    def test_tech_context_test_paths_participates_in_layer_ownership_and_overlap(self) -> None:
+        self.fixture.tech_root(
+            rows=[
+                {"layer": "Quality", "path": "scripts/quality/tech-context.md", "depends_on": []},
+                {"layer": "Policy", "path": "scripts/policy/tech-context.md", "depends_on": []},
+            ],
+            support=[{"patterns": ["empty-template/**"], "reason": "template"}],
+        )
+        self.fixture.tech_leaf(
+            path="scripts/quality/tech-context.md",
+            layer="Quality",
+            owns=["scripts/quality/**"],
+            test_paths=["tests/quality/**"],
+        )
+        self.fixture.tech_leaf(
+            path="scripts/policy/tech-context.md",
+            layer="Policy",
+            owns=["scripts/policy/**"],
+            test_paths=["tests/policy/**"],
+        )
+        self.fixture.write("scripts/quality/tool.py")
+        self.fixture.write("tests/quality/test_gate.py")
+        self.fixture.write("scripts/policy/check.py")
+        self.fixture.write("tests/policy/test_val.py")
+        self.fixture.git("add", ".")
+
+        # Resolve tracked test path owned only through test_paths
+        res = layer_context._techcontext().resolve(layer_context, self.fixture.root, "docs/architecture/tech-context.md", "tests/quality/test_gate.py")
+        self.assertEqual("Quality", res.layer)
+        self.assertEqual("leaf", res.classification)
+        self.assertEqual("scripts/quality/tech-context.md", res.context)
+
+        # Audit should find 0 findings for tracked tests owned via test_paths
+        findings, counts = layer_context._techcontext().audit(layer_context, self.fixture.root, "docs/architecture/tech-context.md")
+        self.assertEqual([], findings)
+        self.assertEqual(6, counts["leaf"])
+
+        # Test sibling overlap between test_paths and another layer's owns or test_paths
+        self.fixture.tech_leaf(
+            path="scripts/policy/tech-context.md",
+            layer="Policy",
+            owns=["scripts/policy/**"],
+            test_paths=["tests/quality/**"],  # Overlaps Quality's test_paths
+        )
+        findings, _ = layer_context._techcontext().audit(layer_context, self.fixture.root, "docs/architecture/tech-context.md")
+        self.assertTrue(any(f.kind == "sibling_overlap" and "tests/quality/test_gate.py" in f.path for f in findings))

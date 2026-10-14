@@ -472,6 +472,8 @@ def validate_context(data: dict[str, Any], path: str) -> None:
             else:
                 string(entry.get("reason"), "exclusion reason")
     if "test_reachability" in data:
+        if path != ROOT_CONTEXT:
+            fail("test_reachability is only supported in the root context index", "invalid_test_declaration")
         if data.get("kind") == "index":
             validate_test_reachability(data["test_reachability"], path)
         else:

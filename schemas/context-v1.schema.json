@@ -89,6 +89,7 @@
       }
     },
     "test_reachability": {
+      "description": "Root test reachability policy (v1). Proves declared file-level reachability from committed repository facts; does not prove runtime execution or individual test results (declaration-only evidence limits). Supported only in root context index or root tech-context.md.",
       "$ref": "#/$defs/test_reachability"
     },
     "manifest": {
@@ -255,6 +256,7 @@
           }
         },
         "reaches": {
+          "description": "Static discovery adapters declaring which candidate test files are reached by this test gate. Proves declared file-level reachability; declaration-only evidence limits apply.",
           "type": "array",
           "minItems": 1,
           "items": {
@@ -287,6 +289,7 @@
       "additionalProperties": true
     },
     "test_reachability": {
+      "description": "Root test reachability declaration (v1). Requires version 1 and inventory defaults. Validates required gates against aggregate lanes, reasoned non_tests false positives, and reasoned deliberate exclusions.",
       "type": "object",
       "required": [
         "version",
@@ -294,13 +297,16 @@
       ],
       "properties": {
         "version": {
+          "description": "Version integer (must be 1 for v1 contract).",
           "type": "integer",
           "const": 1
         },
         "inventory": {
+          "description": "Closed test candidate inventory. Defaults to default-v1 patterns with optional explicit include additions.",
           "$ref": "#/$defs/test_inventory"
         },
         "required_gates": {
+          "description": "Unique (layer, gate, aggregate_lane) mappings that bind declared test gates to canonical reusable quality workflow aggregate lanes.",
           "type": "array",
           "uniqueItems": true,
           "items": {
@@ -308,31 +314,37 @@
           }
         },
         "non_tests": {
+          "description": "Reasoned patterns for candidate matches that are false positives or tools rather than test files.",
           "$ref": "#/$defs/reasoned_patterns"
         },
         "exclusions": {
+          "description": "Reasoned patterns for real test files deliberately excluded from PR CI verification.",
           "$ref": "#/$defs/reasoned_patterns"
         }
       },
       "additionalProperties": false
     },
     "test_inventory": {
+      "description": "Closed test inventory configuration using default-v1 candidate patterns plus optional include globs.",
       "type": "object",
       "required": [
         "defaults"
       ],
       "properties": {
         "defaults": {
+          "description": "Closed default candidate pattern family (default-v1). Cannot be replaced or weakened.",
           "type": "string",
           "const": "default-v1"
         },
         "include": {
+          "description": "Optional nonstandard test globs added to the candidate inventory.",
           "$ref": "#/$defs/strings"
         }
       },
       "additionalProperties": false
     },
     "required_gate": {
+      "description": "Binding between a layer's test gate and a canonical reusable quality aggregate lane.",
       "type": "object",
       "required": [
         "layer",
@@ -341,12 +353,15 @@
       ],
       "properties": {
         "layer": {
+          "description": "Owning layer ID containing the test gate.",
           "$ref": "#/$defs/nonempty"
         },
         "gate": {
+          "description": "Gate ID within the layer (must be kind: test and mode ci or both).",
           "$ref": "#/$defs/nonempty"
         },
         "aggregate_lane": {
+          "description": "Canonical aggregate lane name in the reusable quality workflow.",
           "$ref": "#/$defs/nonempty"
         }
       },
@@ -360,6 +375,7 @@
       }
     },
     "reasoned_patterns": {
+      "description": "Array of pattern and reason records for candidate classification exceptions.",
       "type": "array",
       "items": {
         "type": "object",
@@ -369,9 +385,11 @@
         ],
         "properties": {
           "patterns": {
+            "description": "Nonempty list of git-relative glob patterns.",
             "$ref": "#/$defs/nonempty_strings"
           },
           "reason": {
+            "description": "Substantive reason for the exception classification.",
             "$ref": "#/$defs/nonempty"
           }
         },
@@ -379,6 +397,7 @@
       }
     },
     "reach_adapter": {
+      "description": "Static discovery adapter for test reachability. Supported adapters: swiftpm-v1 (SwiftPM test targets), xcodegen-v1 (XcodeGen test schemes), python-unittest-v1 (unittest discovery), pytest-v1 (pytest roots/files), node-test-v1 (node --test globs), vitest-v1 (Vitest include/exclude), ruby-v1 (Ruby test patterns), shell-v1 (shell test patterns), and declared-glob-v1 (manifest globs with source and reason). Opaque or dynamic runners fail closed without execution (declaration-only evidence limits).",
       "type": "object",
       "required": [
         "adapter"
