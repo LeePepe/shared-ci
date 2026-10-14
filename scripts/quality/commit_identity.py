@@ -133,8 +133,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         for role, email in (("author", author), ("committer", committer)):
             reason = rejection_reason(email, role, patterns, args.mode)
             if reason is not None:
-                # Escape controls so an email cannot inject workflow log commands.
-                print(f"commit-identity: {sha[:12]} {role} {json.dumps(email)}: {reason}",
+                print(f"commit-identity: {sha[:12]} {role}: {reason}",
                       file=sys.stderr)
                 offenders += 1
     if offenders:
