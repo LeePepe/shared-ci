@@ -422,7 +422,7 @@
           "$ref": "#/$defs/nonempty"
         },
         "project": {
-          "description": "Path to XcodeGen project file (e.g. project.yml) for xcodegen-v1. When omitted, defaults to project.yml in the repository root or derived from literal gate command arguments; otherwise fails closed.",
+          "description": "Path to XcodeGen project file (e.g. project.yml) for xcodegen-v1. When omitted, derived from literal gate command arguments; otherwise fails closed.",
           "$ref": "#/$defs/nonempty"
         },
         "scheme": {
@@ -446,7 +446,7 @@
           "$ref": "#/$defs/strings"
         },
         "patterns": {
-          "description": "List of literal test file glob patterns for node-test-v1, ruby-v1, shell-v1, or declared-glob-v1. For node-test-v1, ruby-v1, and shell-v1, when omitted, derived from literal gate command arguments; for declared-glob-v1, patterns is required; otherwise fails closed.",
+          "description": "List of literal test file glob patterns for node-test-v1, ruby-v1, shell-v1, or declared-glob-v1. For node-test-v1, when omitted, derived from literal gate command arguments or documented node --test default naming; for ruby-v1 and shell-v1, when omitted, derived from literal gate command arguments, otherwise fails closed; for declared-glob-v1, patterns is required.",
           "$ref": "#/$defs/strings"
         },
         "include": {
@@ -454,11 +454,11 @@
           "$ref": "#/$defs/strings"
         },
         "exclude": {
-          "description": "List of literal exclusion globs for vitest-v1. When omitted, defaults to an empty list (no exclusions); otherwise derived from literal Vitest configuration.",
+          "description": "List of literal exclusion globs for vitest-v1. When omitted, derived from admitted literal Vitest configuration; otherwise fails closed.",
           "$ref": "#/$defs/strings"
         },
         "config": {
-          "description": "Path to configuration file for vitest-v1 (e.g. vitest.config.ts). When omitted, derived from literal gate command argument '--config <path>' or defaults to vitest.config.ts in the repository root; otherwise fails closed.",
+          "description": "Path to configuration file for vitest-v1 (e.g. vitest.config.ts). When omitted, derived from literal gate command argument '--config <path>'; otherwise fails closed.",
           "$ref": "#/$defs/nonempty"
         },
         "source": {
