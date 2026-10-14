@@ -49,6 +49,13 @@
     "agent_files": ["CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".cursorrules"],
     "agent_file_max_lines": 12,
     "pr_sections": ["Existing behaviour", "Intent", "Compatibility", "Removed or weakened tests or policy", "Test evidence"],
+    "codeowners_classes": ["product", "shared"],
+    "codeowners_categories": [
+      "cross_repo_contract",
+      "gate_review",
+      "release_signing",
+      "privacy_credentials"
+    ],
     "codeowners_required": ["/.github/", "/AGENTS.md"],
     "shared_libraries": ["shared-ci", "shared-design-tokens", "shared-design-system", "shared-telemetry", "voxkit"],
     "aggregate_check": "quality / aggregate",

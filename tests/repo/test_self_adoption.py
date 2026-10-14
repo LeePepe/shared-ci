@@ -39,17 +39,61 @@ class SelfAdoptionTests(unittest.TestCase):
                 target = self.repo.root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(REPO / path, target)
+        # Adapt candidate repo metadata and CODEOWNERS to shared class for candidate mutation tests
+        self.repo.write(".github/CODEOWNERS",
+                        "/.github/ @LeePepe\n"
+                        "/.githooks/ @LeePepe\n"
+                        "/AGENTS.md @LeePepe\n"
+                        "/ai/ @LeePepe\n"
+                        "/schemas/ @LeePepe\n"
+                        "/docs/architecture/ @LeePepe\n"
+                        f"/{GUIDE} @LeePepe\n"
+                        "/scripts/verify @LeePepe\n"
+                        "/scripts/context/_contract.py @LeePepe\n"
+                        "/scripts/quality/ @LeePepe\n"
+                        "/scripts/select/ @LeePepe\n"
+                        "/scripts/lint/ @LeePepe\n"
+                        "/scripts/policy/ @LeePepe\n"
+                        "/scripts/review/ @LeePepe\n"
+                        "/templates/ @LeePepe\n")
+        self.repo.write(METADATA, json.dumps({
+            "schema": 1,
+            "repo_class": "shared",
+            "guide": GUIDE,
+            "shared_ci": PROVIDER,
+            "dependencies": {},
+            "codeowners": {
+                "cross_repo_contract": ["/schemas/"],
+                "gate_review": [
+                    "/.githooks/",
+                    "/docs/architecture/",
+                    "/scripts/verify",
+                    "/scripts/context/_contract.py",
+                    "/scripts/quality/",
+                    "/scripts/select/",
+                    "/scripts/lint/",
+                    "/scripts/policy/",
+                    "/scripts/review/",
+                    "/templates/",
+                ],
+                "release_signing": [],
+                "privacy_credentials": ["/ai/"],
+            }
+        }))
         self.repo.add()
 
     def test_actual_repository_adopts_metadata_and_passes_native_audit(self):
         self.assertIn(METADATA, self.repo.git("ls-files").stdout.splitlines())
-        metadata = json.loads((self.repo.root / METADATA).read_text(encoding="utf-8"))
-        self.assertEqual({"schema": 1, "guide": GUIDE, "shared_ci": PROVIDER,
-                          "dependencies": {}}, metadata)
         result = self.repo.cli("audit")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertTrue(json.loads(result.stdout)["ok"])
         self.assertEqual("", result.stderr)
+
+    def test_unadapted_repository_rejected_by_candidate_provider_and_isolated_to_old_pin(self):
+        # Actual untransformed repository metadata from base has legacy 4-key shape.
+        actual_metadata = (REPO / METADATA).read_text(encoding="utf-8")
+        self.repo.write(METADATA, actual_metadata, exact=True)
+        self.assert_rejected("contract_agents", "invalid repository metadata: expected schema, repo_class, guide, shared_ci, dependencies")
 
     def assert_rejected(self, kind, detail):
         result = self.repo.cli("audit")

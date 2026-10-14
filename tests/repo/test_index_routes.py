@@ -16,7 +16,7 @@ class IndexRouteTests(unittest.TestCase):
         self.guide = "docs/repository-guide.md"
         self.repo.write(self.guide, AGENTS)
         self.repo.write(".github/repo-contract.json", json.dumps({
-            "schema": 1, "guide": self.guide, "shared_ci": PIN, "dependencies": {}}))
+            "schema": 1, "repo_class": "product", "guide": self.guide, "shared_ci": PIN, "dependencies": {}}))
         self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/" + self.guide + " @owner\n")
         self.index = f"# Document index\n\n- Before editing: [Guide]({self.guide})\n"
         self.repo.write("AGENTS.md", self.index)
