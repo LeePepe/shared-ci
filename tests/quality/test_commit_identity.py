@@ -1,20 +1,281 @@
 """Commit identity CLI and its quality-workflow step, using isolated Git repos."""
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import typing
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts/quality/commit_identity.py"
 NOREPLY = "123+contributor@users.noreply.github.com"
 BOT = "456+automation[bot]@users.noreply.github.com"
+
+# Local YAML subset parser for workflow test fixtures (stdlib-only, no context layer imports).
+_KEY = re.compile(r"""^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_][A-Za-z0-9_./-]*))\s*:(?:\s+|$)(.*)$""")
+_INT = re.compile(r"^-?(?:0|[1-9][0-9]*)$")
+
+
+def _key(match: re.Match[str]) -> tuple[str, str]:
+    return next(g for g in match.groups()[:3] if g is not None), match.group(4).strip()
+
+
+def _strip_comment(line: str) -> str:
+    quote = ""
+    for index, char in enumerate(line):
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in "\"'":
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1] in " \t"):
+            return line[:index].rstrip()
+    return line.rstrip()
+
+
+def _scalar(token: str) -> typing.Any:
+    token = token.strip()
+    if token == "":
+        return None
+    if token.startswith('"'):
+        try:
+            value = json.loads(token)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid double-quoted scalar: {error}") from None
+        return value
+    if token.startswith("'"):
+        if len(token) < 2 or not token.endswith("'"):
+            raise ValueError("unterminated single-quoted scalar")
+        return token[1:-1].replace("''", "'")
+    if token in ("true", "True"):
+        return True
+    if token in ("false", "False"):
+        return False
+    if token in ("null", "~", "Null"):
+        return None
+    if _INT.match(token):
+        return int(token)
+    return token
+
+
+class _Flow:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.pos = 0
+
+    def parse(self) -> typing.Any:
+        value = self.value()
+        self.space()
+        if self.pos != len(self.text):
+            raise ValueError(f"trailing flow content: {self.text[self.pos:][:20]!r}")
+        return value
+
+    def space(self) -> None:
+        while self.pos < len(self.text) and self.text[self.pos] in " \t":
+            self.pos += 1
+
+    def value(self) -> typing.Any:
+        self.space()
+        if self.pos >= len(self.text):
+            raise ValueError("unterminated flow collection")
+        char = self.text[self.pos]
+        if char == "[":
+            return self.sequence()
+        if char == "{":
+            return self.mapping()
+        return self.scalar()
+
+    def scalar(self) -> typing.Any:
+        start = self.pos
+        char = self.text[self.pos]
+        if char in "\"'":
+            self.pos += 1
+            while self.pos < len(self.text):
+                if self.text[self.pos] == "\\" and char == '"':
+                    self.pos += 2
+                    continue
+                if self.text[self.pos] == char:
+                    if char == "'" and self.text[self.pos + 1:self.pos + 2] == "'":
+                        self.pos += 2
+                        continue
+                    self.pos += 1
+                    return _scalar(self.text[start:self.pos])
+                self.pos += 1
+            raise ValueError("unterminated quoted scalar")
+        while self.pos < len(self.text) and self.text[self.pos] not in ",]}":
+            if self.text[self.pos] == ":" and self.text[self.pos + 1:self.pos + 2] in (" ", ""):
+                break
+            self.pos += 1
+        return _scalar(self.text[start:self.pos])
+
+    def sequence(self) -> list[typing.Any]:
+        self.pos += 1
+        items: list[typing.Any] = []
+        self.space()
+        if self.text[self.pos:self.pos + 1] == "]":
+            self.pos += 1
+            return items
+        while True:
+            items.append(self.value())
+            self.space()
+            char = self.text[self.pos:self.pos + 1]
+            self.pos += 1
+            if char == "]":
+                return items
+            if char != ",":
+                raise ValueError("expected ',' or ']' in flow sequence")
+
+    def mapping(self) -> dict[str, typing.Any]:
+        self.pos += 1
+        result: dict[str, typing.Any] = {}
+        self.space()
+        if self.text[self.pos:self.pos + 1] == "}":
+            self.pos += 1
+            return result
+        while True:
+            key = self.scalar()
+            if not isinstance(key, str) or not key:
+                raise ValueError("flow mapping keys must be strings")
+            self.space()
+            if self.text[self.pos:self.pos + 1] != ":":
+                raise ValueError("expected ':' in flow mapping")
+            self.pos += 1
+            if key in result:
+                raise ValueError(f"duplicate key: {key}")
+            result[key] = self.value()
+            self.space()
+            char = self.text[self.pos:self.pos + 1]
+            self.pos += 1
+            if char == "}":
+                return result
+            if char != ",":
+                raise ValueError("expected ',' or '}' in flow mapping")
+
+
+def _inline(token: str) -> typing.Any:
+    token = token.strip()
+    if token.startswith(("[", "{")):
+        return _Flow(token).parse()
+    return _scalar(token)
+
+
+class _Block:
+    def __init__(self, text: str) -> None:
+        self.lines: list[tuple[int, str, str]] = []
+        for raw in text.splitlines():
+            content = _strip_comment(raw)
+            if not content.strip():
+                self.lines.append((-1, "", raw))
+                continue
+            self.lines.append((len(content) - len(content.lstrip(" ")), content.strip(), raw))
+        self.pos = 0
+
+    def skip_blank(self) -> None:
+        while self.pos < len(self.lines) and self.lines[self.pos][0] < 0:
+            self.pos += 1
+
+    def parse(self) -> typing.Any:
+        self.skip_blank()
+        if self.pos >= len(self.lines):
+            return {}
+        value = self.node(self.lines[self.pos][0])
+        self.skip_blank()
+        if self.pos < len(self.lines):
+            raise ValueError(f"unexpected indentation: {self.lines[self.pos][1][:30]!r}")
+        return value
+
+    def node(self, indent: int) -> typing.Any:
+        self.skip_blank()
+        content = self.lines[self.pos][1]
+        if content == "-" or content.startswith("- "):
+            return self.sequence(indent)
+        return self.mapping(indent)
+
+    def block_scalar(self, style: str, parent_indent: int) -> str:
+        collected: list[str] = []
+        block_indent = None
+        while self.pos < len(self.lines):
+            indent, _, raw = self.lines[self.pos]
+            stripped_indent = len(raw) - len(raw.lstrip(" "))
+            if raw.strip() and stripped_indent <= parent_indent:
+                break
+            if raw.strip() and block_indent is None:
+                block_indent = stripped_indent
+            collected.append(raw[block_indent:] if block_indent and raw.strip() else raw.strip())
+            self.pos += 1
+        while collected and not collected[-1]:
+            collected.pop()
+        joiner = "\n" if style.startswith("|") else " "
+        return joiner.join(collected) + ("\n" if style == "|" else "")
+
+    def value_after(self, rest: str, indent: int) -> typing.Any:
+        if rest in ("|", "|-", ">", ">-"):
+            return self.block_scalar(rest, indent)
+        if rest:
+            return _inline(rest)
+        self.skip_blank()
+        if self.pos < len(self.lines):
+            child_indent, child, _ = self.lines[self.pos]
+            if child_indent > indent or (child_indent == indent and (child == "-" or child.startswith("- "))):
+                return self.node(child_indent)
+        return None
+
+    def mapping(self, indent: int) -> dict[str, typing.Any]:
+        result: dict[str, typing.Any] = {}
+        while True:
+            self.skip_blank()
+            if self.pos >= len(self.lines):
+                return result
+            line_indent, content, _ = self.lines[self.pos]
+            if line_indent < indent:
+                return result
+            if line_indent > indent:
+                raise ValueError(f"unexpected indentation: {content[:30]!r}")
+            if content == "-" or content.startswith("- "):
+                return result
+            match = _KEY.match(content)
+            if match is None:
+                raise ValueError(f"expected 'key: value': {content[:30]!r}")
+            key, rest = _key(match)
+            if key in result:
+                raise ValueError(f"duplicate key: {key}")
+            self.pos += 1
+            result[key] = self.value_after(rest, indent)
+
+    def sequence(self, indent: int) -> list[typing.Any]:
+        items: list[typing.Any] = []
+        while True:
+            self.skip_blank()
+            if self.pos >= len(self.lines):
+                return items
+            line_indent, content, raw = self.lines[self.pos]
+            if line_indent != indent or not (content == "-" or content.startswith("- ")):
+                if line_indent > indent:
+                    raise ValueError(f"unexpected indentation: {content[:30]!r}")
+                return items
+            rest = content[1:].strip()
+            if not rest:
+                self.pos += 1
+                items.append(self.value_after("", indent))
+                continue
+            if _KEY.match(rest) and not rest.startswith(("[", "{")):
+                item_indent = indent + (len(content) - len(rest))
+                self.lines[self.pos] = (item_indent, rest, raw)
+                items.append(self.mapping(item_indent))
+                continue
+            self.pos += 1
+            items.append(_inline(rest))
+
+
+def _parse_yaml(text: str) -> typing.Any:
+    return _Block(text).parse()
 
 
 class Repo:
@@ -76,21 +337,26 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit("contributor@MacBook-Pro.local")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{head[:12]} author "contributor@MacBook-Pro.local"', result.stderr)
-        self.assertNotIn(f"{head[:12]} committer ", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertNotIn(f"{head[:12]} committer", result.stderr)
+        self.assertNotIn("contributor", result.stderr)
+        self.assertNotIn("MacBook-Pro", result.stderr)
+        self.assertNotIn("local", result.stderr)
         self.assertNotIn("quoted", result.stderr)
         self.assertEqual(1, result.stderr.count("Fix:"))
         self.assertIn("user.email", result.stderr)
         self.assertIn("rewrite the branch commits", result.stderr)
         self.assertIn("your GitHub noreply address", result.stderr)
-        self.assertIn("not a GitHub noreply address", result.stderr)
+        self.assertNotIn("contributor@MacBook-Pro.local", result.stdout)
 
     def test_non_noreply_committer_fails(self):
         head = self.repo.commit(committer="committer@example.invalid")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{head[:12]} committer "committer@example.invalid"', result.stderr)
-        self.assertNotIn(f"{head[:12]} author ", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} committer: not a GitHub noreply address", result.stderr)
+        self.assertNotIn(f"{head[:12]} author", result.stderr)
+        self.assertNotIn("committer@example.invalid", result.stderr)
+        self.assertNotIn("committer@example.invalid", result.stdout)
 
     def test_allowlist_pattern_passes_for_both_roles_case_insensitively(self):
         head = self.repo.commit("author@EXAMPLE.invalid", "committer@example.INVALID")
@@ -114,17 +380,24 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit("author@one.invalid", "committer@two.invalid")
         result = self.repo.cli(head, "--mode", "noreply", "--allow", "or@one.invalid")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f"{head[:12]} author ", result.stderr)
-        self.assertIn(f"{head[:12]} committer ", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} committer: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("author@one.invalid", result.stderr)
+        self.assertNotIn("committer@two.invalid", result.stderr)
         result = self.repo.cli(head, "--mode", "noreply", "--allow",
                                "or@one.invalid, ,\n, *@ONE.invalid")
         self.assertEqual(1, result.returncode)
-        self.assertNotIn(f"{head[:12]} author ", result.stderr)
-        self.assertIn(f"{head[:12]} committer ", result.stderr)
+        self.assertNotIn(f"{head[:12]} author", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} committer: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("committer@two.invalid", result.stderr)
 
     def test_noreply_domain_suffix_spoof_fails(self):
         head = self.repo.commit(NOREPLY + ".invalid")
-        self.assertEqual(1, self.repo.cli(head, "--mode", "noreply").returncode)
+        result = self.repo.cli(head, "--mode", "noreply")
+        self.assertEqual(1, result.returncode)
+        self.assertIn(f"commit-identity: {head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertNotIn(NOREPLY + ".invalid", result.stderr)
+        self.assertNotIn(NOREPLY + ".invalid", result.stdout)
 
     def test_noreply_mode_rejects_malformed_noreply_local_parts(self):
         for email in ("@users.noreply.github.com", "+name@users.noreply.github.com",
@@ -141,6 +414,9 @@ class CommitIdentityTests(unittest.TestCase):
                     result = self.repo.cli(head, "--mode", "noreply")
                     self.assertEqual(1, result.returncode, result.stdout + result.stderr)
                     self.assertIn(role, result.stderr)
+                    if email:
+                        self.assertNotIn(email, result.stderr)
+                        self.assertNotIn(email, result.stdout)
 
     def test_noreply_mode_accepts_github_noreply_local_part_shapes(self):
         for email in ("name@users.noreply.github.com", "123+name@users.noreply.github.com",
@@ -156,8 +432,10 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit("noreply@github.com", "noreply@github.com")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f"{head[:12]} author ", result.stderr)
-        self.assertNotIn(f"{head[:12]} committer ", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertNotIn(f"{head[:12]} committer", result.stderr)
+        self.assertNotIn("noreply@github.com", result.stderr)
+        self.assertNotIn("noreply@github.com", result.stdout)
         self.assertEqual(0, self.repo.cli(head, "--mode", "noreply",
                                          "--allow", "noreply@github.com").returncode)
 
@@ -191,7 +469,10 @@ class CommitIdentityTests(unittest.TestCase):
                 result = self.repo.cli(head, base="HEAD^")
                 self.assertEqual(1, result.returncode, result.stderr)
                 for role in ("author", "committer"):
-                    self.assertIn(f"{head[:12]} {role} {json.dumps(email)}: {reason}", result.stderr)
+                    self.assertIn(f"commit-identity: {head[:12]} {role}: {reason}", result.stderr)
+                if email:
+                    self.assertNotIn(email, result.stderr)
+                    self.assertNotIn(email, result.stdout)
                 self.assertNotIn("\x1b", result.stderr)
                 self.assertEqual(1, result.stderr.count("Fix:"))
                 self.assertIn("user.email to a valid email address with a non-local, dotted domain",
@@ -259,9 +540,13 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.commit("author\x1b@host.local", "committer@host.local")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{head[:12]} author "author\\u001b@host.local"', result.stderr)
-        self.assertIn(f'{head[:12]} committer "committer@host.local"', result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} committer: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("author\x1b@host.local", result.stderr)
+        self.assertNotIn("committer@host.local", result.stderr)
+        self.assertNotIn("host.local", result.stderr)
         self.assertNotIn("\x1b", result.stderr)
+        self.assertNotIn("\x1b", result.stdout)
         self.assertEqual(1, result.stderr.count("Fix:"))
 
     def test_replacement_objects_cannot_hide_offenders(self):
@@ -270,7 +555,9 @@ class CommitIdentityTests(unittest.TestCase):
         self.repo.git("replace", bad, good)
         result = self.repo.cli(bad, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{bad[:12]} author "author@host.local"', result.stderr)
+        self.assertIn(f"commit-identity: {bad[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("author@host.local", result.stderr)
+        self.assertNotIn("author@host.local", result.stdout)
 
     def test_bad_revisions_and_empty_endpoints_exit_two(self):
         for base, head in (("unknown", self.repo.base), (self.repo.base, "unknown"),
@@ -302,9 +589,13 @@ class CommitIdentityTests(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         findings = [line for line in result.stderr.splitlines() if line.startswith("commit-identity:")]
         self.assertCountEqual([
-            f'commit-identity: {bad_author[:12]} author "author@host.local": not a GitHub noreply address',
-            f'commit-identity: {bad_committer[:12]} committer "committer@example.invalid": not a GitHub noreply address',
+            f"commit-identity: {bad_author[:12]} author: not a GitHub noreply address",
+            f"commit-identity: {bad_committer[:12]} committer: not a GitHub noreply address",
         ], findings)
+        self.assertNotIn("author@host.local", result.stderr)
+        self.assertNotIn("committer@example.invalid", result.stderr)
+        self.assertNotIn("author@host.local", result.stdout)
+        self.assertNotIn("committer@example.invalid", result.stdout)
         for sha in (self.repo.base, good, head):
             self.assertNotIn(sha[:12], result.stderr)
 
@@ -316,7 +607,9 @@ class CommitIdentityTests(unittest.TestCase):
         self.repo.git("config", "format.pretty", "fuller")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn("author@host.local", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("author@host.local", result.stderr)
+        self.assertNotIn("author@host.local", result.stdout)
         self.assertNotIn("quoted", result.stderr)
 
     def test_merge_commits_and_side_branch_commits_are_checked(self):
@@ -330,17 +623,19 @@ class CommitIdentityTests(unittest.TestCase):
         head = self.repo.git("rev-parse", "HEAD")
         result = self.repo.cli(head, "--mode", "noreply")
         self.assertEqual(1, result.returncode)
-        self.assertIn(f'{side[:12]} author "side@host.local"', result.stderr)
-        self.assertIn(f'{head[:12]} committer "merge@host.local"', result.stderr)
+        self.assertIn(f"commit-identity: {side[:12]} author: not a GitHub noreply address", result.stderr)
+        self.assertIn(f"commit-identity: {head[:12]} committer: not a GitHub noreply address", result.stderr)
+        self.assertNotIn("side@host.local", result.stderr)
+        self.assertNotIn("merge@host.local", result.stderr)
+        self.assertNotIn("side@host.local", result.stdout)
+        self.assertNotIn("merge@host.local", result.stdout)
 
 
 class WorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        spec = importlib.util.spec_from_file_location("identity_frontmatter", REPO / "scripts/context/_frontmatter.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        cls.workflow = module.parse((REPO / ".github/workflows/quality.yml").read_text())
+        workflow_text = (REPO / ".github/workflows/quality.yml").read_text()
+        cls.workflow = _parse_yaml(workflow_text)
         cls.job = cls.workflow["jobs"]["select"]
         cls.step = next(step for step in cls.job["steps"]
                         if step.get("name") == "Check commit author and committer emails")
@@ -391,7 +686,10 @@ class WorkflowTests(unittest.TestCase):
 
     def test_workflow_step_propagates_pass_failure_and_git_error(self):
         self.assertEqual(0, self.run_step(self.repo.commit()).returncode)
-        self.assertEqual(1, self.run_step(self.repo.commit("author@host.local")).returncode)
+        res = self.run_step(self.repo.commit("author@host.local"))
+        self.assertEqual(1, res.returncode)
+        self.assertNotIn("author@host.local", res.stderr)
+        self.assertNotIn("author@host.local", res.stdout)
         self.assertEqual(2, self.run_step("unknown").returncode)
 
     def test_non_pr_events_and_disabled_input_explicitly_skip(self):
@@ -420,6 +718,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(1, strict.returncode, strict.stderr)
         self.assertIn("commit-identity: mode noreply", strict.stdout)
         self.assertIn("not a GitHub noreply address", strict.stderr)
+        self.assertNotIn("author@example.com", strict.stderr)
+        self.assertNotIn("committer@example.com", strict.stderr)
+        self.assertNotIn("author@example.com", strict.stdout)
+        self.assertNotIn("committer@example.com", strict.stdout)
 
     def test_workflow_rejects_invalid_mode_before_skipping(self):
         for mode in ("", "strict", "BASIC", "$(touch injected)"):
