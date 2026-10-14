@@ -131,14 +131,50 @@ class Fixture:
             data["manifest"] = manifest
         self.context(path, data)
 
-    def root_index(self, routes=None, exclusions=None):
-        self.context("CONTEXT.md", {
+    def root_index(self, routes=None, exclusions=None, test_reachability=None):
+        data = {
             "schema": 1, "kind": "index",
             "routes": ([{"patterns": ["src/**"], "context": "src/CONTEXT.md"}]
                        if routes is None else routes),
             "exclusions": ([{"patterns": ["CONTEXT.md"], "reason": "routing metadata"}]
                            if exclusions is None else exclusions),
-        })
+        }
+        if test_reachability is not None:
+            data["test_reachability"] = test_reachability
+        self.context("CONTEXT.md", data)
+
+    def tech_root(self, rows=None, support=None, test_reachability=None,
+                  path="docs/architecture/tech-context.md"):
+        front = {}
+        if support is not None:
+            front["support"] = support
+        if test_reachability is not None:
+            front["test_reachability"] = test_reachability
+        body = ["# Layer Map\n", "| Layer | tech-context | Depends on |", "| --- | --- | --- |"]
+        if rows is None:
+            rows = [{"layer": "Source", "path": "src/tech-context.md", "depends_on": []}]
+        for row in rows:
+            deps = ", ".join(row.get("depends_on", [])) or "none"
+            body.append(f"| {row['layer']} | {row['path']} | {deps} |")
+        fm_text = "---\n" + (json.dumps(front, indent=2) if front else "") + "\n---\n\n"
+        self.write(path, fm_text + "\n".join(body) + "\n")
+
+    def tech_leaf(self, path="src/tech-context.md", layer="Source", owns=None, depends_on=None,
+                  red_lines=None, gate=None, test_paths=None, test=None, **extra):
+        data = {
+            "layer": layer,
+            "owns": ["src/**"] if owns is None else owns,
+            "depends_on": [] if depends_on is None else depends_on,
+            "red_lines": ["synthetic boundary"] if red_lines is None else red_lines,
+        }
+        if test_paths is not None:
+            data["test_paths"] = test_paths
+        if gate is not None:
+            data["gate"] = gate
+        if test is not None:
+            data["test"] = test
+        data.update(extra)
+        self.write(path, "---\n" + json.dumps(data, indent=2) + "\n---\n\n# Leaf\n")
 
     def audit(self):
         result = self.cli("audit")
