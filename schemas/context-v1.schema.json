@@ -418,47 +418,47 @@
           ]
         },
         "package_path": {
-          "description": "Package root directory for swiftpm-v1. When omitted, derived from the gate command's '--package-path <path>' option or defaults to the layer root.",
+          "description": "Package root directory for swiftpm-v1. When omitted, derived from the literal gate command argument '--package-path <path>'; otherwise fails closed.",
           "$ref": "#/$defs/nonempty"
         },
         "project": {
-          "description": "Path to XcodeGen project file (e.g. project.yml) for xcodegen-v1. When omitted, defaults to project.yml in the repository root or derived from gate command arguments.",
+          "description": "Path to XcodeGen project file (e.g. project.yml) for xcodegen-v1. When omitted, defaults to project.yml in the repository root or derived from literal gate command arguments; otherwise fails closed.",
           "$ref": "#/$defs/nonempty"
         },
         "scheme": {
-          "description": "Xcode scheme name for xcodegen-v1 whose test action targets are reached. When omitted, derived from gate command '-scheme <name>'.",
+          "description": "Xcode scheme name for xcodegen-v1 whose test action targets are reached. When omitted, derived from literal gate command argument '-scheme <name>'; otherwise fails closed.",
           "$ref": "#/$defs/nonempty"
         },
         "start_directory": {
-          "description": "Discovery start directory for python-unittest-v1. When omitted, derived from gate command '-s <dir>' or defaults to the layer's test_paths / repository root.",
+          "description": "Discovery start directory for python-unittest-v1. When omitted, derived from literal gate command argument '-s <dir>' or '-s=<dir>'; otherwise fails closed.",
           "$ref": "#/$defs/nonempty"
         },
         "pattern": {
-          "description": "Discovery filename pattern for python-unittest-v1 (e.g. 'test_*.py'). When omitted, derived from gate command '-p <pattern>' or defaults to standard unittest 'test*.py'.",
+          "description": "Discovery filename pattern for python-unittest-v1 (e.g. 'test_*.py'). When omitted, derived from literal gate command argument '-p <pattern>' or '-p=<pattern>', or defaults to standard unittest 'test*.py'.",
           "$ref": "#/$defs/nonempty"
         },
         "root": {
-          "description": "Root directory for pytest-v1 discovery. When omitted, derived from gate command arguments or defaults to the layer's test_paths / repository root.",
+          "description": "Root directory for pytest-v1 discovery. When omitted, derived from literal gate command arguments; otherwise fails closed.",
           "$ref": "#/$defs/nonempty"
         },
         "python_files": {
-          "description": "List of filename patterns for pytest-v1 test discovery. When omitted, derived from pytest configuration or defaults to standard pytest patterns ('test_*.py' and '*_test.py').",
+          "description": "List of filename patterns for pytest-v1 test discovery. When omitted, derived from literal pytest configuration or defaults to standard pytest patterns ('test_*.py' and '*_test.py').",
           "$ref": "#/$defs/strings"
         },
         "patterns": {
-          "description": "List of test file glob patterns for node-test-v1, ruby-v1, shell-v1, or declared-glob-v1. For node-test-v1, ruby-v1, and shell-v1, when omitted, patterns are derived from gate command arguments or framework defaults; for declared-glob-v1, patterns is required.",
+          "description": "List of literal test file glob patterns for node-test-v1, ruby-v1, shell-v1, or declared-glob-v1. For node-test-v1, ruby-v1, and shell-v1, when omitted, derived from literal gate command arguments; for declared-glob-v1, patterns is required; otherwise fails closed.",
           "$ref": "#/$defs/strings"
         },
         "include": {
-          "description": "List of inclusion globs for vitest-v1. When omitted, derived from Vitest configuration file or defaults to Vitest default test file patterns.",
+          "description": "List of literal inclusion globs for vitest-v1. When omitted, derived from literal Vitest configuration; otherwise fails closed.",
           "$ref": "#/$defs/strings"
         },
         "exclude": {
-          "description": "List of exclusion globs for vitest-v1. When omitted, defaults to an empty list / standard Vitest exclude defaults.",
+          "description": "List of literal exclusion globs for vitest-v1. When omitted, defaults to an empty list (no exclusions); otherwise derived from literal Vitest configuration.",
           "$ref": "#/$defs/strings"
         },
         "config": {
-          "description": "Path to configuration file for vitest-v1 (e.g. vitest.config.ts). When omitted, derived from gate command '--config <path>' or defaults to standard vitest config in project root.",
+          "description": "Path to configuration file for vitest-v1 (e.g. vitest.config.ts). When omitted, derived from literal gate command argument '--config <path>' or defaults to vitest.config.ts in the repository root; otherwise fails closed.",
           "$ref": "#/$defs/nonempty"
         },
         "source": {
