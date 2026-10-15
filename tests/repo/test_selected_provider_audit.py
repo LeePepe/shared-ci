@@ -410,6 +410,11 @@ exec {self.real_git} "$@"
         result = self.run_audit(env={"AUDIT_STATUS": "73"})
         self.assertEqual(73, result.returncode, result.stdout + result.stderr)
         self.assertEqual("provider", self.marker.read_text(encoding="utf-8"))
+        self.assertFalse(self.network_marker.exists())
+        for identity in ("candidate", "index", "worktree", "legacy", "cache-decoy"):
+            self.assertFalse((self.root / f"{identity}-runtime-executed").exists())
+        self.assertEqual(result.repository_before, result.repository_after)
+        self.assertEqual(result.artifacts_before, result.artifacts_after)
 
 
 if __name__ == "__main__":
