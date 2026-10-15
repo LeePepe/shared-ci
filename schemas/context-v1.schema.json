@@ -88,6 +88,10 @@
         "$ref": "#/$defs/gate"
       }
     },
+    "test_reachability": {
+      "description": "Root test reachability policy (v1). Proves declared file-level reachability from committed repository facts; does not prove runtime execution or individual test results (declaration-only evidence limits). Supported only in root context index or root tech-context.md.",
+      "$ref": "#/$defs/test_reachability"
+    },
     "manifest": {
       "$ref": "#/$defs/manifest"
     }
@@ -183,6 +187,11 @@
               "required": [
                 "exclusions"
               ]
+            },
+            {
+              "required": [
+                "test_reachability"
+              ]
             }
           ]
         }
@@ -245,9 +254,350 @@
           "items": {
             "$ref": "#/$defs/nonempty"
           }
+        },
+        "reaches": {
+          "description": "Static discovery adapters declaring which candidate test files are reached by this test gate. Proves declared file-level reachability; declaration-only evidence limits apply.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/reach_adapter"
+          }
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "reaches"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "test"
+              },
+              "mode": {
+                "enum": [
+                  "both",
+                  "ci"
+                ]
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": true
+    },
+    "test_reachability": {
+      "description": "Root test reachability declaration (v1). Requires version 1 and inventory defaults. Validates required gates against aggregate lanes, reasoned non_tests false positives, and reasoned deliberate exclusions.",
+      "type": "object",
+      "required": [
+        "version",
+        "inventory"
+      ],
+      "properties": {
+        "version": {
+          "description": "Version integer (must be 1 for v1 contract).",
+          "type": "integer",
+          "const": 1
+        },
+        "inventory": {
+          "description": "Closed test candidate inventory. Defaults to default-v1 patterns with optional explicit include additions.",
+          "$ref": "#/$defs/test_inventory"
+        },
+        "required_gates": {
+          "description": "Unique (layer, gate, aggregate_lane) mappings that bind declared test gates to canonical reusable quality workflow aggregate lanes. When omitted, defaults to an empty list (no required gate bindings are declared).",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/required_gate"
+          }
+        },
+        "non_tests": {
+          "description": "Reasoned patterns for candidate matches that are false positives or tools rather than test files. When omitted, defaults to an empty list (no candidate matches classified as non-tests).",
+          "$ref": "#/$defs/reasoned_patterns"
+        },
+        "exclusions": {
+          "description": "Reasoned patterns for real test files deliberately excluded from PR CI verification. When omitted, defaults to an empty list (no test candidates deliberately excluded).",
+          "$ref": "#/$defs/reasoned_patterns"
+        }
+      },
+      "additionalProperties": false
+    },
+    "test_inventory": {
+      "description": "Closed test inventory configuration using default-v1 candidate patterns plus optional include globs.",
+      "type": "object",
+      "required": [
+        "defaults"
+      ],
+      "properties": {
+        "defaults": {
+          "description": "Closed default candidate pattern family (default-v1). Cannot be replaced or weakened.",
+          "type": "string",
+          "const": "default-v1"
+        },
+        "include": {
+          "description": "Optional nonstandard test globs added to the candidate inventory. When omitted, defaults to an empty list (relying solely on default-v1 patterns).",
+          "$ref": "#/$defs/strings"
+        }
+      },
+      "additionalProperties": false
+    },
+    "required_gate": {
+      "description": "Binding between a layer's test gate and a canonical reusable quality aggregate lane.",
+      "type": "object",
+      "required": [
+        "layer",
+        "gate",
+        "aggregate_lane"
+      ],
+      "properties": {
+        "layer": {
+          "description": "Owning layer ID containing the test gate.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "gate": {
+          "description": "Gate ID within the layer (must be kind: test and mode ci or both).",
+          "$ref": "#/$defs/nonempty"
+        },
+        "aggregate_lane": {
+          "description": "Canonical aggregate lane name in the reusable quality workflow.",
+          "$ref": "#/$defs/nonempty"
+        }
+      },
+      "additionalProperties": false
+    },
+    "nonempty_strings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/nonempty"
+      }
+    },
+    "reasoned_patterns": {
+      "description": "Array of pattern and reason records for candidate classification exceptions.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "patterns",
+          "reason"
+        ],
+        "properties": {
+          "patterns": {
+            "description": "Nonempty list of git-relative glob patterns.",
+            "$ref": "#/$defs/nonempty_strings"
+          },
+          "reason": {
+            "description": "Substantive reason for the exception classification.",
+            "$ref": "#/$defs/nonempty"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "reach_adapter": {
+      "description": "Static discovery adapter for test reachability. Supported adapters: swiftpm-v1 (SwiftPM test targets), xcodegen-v1 (XcodeGen test schemes), python-unittest-v1 (unittest discovery), pytest-v1 (pytest roots/files), node-test-v1 (node --test globs), vitest-v1 (Vitest include/exclude), ruby-v1 (Ruby test patterns), shell-v1 (shell test patterns), and declared-glob-v1 (manifest globs with source and reason). Opaque or dynamic runners fail closed without execution (declaration-only evidence limits).",
+      "type": "object",
+      "required": [
+        "adapter"
+      ],
+      "properties": {
+        "adapter": {
+          "description": "Discovery adapter identifier.",
+          "enum": [
+            "swiftpm-v1",
+            "xcodegen-v1",
+            "python-unittest-v1",
+            "pytest-v1",
+            "node-test-v1",
+            "vitest-v1",
+            "ruby-v1",
+            "shell-v1",
+            "declared-glob-v1"
+          ]
+        },
+        "package_path": {
+          "description": "Package root directory for swiftpm-v1. When omitted, derived from the literal gate command argument '--package-path <path>'; otherwise fails closed.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "project": {
+          "description": "Path to XcodeGen project file (e.g. project.yml) for xcodegen-v1. When omitted, derived from literal gate command arguments; otherwise fails closed.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "scheme": {
+          "description": "Xcode scheme name for xcodegen-v1 whose test action targets are reached. When omitted, derived from literal gate command argument '-scheme <name>'; otherwise fails closed.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "start_directory": {
+          "description": "Discovery start directory for python-unittest-v1. When omitted, derived from literal gate command argument '-s <dir>' or '-s=<dir>'; otherwise fails closed.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "pattern": {
+          "description": "Discovery filename pattern for python-unittest-v1 (e.g. 'test_*.py'). When omitted, derived from literal gate command argument '-p <pattern>' or '-p=<pattern>', or defaults to standard unittest 'test*.py'.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "root": {
+          "description": "Root directory for pytest-v1 discovery. When omitted, derived from literal gate command arguments; otherwise fails closed.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "python_files": {
+          "description": "List of filename patterns for pytest-v1 test discovery. When omitted, derived from literal pytest configuration or defaults to standard pytest patterns ('test_*.py' and '*_test.py').",
+          "$ref": "#/$defs/strings"
+        },
+        "patterns": {
+          "description": "List of literal test file glob patterns for node-test-v1, ruby-v1, shell-v1, or declared-glob-v1. For node-test-v1, when omitted, derived from literal gate command arguments or documented node --test default naming; for ruby-v1 and shell-v1, when omitted, derived from literal gate command arguments, otherwise fails closed; for declared-glob-v1, patterns is required.",
+          "$ref": "#/$defs/strings"
+        },
+        "include": {
+          "description": "List of literal inclusion globs for vitest-v1. When omitted, derived from literal Vitest configuration; otherwise fails closed.",
+          "$ref": "#/$defs/strings"
+        },
+        "exclude": {
+          "description": "List of literal exclusion globs for vitest-v1. When omitted, derived from admitted literal Vitest configuration; otherwise fails closed.",
+          "$ref": "#/$defs/strings"
+        },
+        "config": {
+          "description": "Path to configuration file for vitest-v1 (e.g. vitest.config.ts). When omitted, derived from literal gate command argument '--config <path>'; otherwise fails closed.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "source": {
+          "description": "Path to the protected custom runner manifest containing literal test globs for declared-glob-v1. Required; cannot be omitted.",
+          "$ref": "#/$defs/nonempty"
+        },
+        "reason": {
+          "description": "Substantive reason explaining why custom runner globs are necessary for declared-glob-v1. Required; cannot be omitted.",
+          "$ref": "#/$defs/nonempty"
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "adapter": {
+              "const": "swiftpm-v1"
+            },
+            "package_path": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "xcodegen-v1"
+            },
+            "project": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "scheme": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "python-unittest-v1"
+            },
+            "start_directory": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "pattern": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "pytest-v1"
+            },
+            "root": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "python_files": {
+              "$ref": "#/$defs/nonempty_strings"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "node-test-v1"
+            },
+            "patterns": {
+              "$ref": "#/$defs/nonempty_strings"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "vitest-v1"
+            },
+            "include": {
+              "$ref": "#/$defs/nonempty_strings"
+            },
+            "exclude": {
+              "$ref": "#/$defs/nonempty_strings"
+            },
+            "config": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "ruby-v1"
+            },
+            "patterns": {
+              "$ref": "#/$defs/nonempty_strings"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "adapter": {
+              "const": "shell-v1"
+            },
+            "patterns": {
+              "$ref": "#/$defs/nonempty_strings"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": [
+            "adapter",
+            "patterns",
+            "source",
+            "reason"
+          ],
+          "properties": {
+            "adapter": {
+              "const": "declared-glob-v1"
+            },
+            "patterns": {
+              "$ref": "#/$defs/nonempty_strings"
+            },
+            "source": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "reason": {
+              "$ref": "#/$defs/nonempty"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "manifest": {
       "type": "object",

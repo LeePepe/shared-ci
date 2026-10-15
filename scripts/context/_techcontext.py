@@ -93,12 +93,37 @@ def _gates(ctx: Any, data: dict[str, Any], path: str) -> list[dict[str, Any]]:
                 argv = shlex.split(command)
             except ValueError as error:
                 raise ctx.ContextError(f"{path}: gate {gate_id}: {error}", "invalid_gate") from None
+            kind = gate_id if gate_id in ctx.VALID_GATE_KINDS else "check"
+            gates.append({"id": str(gate_id), "kind": kind, "mode": "both", "command": argv})
         elif isinstance(command, list) and all(isinstance(token, str) for token in command):
             argv = list(command)
+            kind = gate_id if gate_id in ctx.VALID_GATE_KINDS else "check"
+            gates.append({"id": str(gate_id), "kind": kind, "mode": "both", "command": argv})
+        elif isinstance(command, dict):
+            allowed_keys = {"command", "kind", "mode", "reaches"}
+            unknown = set(command.keys()) - allowed_keys
+            if unknown:
+                raise ctx.ContextError(f"{path}: gate {gate_id}: unknown fields: {sorted(unknown)}", "invalid_gate")
+            raw_cmd = command.get("command")
+            if isinstance(raw_cmd, str):
+                try:
+                    argv = shlex.split(raw_cmd)
+                except ValueError as error:
+                    raise ctx.ContextError(f"{path}: gate {gate_id}: {error}", "invalid_gate") from None
+            elif isinstance(raw_cmd, list) and all(isinstance(token, str) for token in raw_cmd):
+                argv = list(raw_cmd)
+            elif raw_cmd is None:
+                raise ctx.ContextError(f"{path}: gate {gate_id}: missing command", "invalid_gate")
+            else:
+                raise ctx.ContextError(f"{path}: gate {gate_id}: command must be a string or string list", "invalid_gate")
+            kind = command.get("kind", gate_id if gate_id in ctx.VALID_GATE_KINDS else "check")
+            mode = command.get("mode", "both")
+            gate_entry = {"id": str(gate_id), "kind": kind, "mode": mode, "command": argv}
+            if "reaches" in command:
+                gate_entry["reaches"] = command["reaches"]
+            gates.append(gate_entry)
         else:
-            raise ctx.ContextError(f"{path}: gate {gate_id} must be a string or string list", "invalid_gate")
-        kind = gate_id if gate_id in ctx.VALID_GATE_KINDS else "check"
-        gates.append({"id": str(gate_id), "kind": kind, "mode": "both", "command": argv})
+            raise ctx.ContextError(f"{path}: gate {gate_id} must be a string, string list, or object", "invalid_gate")
     return gates
 
 
@@ -107,12 +132,14 @@ def parse_leaf(ctx: Any, root: pathlib.Path, root_path: str, relative: str) -> d
     layer = data.get("layer")
     if not isinstance(layer, str) or not layer.strip() or layer == "_root":
         raise ctx.ContextError(f"{relative}: layer must be a non-empty layer ID", "invalid_leaf")
+    if "test_paths" in data and data["test_paths"] is None:
+        raise ctx.ContextError(f"{relative}: test_paths must be a string list", "invalid_leaf")
     leaf = {key: value for key, value in data.items()
-            if key not in {"owns", "depends_on", "depended_by", "gate"}}
+            if key not in {"owns", "depends_on", "depended_by", "gate", "test_paths"}}
     leaf.update({
         "schema": 1, "kind": "leaf", "layer": layer, "parent": root_path,
         "scope": _strings(ctx, data, "owns", relative, required=True),
-        "test_paths": [],
+        "test_paths": _strings(ctx, data, "test_paths", relative),
         "dependencies": _strings(ctx, data, "depends_on", relative),
         "red_lines": _strings(ctx, data, "red_lines", relative),
         "gates": _gates(ctx, data, relative),
@@ -165,7 +192,7 @@ def parse_table(body: str) -> list[dict[str, Any]]:
 
 
 def load(ctx: Any, root: pathlib.Path, root_path: str) -> dict[str, Any]:
-    """Return {root, support, rows, leaves: {path: leaf}, errors: [Finding]}."""
+    """Return {root, support, rows, leaves: {path: leaf}, errors: [Finding], test_reachability: ...}."""
     data, body = _read(ctx, root, root_path)
     support = []
     for entry in data.get("support", []) or []:
@@ -177,6 +204,11 @@ def load(ctx: Any, root: pathlib.Path, root_path: str) -> dict[str, Any]:
                 or any(not isinstance(p, str) or not p for p in entry["patterns"])):
             raise ctx.ContextError(f"{root_path}: support entries need patterns and a reason")
         support.append({"patterns": list(entry["patterns"]), "reason": entry["reason"]})
+    if "test_reachability" in data:
+        if data["test_reachability"] is None:
+            raise ctx.ContextError(f"{root_path}: test_reachability must be an object", "invalid_test_declaration")
+        ctx.validate_test_reachability(data["test_reachability"], root_path)
+    test_reachability = data.get("test_reachability")
     rows = parse_table(body)
     if not rows:
         raise ctx.ContextError(f"{root_path}: no layer table with Layer and tech-context columns")
@@ -187,7 +219,8 @@ def load(ctx: Any, root: pathlib.Path, root_path: str) -> dict[str, Any]:
             leaves[ctx.normalize_path(root, row["path"])] = parse_leaf(ctx, root, root_path, row["path"])
         except ctx.ContextError as error:
             errors.append(ctx.Finding(row["layer"] or "context", row["path"], error.kind, str(error)))
-    return {"root": root_path, "support": support, "rows": rows, "leaves": leaves, "errors": errors}
+    return {"root": root_path, "support": support, "rows": rows, "leaves": leaves,
+            "errors": errors, "test_reachability": test_reachability}
 
 
 def resolve(ctx: Any, root: pathlib.Path, root_path: str, raw_path: str, model: dict | None = None):
@@ -198,7 +231,7 @@ def resolve(ctx: Any, root: pathlib.Path, root_path: str, raw_path: str, model: 
     if model["errors"]:
         raise ctx.ContextError(model["errors"][0].detail, model["errors"][0].kind)
     owners = [leaf for leaf in model["leaves"].values()
-              if any(ctx.match_pattern(path, pattern) for pattern in leaf["scope"])]
+              if any(ctx.match_pattern(path, pattern) for pattern in (leaf["scope"] + leaf.get("test_paths", [])))]
     support = [entry for entry in model["support"]
                if any(ctx.match_pattern(path, pattern) for pattern in entry["patterns"])]
     if len(owners) + len(support) == 0:

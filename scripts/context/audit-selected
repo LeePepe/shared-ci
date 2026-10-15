@@ -1,0 +1,207 @@
+#!/bin/sh
+set -u
+
+fail() {
+    printf '%s\n' "[audit-selected] $*" >&2
+    exit 1
+}
+
+[ "$#" -eq 0 ] || fail "takes no arguments"
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+    fail "not inside a Git worktree"
+cd "$root" || fail "cannot enter repository root"
+
+export GIT_NO_LAZY_FETCH=1
+export GIT_NO_REPLACE_OBJECTS=1
+
+pin="$(python3 -I -B -c '
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+
+metadata = Path(".github/repo-contract.json")
+
+def reject(message):
+    raise SystemExit(message)
+
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            reject("duplicate metadata key: " + key)
+        result[key] = value
+    return result
+
+if (not os.path.lexists(metadata) or metadata.is_symlink()
+        or metadata.parent.is_symlink() or not metadata.is_file()):
+    reject("repository metadata must be a regular non-symlink file")
+rows = subprocess.run(
+    ["git", "ls-files", "--stage", "-z", "--", str(metadata)],
+    check=True, capture_output=True,
+).stdout.split(b"\0")
+rows = [row for row in rows if row]
+pattern = rb"100(?:644|755) [0-9a-f]+ 0\t\.github/repo-contract\.json"
+if len(rows) != 1 or re.fullmatch(pattern, rows[0]) is None:
+    reject("repository metadata must be tracked and unconflicted")
+try:
+    data = json.loads(metadata.read_text(encoding="utf-8"), object_pairs_hook=unique)
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    reject("invalid repository metadata: " + str(error))
+if not isinstance(data, dict) or set(data) != {
+    "schema", "guide", "shared_ci", "dependencies"
+}:
+    reject("invalid repository metadata fields")
+if type(data["schema"]) is not int or data["schema"] != 1:
+    reject("unsupported repository metadata schema")
+if not isinstance(data["guide"], str) or not isinstance(data["dependencies"], dict):
+    reject("invalid repository metadata types")
+pin = data["shared_ci"]
+
+if not isinstance(pin, str) or re.fullmatch(r"[0-9a-f]{40}", pin) is None:
+    reject("shared_ci must be a full lowercase 40-char SHA")
+print(pin)
+')" || fail "cannot select provider"
+
+kind="$(git cat-file -t "$pin" 2>/dev/null)" ||
+    fail "selected provider object is unavailable locally"
+[ "$kind" = "commit" ] || fail "selected provider pin is not a commit"
+
+stage="$root/.audit-selected.$$"
+[ ! -e "$stage" ] || fail "materialization path already exists"
+umask 077
+mkdir "$stage" || fail "cannot create materialization path"
+cleanup() {
+    rm -rf "$stage"
+}
+trap cleanup EXIT HUP INT TERM
+
+tree="$stage/tree"
+archive="$stage/provider.tar"
+material="$stage/provider"
+mkdir "$material" || fail "cannot create provider directory"
+
+git ls-tree -r -z "$pin" -- scripts/context schemas/repo-contract-v1.json >"$tree" ||
+    fail "cannot inspect selected provider runtime"
+python3 -I -B -c '
+from pathlib import Path, PurePosixPath
+import sys
+
+expected = {}
+for row in Path(sys.argv[1]).read_bytes().split(b"\0"):
+    if not row:
+        continue
+    metadata, raw_path = row.split(b"\t", 1)
+    mode, kind, blob = metadata.split()
+    path = raw_path.decode("utf-8")
+    pure = PurePosixPath(path)
+    if (path in expected or kind != b"blob" or mode not in (b"100644", b"100755")
+            or pure.is_absolute() or ".." in pure.parts):
+        raise SystemExit("selected provider runtime contains an invalid entry")
+    expected[path] = (mode, blob)
+
+required = {
+    "scripts/context/audit",
+    "scripts/context/_context.py",
+    "scripts/context/_techcontext.py",
+    "scripts/context/_frontmatter.py",
+    "scripts/context/_contract.py",
+    "schemas/repo-contract-v1.json",
+}
+if not required.issubset(expected):
+    raise SystemExit("selected provider runtime is incomplete")
+' "$tree" ||
+    fail "selected provider runtime admission failed"
+git archive --format=tar "$pin" -- scripts/context schemas/repo-contract-v1.json >"$archive" ||
+    fail "cannot archive selected provider runtime"
+
+python3 -I -B -c '
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import stat
+import subprocess
+import sys
+import tarfile
+
+root = Path(sys.argv[1])
+tree_path = Path(sys.argv[2])
+archive_path = Path(sys.argv[3])
+material = Path(sys.argv[4])
+
+expected = {}
+for row in tree_path.read_bytes().split(b"\0"):
+    if not row:
+        continue
+    metadata, raw_path = row.split(b"\t", 1)
+    mode, kind, blob = metadata.split()
+    path = raw_path.decode("utf-8")
+    pure = PurePosixPath(path)
+    if (kind != b"blob" or mode not in (b"100644", b"100755")
+            or pure.is_absolute() or ".." in pure.parts):
+        raise SystemExit("selected provider runtime contains an invalid entry")
+    if path in expected:
+        raise SystemExit("selected provider runtime contains a duplicate entry")
+    expected[path] = (int(mode, 8), blob.decode("ascii"))
+
+required = {
+    "scripts/context/audit",
+    "scripts/context/_context.py",
+    "scripts/context/_techcontext.py",
+    "scripts/context/_frontmatter.py",
+    "scripts/context/_contract.py",
+    "schemas/repo-contract-v1.json",
+}
+if not required.issubset(expected):
+    raise SystemExit("selected provider runtime is incomplete")
+
+seen = set()
+with tarfile.open(archive_path, mode="r:") as archive:
+    for member in archive:
+        name = member.name.rstrip("/")
+        if member.isdir():
+            continue
+        if name not in expected or not member.isfile() or name in seen:
+            raise SystemExit("archive contains an invalid provider entry")
+        source = archive.extractfile(member)
+        if source is None:
+            raise SystemExit("archive provider entry is unreadable")
+        content = source.read()
+        mode, blob = expected[name]
+        actual = subprocess.run(
+            ["git", "hash-object", "--stdin"], cwd=root, input=content,
+            check=True, capture_output=True,
+        ).stdout.decode("ascii").strip()
+        if actual != blob:
+            raise SystemExit("archive provider blob differs from selected commit")
+        target = material.joinpath(*PurePosixPath(name).parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        target.chmod(stat.S_IMODE(mode))
+        seen.add(name)
+
+if seen != set(expected):
+    raise SystemExit("archive did not materialize the complete provider runtime")
+
+for path, (mode, blob) in expected.items():
+    target = material.joinpath(*PurePosixPath(path).parts)
+    info = target.lstat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != stat.S_IMODE(mode):
+        raise SystemExit("materialized provider type or mode differs from selected commit")
+    content = target.read_bytes()
+    actual = subprocess.run(
+        ["git", "hash-object", "--stdin"], cwd=root, input=content,
+        check=True, capture_output=True,
+    ).stdout.decode("ascii").strip()
+    if actual != blob:
+        raise SystemExit("materialized provider blob differs from selected commit")
+' "$root" "$tree" "$archive" "$material" ||
+    fail "selected provider runtime materialization is invalid"
+
+python3 -I -B "$material/scripts/context/_context.py" audit
+status=$?
+trap - EXIT HUP INT TERM
+cleanup
+exit "$status"
