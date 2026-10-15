@@ -35,46 +35,30 @@ def unique(pairs):
         result[key] = value
     return result
 
-if os.path.lexists(metadata):
-    if metadata.is_symlink() or metadata.parent.is_symlink() or not metadata.is_file():
-        reject("repository metadata must be a regular non-symlink file")
-    rows = subprocess.run(
-        ["git", "ls-files", "--stage", "-z", "--", str(metadata)],
-        check=True, capture_output=True,
-    ).stdout.split(b"\0")
-    rows = [row for row in rows if row]
-    pattern = rb"100(?:644|755) [0-9a-f]+ 0\t\.github/repo-contract\.json"
-    if len(rows) != 1 or re.fullmatch(pattern, rows[0]) is None:
-        reject("repository metadata must be tracked and unconflicted")
-    try:
-        data = json.loads(metadata.read_text(encoding="utf-8"), object_pairs_hook=unique)
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        reject("invalid repository metadata: " + str(error))
-    if not isinstance(data, dict) or set(data) != {
-        "schema", "guide", "shared_ci", "dependencies"
-    }:
-        reject("invalid repository metadata fields")
-    if type(data["schema"]) is not int or data["schema"] != 1:
-        reject("unsupported repository metadata schema")
-    if not isinstance(data["guide"], str) or not isinstance(data["dependencies"], dict):
-        reject("invalid repository metadata types")
-    pin = data["shared_ci"]
-else:
-    agents = Path("AGENTS.md")
-    if agents.is_symlink() or not agents.is_file():
-        reject("legacy AGENTS.md must be a regular non-symlink file")
-    try:
-        text = agents.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        reject("cannot read legacy AGENTS.md: " + str(error))
-    pins = set(re.findall(
-        r"(?:LeePepe/shared-ci@|github\.com/LeePepe/shared-ci/blob/)"
-        r"([0-9a-f]{40})/ai/agent-protocol\.md",
-        text,
-    ))
-    if len(pins) != 1:
-        reject("expected one legacy shared-ci pin or tracked repository metadata")
-    pin = pins.pop()
+if (not os.path.lexists(metadata) or metadata.is_symlink()
+        or metadata.parent.is_symlink() or not metadata.is_file()):
+    reject("repository metadata must be a regular non-symlink file")
+rows = subprocess.run(
+    ["git", "ls-files", "--stage", "-z", "--", str(metadata)],
+    check=True, capture_output=True,
+).stdout.split(b"\0")
+rows = [row for row in rows if row]
+pattern = rb"100(?:644|755) [0-9a-f]+ 0\t\.github/repo-contract\.json"
+if len(rows) != 1 or re.fullmatch(pattern, rows[0]) is None:
+    reject("repository metadata must be tracked and unconflicted")
+try:
+    data = json.loads(metadata.read_text(encoding="utf-8"), object_pairs_hook=unique)
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    reject("invalid repository metadata: " + str(error))
+if not isinstance(data, dict) or set(data) != {
+    "schema", "guide", "shared_ci", "dependencies"
+}:
+    reject("invalid repository metadata fields")
+if type(data["schema"]) is not int or data["schema"] != 1:
+    reject("unsupported repository metadata schema")
+if not isinstance(data["guide"], str) or not isinstance(data["dependencies"], dict):
+    reject("invalid repository metadata types")
+pin = data["shared_ci"]
 
 if not isinstance(pin, str) or re.fullmatch(r"[0-9a-f]{40}", pin) is None:
     reject("shared_ci must be a full lowercase 40-char SHA")
@@ -101,6 +85,35 @@ mkdir "$material" || fail "cannot create provider directory"
 
 git ls-tree -r -z "$pin" -- scripts/context schemas/repo-contract-v1.json >"$tree" ||
     fail "cannot inspect selected provider runtime"
+python3 -I -B -c '
+from pathlib import Path, PurePosixPath
+import sys
+
+expected = {}
+for row in Path(sys.argv[1]).read_bytes().split(b"\0"):
+    if not row:
+        continue
+    metadata, raw_path = row.split(b"\t", 1)
+    mode, kind, blob = metadata.split()
+    path = raw_path.decode("utf-8")
+    pure = PurePosixPath(path)
+    if (path in expected or kind != b"blob" or mode not in (b"100644", b"100755")
+            or pure.is_absolute() or ".." in pure.parts):
+        raise SystemExit("selected provider runtime contains an invalid entry")
+    expected[path] = (mode, blob)
+
+required = {
+    "scripts/context/audit",
+    "scripts/context/_context.py",
+    "scripts/context/_techcontext.py",
+    "scripts/context/_frontmatter.py",
+    "scripts/context/_contract.py",
+    "schemas/repo-contract-v1.json",
+}
+if not required.issubset(expected):
+    raise SystemExit("selected provider runtime is incomplete")
+' "$tree" ||
+    fail "selected provider runtime admission failed"
 git archive --format=tar "$pin" -- scripts/context schemas/repo-contract-v1.json >"$archive" ||
     fail "cannot archive selected provider runtime"
 
@@ -129,9 +142,18 @@ for row in tree_path.read_bytes().split(b"\0"):
     if (kind != b"blob" or mode not in (b"100644", b"100755")
             or pure.is_absolute() or ".." in pure.parts):
         raise SystemExit("selected provider runtime contains an invalid entry")
+    if path in expected:
+        raise SystemExit("selected provider runtime contains a duplicate entry")
     expected[path] = (int(mode, 8), blob.decode("ascii"))
 
-required = {"scripts/context/_context.py", "schemas/repo-contract-v1.json"}
+required = {
+    "scripts/context/audit",
+    "scripts/context/_context.py",
+    "scripts/context/_techcontext.py",
+    "scripts/context/_frontmatter.py",
+    "scripts/context/_contract.py",
+    "schemas/repo-contract-v1.json",
+}
 if not required.issubset(expected):
     raise SystemExit("selected provider runtime is incomplete")
 

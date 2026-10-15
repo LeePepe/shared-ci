@@ -12,7 +12,9 @@ python="${PYTHON:-python3}"
 step() { printf '\n[verify] %s\n' "$*"; }
 
 step "syntax"
-for entry in audit resolve layers field contexts run; do /bin/sh -n "scripts/context/$entry"; done
+for entry in audit audit-selected resolve layers field contexts run; do
+    /bin/sh -n "scripts/context/$entry"
+done
 for script in scripts/review/*.sh scripts/ruleset/apply.sh templates/scripts/verify templates/githooks/pre-push .githooks/pre-push; do
     bash -n "$script"
 done

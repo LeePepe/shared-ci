@@ -104,10 +104,10 @@ python3 -I -B scripts/context/_context.py audit
 python3 -I -B scripts/lint/workflows.py --root .
 ```
 
-`audit-selected` remains no-argument. It runs the complete selected Context
-runtime/schema against the live root from local full history, without
-fetch, cache, substitution or metadata fallback. Shallow/partial checkouts are
-uncertified; CI supplies full history. The separate caller
+`audit-selected` accepts only tracked regular metadata (no fallback). It
+preflights required runtime/schema blobs, preserves path/type/mode/blob while
+materializing all selected Context files and schema, and forbids
+fetch/cache/substitution. It requires full local history. The separate caller
 [metadata-aware template bootstrap](bootstrap-and-templates.md) validates metadata
 and clean exact-pin caches, preserves wrong/dirty caches and isolates provider
 Git state. This repo uses native full verification, not that bootstrap.
