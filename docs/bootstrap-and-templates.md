@@ -62,18 +62,24 @@ capacity can deadlock on macOS.
 
 The script requires Python 3.9+, Git and Bash. With metadata present, the
 bootstrap checks a tracked regular metadata envelope, schema integer 1, unique
-JSON keys, allowed metadata fields (including optional `repo_class` and `codeowners`),
-and a full lowercase SHA. Malformed/untracked/symlink metadata fails without falling
-back to AGENTS. The pinned provider's audit then checks the complete
+JSON keys, and the five mandatory fields `schema`, `repo_class`, `guide`,
+`shared_ci`, and `dependencies`; only `codeowners` is optional. It rejects
+missing or unknown fields before selecting or creating a provider, then
+unconditionally requires `repo_class` to be `product` or `shared` and validates
+an optional `codeowners` value as an object. Malformed/untracked/symlink metadata
+fails without falling back to AGENTS. The pinned provider's audit then checks the complete
 guide/dependency/workflow contract and derives the exact active CODEOWNERS pattern
-set (enforcing `repo_class` under providers supporting this contract) before caller
-gates run.
+set before caller gates run.
 
 Without metadata, use `AGENTS.legacy.md` in place of AGENTS.md, retaining the
 legacy headings and one full-SHA protocol pointer. The bootstrap supports this
 legacy mode; legacy consumers may keep their existing compatible provider.
-Do not combine directory-only AGENTS with an old provider or omit metadata.
-The tests exercise both modes with the historical baseline, not every old SHA.
+The immutable historical baseline accepts its explicit legacy four-key metadata
+through historical provider code only; candidate verifier/schema code is not
+copied into that checkout. The new generated verifier rejects that four-key
+shape. Do not combine directory-only AGENTS with an old provider or omit
+metadata. The tests exercise both modes with the historical baseline, not every
+old SHA.
 
 An absent default `.shared-ci` is initialized and fetched at the exact SHA.
 An existing provider path is **never** deleted, reset, fetched into or switched.

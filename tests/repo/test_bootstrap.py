@@ -18,11 +18,22 @@ class BootstrapTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="provider space ")
-        cls.provider = pathlib.Path(cls.temp.name) / "provider"
-        subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(REPO), str(cls.provider)],
+        cls.historical_provider = pathlib.Path(cls.temp.name) / "historical-provider"
+        subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(REPO),
+                        str(cls.historical_provider)],
                        env=environment(), check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(cls.provider), "checkout", "-q", "--detach", PROVIDER],
+        subprocess.run(["git", "-C", str(cls.historical_provider), "checkout", "-q",
+                        "--detach", PROVIDER],
                        env=environment(), check=True, capture_output=True)
+        cls.candidate_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO, env=environment(), text=True).strip()
+        cls.provider = pathlib.Path(cls.temp.name) / "candidate-provider"
+        subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(REPO),
+                        str(cls.provider)], env=environment(), check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(cls.provider), "checkout", "-q",
+                        "--detach", cls.candidate_sha], env=environment(), check=True,
+                       capture_output=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -40,7 +51,8 @@ class BootstrapTests(unittest.TestCase):
             "pull_request_template.md": ".github/pull_request_template.md",
         }
         for source, target in copies.items():
-            text = (REPO / "templates" / source).read_text().replace("<40-char-sha>", PROVIDER)
+            text = (REPO / "templates" / source).read_text().replace(
+                "<40-char-sha>", self.candidate_sha)
             self.repo.write(target, text.replace("@OWNER", "@owner").replace("<Repository>", "Synthetic"))
         self.repo.write(".gitignore", ".shared-ci/\n")
         root = (REPO / "templates/tech-context.root.md").read_text()
@@ -71,6 +83,133 @@ class BootstrapTests(unittest.TestCase):
         self.repo.write(".github/repo-contract.json", text)
         self.repo.add()
 
+    def generated_verifier(self, metadata=None, *, legacy_agents=False):
+        repo = ContractRepo()
+        self.addCleanup(repo.close)
+        copies = {
+            "AGENTS.md": "AGENTS.md", "CLAUDE.md": "CLAUDE.md",
+            "CODEOWNERS": ".github/CODEOWNERS",
+            "repository-guide.md": "docs/repository-guide.md",
+            "development.md": "docs/development.md",
+            "ci.yml": ".github/workflows/ci.yml",
+            "review.yml": ".github/workflows/review.yml",
+            "scripts/verify": "scripts/verify",
+            "githooks/pre-push": ".githooks/pre-push",
+            "pull_request_template.md": ".github/pull_request_template.md",
+        }
+        for source, target in copies.items():
+            text = (REPO / "templates" / source).read_text(encoding="utf-8")
+            text = text.replace("<40-char-sha>", self.candidate_sha)
+            repo.write(target, text.replace("@OWNER", "@owner")
+                       .replace("<Repository>", "Synthetic"))
+        if legacy_agents:
+            text = (REPO / "templates/AGENTS.legacy.md").read_text(encoding="utf-8")
+            repo.write("AGENTS.md", text.replace("<40-char-sha>", self.candidate_sha))
+            codeowners = (repo.root / ".github/CODEOWNERS").read_text()
+            repo.write(".github/CODEOWNERS", codeowners.replace(
+                "/docs/repository-guide.md  @owner\n", ""))
+        else:
+            repo.write(".github/repo-contract.json", json.dumps(metadata), exact=True)
+        repo.write(".gitignore", ".shared-ci/\n")
+        root = (REPO / "templates/tech-context.root.md").read_text(encoding="utf-8")
+        repo.write("docs/architecture/tech-context.md",
+                   root.replace("Packages/Core", "src/core")
+                   .replace("Packages/App", "src/app"))
+        for layer, dependency in (("Core", "[]"), ("App", "[Core]")):
+            leaf = (REPO / "templates/tech-context.leaf.md").read_text(encoding="utf-8")
+            leaf = leaf.replace("Core", layer).replace(
+                "Packages/" + layer, "src/" + layer.lower())
+            leaf = leaf.replace("depends_on: []", "depends_on: " + dependency)
+            start, end = leaf.index("gate:"), leaf.index("red_lines:")
+            leaf = (leaf[:start]
+                    + f'gate: {{test: "python3 -c \\\"print(\'gate-{layer}\')\\\""}}\n'
+                    + leaf[end:])
+            repo.write(f"src/{layer.lower()}/tech-context.md", leaf)
+        repo.add()
+        env = dict(repo.env, SHARED_CI=str(self.provider))
+        result = run_bounded(["bash", "scripts/verify", "--all"], cwd=repo.root,
+                             env=env, timeout=120)
+        return repo, result
+
+    def candidate_metadata(self, **updates):
+        metadata = {
+            "schema": 1,
+            "repo_class": "product",
+            "guide": "docs/repository-guide.md",
+            "shared_ci": self.candidate_sha,
+            "dependencies": {},
+        }
+        metadata.update(updates)
+        return metadata
+
+    def assert_pre_provider_failure(self, metadata, detail):
+        repo, result = self.generated_verifier(metadata)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(detail, result.stderr)
+        self.assertFalse((repo.root / ".shared-ci").exists())
+        self.assertNotIn("gate-", result.stdout + result.stderr)
+
+    def test_generated_verifier_accepts_required_envelope_without_codeowners(self):
+        _, result = self.generated_verifier(self.candidate_metadata())
+        self.assert_pass(result)
+
+    def test_generated_verifier_accepts_object_codeowners(self):
+        _, result = self.generated_verifier(self.candidate_metadata(codeowners={}))
+        self.assert_pass(result)
+
+    def test_generated_verifier_rejects_legacy_four_key_envelope_before_provider(self):
+        metadata = self.candidate_metadata()
+        del metadata["repo_class"]
+        self.assert_pre_provider_failure(metadata, "invalid repository metadata fields")
+
+    def test_generated_verifier_rejects_unknown_metadata_key(self):
+        self.assert_pre_provider_failure(
+            self.candidate_metadata(unknown=True), "invalid repository metadata fields")
+
+    def test_generated_verifier_rejects_non_object_codeowners(self):
+        self.assert_pre_provider_failure(
+            self.candidate_metadata(codeowners=[]),
+            "invalid repository metadata codeowners")
+
+    def test_generated_verifier_rejects_non_string_repo_class(self):
+        self.assert_pre_provider_failure(
+            self.candidate_metadata(repo_class=1),
+            "invalid repository metadata repo_class")
+
+    def test_generated_verifier_rejects_empty_repo_class(self):
+        self.assert_pre_provider_failure(
+            self.candidate_metadata(repo_class=""),
+            "invalid repository metadata repo_class")
+
+    def test_generated_verifier_rejects_unknown_repo_class(self):
+        self.assert_pre_provider_failure(
+            self.candidate_metadata(repo_class="service"),
+            "invalid repository metadata repo_class")
+
+    def test_historical_provider_accepts_legacy_envelope_without_candidate_code(self):
+        metadata = {
+            "schema": 1,
+            "guide": "docs/repository-guide.md",
+            "shared_ci": PROVIDER,
+            "dependencies": {},
+        }
+        for path in ("AGENTS.md", ".github/workflows/ci.yml",
+                     ".github/workflows/review.yml"):
+            text = (self.repo.root / path).read_text(encoding="utf-8")
+            self.repo.write(path, text.replace(self.candidate_sha, PROVIDER))
+        self.repo.write(".github/repo-contract.json", json.dumps(metadata), exact=True)
+        self.repo.add()
+        result = run_bounded(
+            ["python3", "-I", "-B",
+             str(self.historical_provider / "scripts/context/_context.py"),
+             "audit"],
+            cwd=self.repo.root, env=self.repo.env, timeout=120)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_generated_verifier_legacy_agents_mode(self):
+        _, result = self.generated_verifier(legacy_agents=True)
+        self.assert_pass(result)
+
     def test_actual_kit_metadata_all_and_selected(self):
         self.assert_pass(self.verify("--all"))
         result = self.verify("--selected", CI_SELECTION_FULL="false", CI_SELECTED_LAYERS="App")
@@ -80,20 +219,24 @@ class BootstrapTests(unittest.TestCase):
     def test_legacy_mode(self):
         self.repo.remove(".github/repo-contract.json")
         text = (REPO / "templates/AGENTS.legacy.md").read_text()
-        self.repo.write("AGENTS.md", text.replace("<40-char-sha>", PROVIDER))
+        self.repo.write("AGENTS.md", text.replace("<40-char-sha>", self.candidate_sha))
+        codeowners = (self.repo.root / ".github/CODEOWNERS").read_text()
+        self.repo.write(".github/CODEOWNERS", codeowners.replace(
+            "/docs/repository-guide.md  @owner\n", ""))
         self.repo.add()
         self.assert_pass(self.verify("--all"))
 
     def test_invalid_metadata_never_falls_back(self):
-        self.repo.write("AGENTS.md", AGENTS.replace(PIN, PROVIDER))
+        self.repo.write("AGENTS.md", AGENTS.replace(PIN, self.candidate_sha))
         baseline = json.loads((self.repo.root / ".github/repo-contract.json").read_text())
         invalid = ["{", "[]", "null"]
         for key, value in (("schema", True), ("schema", 2), ("shared_ci", "main"),
-                           ("shared_ci", PROVIDER.upper()), ("shared_ci", "a" * 39),
+                           ("shared_ci", self.candidate_sha.upper()),
+                           ("shared_ci", "a" * 39),
                            ("shared_ci", "a" * 41), ("shared_ci", 1)):
             invalid.append(json.dumps(dict(baseline, **{key: value})))
         invalid.append(json.dumps(baseline).replace('"shared_ci":',
-                       '"shared_ci": "' + PROVIDER + '", "shared_ci":'))
+                       '"shared_ci": "' + self.candidate_sha + '", "shared_ci":'))
         for text in invalid:
             with self.subTest(text=text):
                 self.metadata(text)
@@ -184,7 +327,8 @@ class BootstrapTests(unittest.TestCase):
     def test_clean_linked_worktree_is_supported(self):
         with tempfile.TemporaryDirectory() as temp:
             worktree = str(pathlib.Path(temp) / "linked provider")
-            subprocess.run(["git", "-C", str(self.provider), "worktree", "add", "-q", "--detach", worktree, PROVIDER],
+            subprocess.run(["git", "-C", str(self.provider), "worktree", "add",
+                            "-q", "--detach", worktree, self.candidate_sha],
                            env=self.repo.env, check=True, capture_output=True)
             try:
                 self.assert_pass(self.verify("--all", SHARED_CI=worktree))
@@ -236,20 +380,22 @@ class BootstrapTests(unittest.TestCase):
                 "repo-contract.md#repository-development-contract")
 
     def test_relocated_protocol_links_resolve_at_selected_provider(self):
-        guide = (self.repo.root / "docs/repository-guide.md").read_text()
+        guide = (REPO / "templates/repository-guide.md").read_text().replace(
+            "<40-char-sha>", PROVIDER)
         snapshot = guide.split("## Complete shared protocol snapshot\n", 1)[1]
         links = re.findall(r"\]\(([^)]+)\)", snapshot)
         # The selected protocol has exactly one Markdown link. No unresolved
         # relative links (nor floating provider versions) may survive relocation.
         self.assertEqual([self.contract_url()], links)
-        contract = self.provider / "ai/repo-contract.md"
+        contract = self.historical_provider / "ai/repo-contract.md"
         self.assertTrue(contract.is_file())
         self.assertIn("\n## Repository development contract\n", contract.read_text())
         self.assertFalse((self.repo.root / "docs/repo-contract.md").exists())
 
     def test_complete_protected_reviewer_rules(self):
-        guide = (self.repo.root / "docs/repository-guide.md").read_text()
-        protocol = (self.provider / "ai/agent-protocol.md").read_text()
+        guide = (REPO / "templates/repository-guide.md").read_text().replace(
+            "<40-char-sha>", PROVIDER)
+        protocol = (self.historical_provider / "ai/agent-protocol.md").read_text()
         # Only relocate the provider-relative contract link; every policy byte
         # outside that single URL must remain present in the generated guide.
         relative = "](repo-contract.md#repository-development-contract)"
@@ -258,8 +404,8 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn(protocol, guide)
         self.assertLess(len(guide.encode()), 24000)
         result = subprocess.run(["python3", "-I", "-B",
-                                 str(self.provider / "scripts/review/render_prompt.py"),
-                                 str(self.provider / "scripts/review/review-prompt.md")],
+                                 str(self.historical_provider / "scripts/review/render_prompt.py"),
+                                 str(self.historical_provider / "scripts/review/review-prompt.md")],
                                 env=dict(self.repo.env, REPO_RULES=guide, ARCHITECTURE="Core -> App",
                                          CHANGED="src/core/model.py", DIFF="synthetic diff", TRUNCATED=""),
                                 capture_output=True, text=True, check=True)
