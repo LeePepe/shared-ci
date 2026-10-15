@@ -88,13 +88,13 @@ scripts/verify
 scripts/verify --all                 # same full run
 ```
 
-Native verification runs full suites, never narrowed by layer: shell/Python/JSON
-syntax, the actual layer map and repository contract, workflow-lint, Context,
-repo, Lint, Review, Ruleset, Select, Quality (including test integrity and commit
-identity) and Policy tests, then committed-tree whitespace. Before committing,
-also run `git diff --check` and `git diff --cached --check`. Stage new
-metadata/documents for the tracked-file audit; staging does not prove equality
-between worktree content and a commit.
+Native verification runs full suites: shell/Python/JSON syntax, layer
+map and selected-provider live-root contract, workflow-lint, Context,
+repo, Lint, Review, Ruleset, Select, Quality
+(including test integrity and commit identity) and Policy tests, then
+committed-tree whitespace. Before committing, also run `git diff --check` and
+`git diff --cached --check`. Stage new metadata/documents for the tracked-file
+audit; staging does not prove equality between worktree content and a commit.
 
 For a focused iteration, use the corresponding suite from the entry, for example:
 
@@ -104,9 +104,10 @@ python3 -I -B scripts/context/_context.py audit
 python3 -I -B scripts/lint/workflows.py --root .
 ```
 
-Selected-provider tests require local historical Git objects. CI fetches full
-history; tests neither fetch missing objects nor substitute candidate code.
-Shallow/partial checkouts are not certified. The separate caller
+`audit-selected` remains no-argument. It runs the complete selected Context
+runtime/schema against the live root from local full history, without
+fetch, cache, substitution or metadata fallback. Shallow/partial checkouts are
+uncertified; CI supplies full history. The separate caller
 [metadata-aware template bootstrap](bootstrap-and-templates.md) validates metadata
 and clean exact-pin caches, preserves wrong/dirty caches and isolates provider
 Git state. This repo uses native full verification, not that bootstrap.

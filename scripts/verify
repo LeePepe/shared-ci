@@ -19,8 +19,8 @@ done
 "$python" -I -B -c 'import ast,sys; [ast.parse(open(p).read(), p) for p in sys.argv[1:]]' $(git ls-files '*.py')
 "$python" -I -B -c 'import json,sys; [json.load(open(p)) for p in sys.argv[1:]]' $(git ls-files '*.json')
 
-step "layer map + repository contract (self-applied)"
-"$python" -I -B scripts/context/_context.py audit
+step "layer map + repository contract (selected provider, live root)"
+scripts/context/audit-selected
 
 step "workflow-lint (self-applied)"
 "$python" -I -B scripts/lint/workflows.py --root .
