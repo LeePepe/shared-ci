@@ -25,14 +25,17 @@ Copy the following from `templates/`, retaining executable bits on both scripts:
 Before verification, the pre-push hook refuses non-deletion pushes to `main` and
 the remote HEAD default branch (falling back to `main`); server rules remain the backstop.
 
-Replace every `<40-char-sha>` with the same released target provider SHA (or the
-historical baseline SHA when retaining legacy metadata) and `@OWNER` with the
-actual review owner. Choose real repository layer responsibilities, ownership
-(including tests), dependencies and gate commands; the Swift examples are not
-a mandatory architecture. Preserve an existing `docs/development.md` and its
-goal-based PR kinds rather than replacing it mechanically. Keep `.shared-ci/`
-ignored. Stage the generated files so that the audit can validate executable
-bits and tracked regular routes.
+Replace every `<40-char-sha>` with the same released target provider SHA that
+contains this five-key metadata contract, and replace `@OWNER` with the actual
+review owner. The Generate together route does not upgrade a legacy caller by
+combining current templates with a historical provider: an unchanged legacy
+caller retains its compatible historical metadata, verifier, and configuration
+as one coordinated baseline. Choose real repository layer responsibilities,
+ownership (including tests), dependencies and gate commands; the Swift examples
+are not a mandatory architecture. Preserve an existing `docs/development.md`
+and its goal-based PR kinds rather than replacing it mechanically. Keep
+`.shared-ci/` ignored. Stage the generated files so that the audit can validate
+executable bits and tracked regular routes.
 
 The protected repository guide includes the complete shared protocol snapshot
 and a review-relevant extract of the development guide. Adapt that extract to

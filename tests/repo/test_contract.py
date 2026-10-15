@@ -301,10 +301,13 @@ class ContractNegativeTests(unittest.TestCase):
     def test_metadata_shared_match_all_pattern_rejected(self):
         guide = "docs/repository-guide.md"
         self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
-        self.repo.write(".github/repo-contract.json", json.dumps({
-            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
-            "dependencies": {}, "codeowners": {"cross_repo_contract": ["/*"]}}))
-        self.assertFinding("contract_agents", "malformed or match-all pattern")
+        for pattern in ("/*", "/*****", "/?*", "/**/*", "/**/*****"):
+            with self.subTest(pattern=pattern):
+                self.repo.write(".github/repo-contract.json", json.dumps({
+                    "schema": 1, "repo_class": "shared", "guide": guide,
+                    "shared_ci": PIN, "dependencies": {},
+                    "codeowners": {"cross_repo_contract": [pattern]}}))
+                self.assertFinding("contract_agents", "malformed or match-all pattern")
 
     def test_metadata_shared_unknown_category_rejected(self):
         guide = "docs/repository-guide.md"

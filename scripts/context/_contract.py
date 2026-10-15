@@ -257,7 +257,7 @@ def _metadata(report: _Report, root: pathlib.Path, files: dict, contract: dict) 
                             raise ValueError(f"duplicate pattern across categories: {pattern!r}")
                         if any(c.isspace() or c == "@" for c in pattern):
                             raise ValueError(f"owner token embedded in pattern: {pattern!r}")
-                        if pattern in ("/", "/*", "/**", "*", "**"):
+                        if _match_all_owner_pattern(pattern):
                             raise ValueError(f"malformed or match-all pattern: {pattern!r}")
 
                         # Validate path normalization: no repeated slashes, no dot/parent components
@@ -548,6 +548,22 @@ def _owner_pattern(pattern: str, path: str) -> bool:
             index += 1
     regex = ("^" if anchored else "^(?:.*/)?") + regex + ("/.*$" if pattern.endswith("/") else "(?:/.*)?$")
     return re.match(regex, path) is not None
+
+
+def _match_all_owner_pattern(pattern: str) -> bool:
+    if pattern in ("/", "*", "**") or pattern.endswith("/"):
+        return pattern == "/"
+    components = pattern.strip("/").split("/")
+    while components and components[0] == "**":
+        components.pop(0)
+    if not components:
+        return True
+    if len(components) != 1:
+        return False
+    component = components[0]
+    return ("*" in component
+            and set(component).issubset({"*", "?"})
+            and component.count("?") <= 1)
 
 
 def _valid_owner(owner: str) -> bool:
