@@ -19,7 +19,7 @@ and `kind: "contract_<item>"`.
 | 2 `agent_files` | `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.cursorrules` only say "read AGENTS.md first", plus 1–2 notes specific to that tool | guidance | audit checks that each file refers to AGENTS.md, has at most 12 non-empty lines, does not repeat the shared-ci pin, and does not repeat any required-check name listed in AGENTS.md | whether the notes contradict AGENTS.md |
 | 3 `ci` | `.github/workflows/ci.yml` calls `LeePepe/shared-ci/.github/workflows/quality.yml@<40-char SHA>` and passes this repository's commands | enforced | audit checks that ci.yml calls quality.yml, that every pin is a full SHA, and that all pins are the same SHA. workflow-lint also rejects tag and branch refs and self-hosted jobs without a fork guard | — |
 | 4 `verify` | `.githooks/pre-push` (or pre-commit) and CI call the same executable `scripts/verify`. With `changed-only: true` CI calls `scripts/verify --selected`, which runs the layers the `select` job chose, or every layer on a full run | enforced | audit checks that `scripts/verify` is tracked with mode 100755, that the hook exists, is executable and calls it, and that ci.yml calls it | whether `core.hooksPath` is set locally (it cannot be seen in the tree) |
-| 5 `ruleset` | The default-branch ruleset is code: [`templates/ruleset.json`](../templates/ruleset.json). It blocks deletion and non-fast-forward, requires a PR, requires `quality / aggregate` and `codex-review-target / codex-review` plus caller extras, requires code-owner review, allows no bypass actors, and uses strict=false unless the caller opts in. CODEOWNERS covers the important paths | enforced | audit checks that CODEOWNERS exists and covers `/.github/` and `/AGENTS.md`. [`scripts/ruleset/plan.py`](../scripts/ruleset/plan.py) computes old → new from the API dumps and keeps every existing required check unless `--map OLD=NEW` says otherwise. [`scripts/ruleset/apply.sh`](../scripts/ruleset/apply.sh) is a dry run by default; with `--apply` it applies the change and reads it back | the ruleset step itself: dry run, then Owner approval, then `--apply`, then readback (it needs admin API access) |
+| 5 `ruleset` | The default-branch ruleset is code: [`templates/ruleset.json`](../templates/ruleset.json). It blocks deletion and non-fast-forward, requires a PR, requires `quality / aggregate` and `codex-review-target / codex-review` plus caller extras, requires code-owner review, allows no bypass actors, and uses strict=false unless the caller opts in. CODEOWNERS covers the derived pattern set | enforced | audit checks that CODEOWNERS exists and covers the derived active pattern set (contract minimum `/.github/` and `/AGENTS.md`; plus `/<guide>` when metadata exists; plus declared shared categories for `repo_class=shared`). Product repositories may retain additional protective patterns; shared repositories must match their category-derived set exactly. Missing or duplicate active patterns, and extra shared-repository patterns, produce actionable `contract_ruleset` findings. [`scripts/ruleset/plan.py`](../scripts/ruleset/plan.py) computes old → new from the API dumps and keeps every existing required check unless `--map OLD=NEW` says otherwise. [`scripts/ruleset/apply.sh`](../scripts/ruleset/apply.sh) is a dry run by default; with `--apply` it applies the change and reads it back | the ruleset step itself: dry run, then Owner approval, then `--apply`, then readback (it needs admin API access) |
 | 6 `pr_template` | `.github/pull_request_template.md` with the sections `Existing behaviour`, `Intent`, `Compatibility`, `Removed or weakened tests or policy`, `Test evidence` | guidance + enforced | audit checks that the template has every section. The `quality / aggregate` check fails a PR whose body is missing a section, leaves one empty or placeholder-only, or names a tested SHA other than the head | review routing under the agent protocol; ordinary test-code changes do not themselves require Owner approval |
 | 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
 | 8 `identity` | No personal account names, credential-profile paths or local home paths | red line | audit scans every tracked text file for the `forbidden_patterns` | account names in prose that the patterns do not cover |
@@ -35,17 +35,26 @@ and dependency checks in the table above. Invalid or untracked metadata fails
 closed; it never falls back to a valid legacy AGENTS file. The eight report
 items and finding schema remain unchanged.
 
-The [metadata schema](../schemas/repo-metadata-v1.json) requires exactly `schema`,
-`guide`, `shared_ci` and `dependencies`. `schema` is integer `1`; `shared_ci` is
-one lowercase full 40-character provider SHA matching every workflow pin.
+The [metadata schema](../schemas/repo-metadata-v1.json) defines `schema`,
+`repo_class`, `guide`, `shared_ci`, `dependencies` and optional `codeowners`.
+`schema` is integer `1`; `shared_ci` is one lowercase full 40-character provider SHA
+matching every workflow pin. `repo_class` is either `"product"` (contract minimum only)
+or `"shared"` (contract minimum plus declared category paths).
 `guide` names a tracked readable repository-relative document containing
 `Protocol`, `Verify`, `Required checks`, `Red lines` and `Delivery` sections.
 `dependencies` maps library names to exactly `version` and `ai`: an exact semver
 (optional `v` prefix, ASCII identifiers, prerelease and build metadata; numeric
 core/prerelease identifiers have no leading zeros) or lowercase full SHA, and an
 HTTPS link containing `/<version>/ai/`. Shared-ci has only
-one authority, `shared_ci`, and cannot also appear in `dependencies`. Supported
-lockfiles retain their parity checks; an unreadable tracked lockfile fails.
+one authority, `shared_ci`, and cannot also appear in `dependencies`.
+`codeowners` maps shared-repository paths under four fixed categories:
+`cross_repo_contract`, `gate_review`, `release_signing`, and `privacy_credentials`.
+Product repositories cannot declare category paths. In shared repositories, category
+patterns must be normalized, unique, root-anchored paths supported by the parser;
+duplicate patterns across categories, unknown categories, owner tokens embedded
+in paths, universal minimum patterns repeated as categories, and match-all or
+unsupported wildcard patterns fail closed. Supported lockfiles retain their
+parity checks; an unreadable tracked lockfile fails.
 
 In this mode, AGENTS contains headings, blank lines and conditional Markdown
 links only, at most 150 lines, with a local route to the declared guide. Each
@@ -87,9 +96,18 @@ heading attributes and renderer extensions are unsupported; use a standalone
 explicit anchor instead. Other file types cannot satisfy fragments. HTTPS
 pointers are not fetched or remotely fragment-validated.
 
-CODEOWNERS must retain the existing required patterns and an exact `/<guide>`
-pattern. The highest-priority tracked CODEOWNERS file is authoritative, even
-when empty. Effective last-match ownership of AGENTS, metadata and the guide is
+CODEOWNERS active pattern set is derived from `repo_class` and metadata:
+- Universal minimum: `/.github/` and `/AGENTS.md`
+- Metadata callers: additionally requires `/<guide>`
+- Shared callers (`repo_class=shared`): additionally requires the union of declared category mappings.
+Metadata-absent callers derive the product minimum (`/.github/` and `/AGENTS.md`).
+The highest-priority tracked CODEOWNERS file is authoritative, even when empty.
+Product callers must include the derived minimum and may retain additional
+protective patterns. Shared callers must equal the category-derived expected set
+exactly. Missing or duplicate active patterns, and extra shared-caller patterns,
+produce actionable `contract_ruleset` findings naming the offending pattern(s).
+Every rule must still have at least one valid owner.
+Effective last-match ownership of AGENTS, metadata and the guide is
 checked, so later ownerless overrides fail. Unsupported ownership patterns fail
 closed rather than claiming complete GitHub pattern support. Owner tokens must
 be supported `@user`, `@organization/team` or email forms; malformed tokens fail
@@ -101,12 +119,16 @@ live server protection still needs independent readback.
 ### Adoption boundary
 
 This support does not migrate templates, bootstrap scripts, caller pins or this
-repository's own AGENTS automatically. Adopt only after the provider change is
-reviewed and available at a fixed SHA. A separate reviewed consumer migration
-must coordinate the workflow pin, metadata, guide/index, metadata-aware bootstrap,
-review `rules-file` and guide CODEOWNERS, preserving required checks. Old fixed
-providers do not acquire metadata support retroactively. A versioned protocol
-route may remain for compatibility, but its SHA must match metadata.
+repository's own AGENTS automatically. Release-before-adoption is strictly required:
+only after the provider PR merges with required checks and Owner approval, workflow 04
+publishes an immutable shared-ci version/revision with matching `ai/` contract artifacts
+and verifies retrievability (AC-10). Adoption begins with shared-ci self-adoption
+canary in a separate reviewed PR (AC-11), followed by consumer adoption.
+A separate reviewed consumer migration must coordinate the workflow pin, metadata,
+guide/index, metadata-aware bootstrap, review `rules-file` and guide CODEOWNERS,
+preserving required checks. Old fixed providers do not acquire metadata support
+retroactively. A versioned protocol route may remain for compatibility, but its
+SHA must match metadata.
 
 Rollback reverts the consumer's coordinated references/configuration to its
 recorded compatible baseline; it does not rewrite provider tags or waive gates.

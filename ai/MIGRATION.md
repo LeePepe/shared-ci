@@ -19,6 +19,10 @@ own published provider and migration evidence, not a speculative configuration.
 
 ## Execute one consumer upgrade
 
+Release-before-adoption is required: a consumer upgrade or self-adoption canary (AC-11)
+is never attempted before the provider release is published immutably with retrievable
+matching `ai/` artifacts (AC-10).
+
 For task-plan ownership and version-matched references, follow
 [Task plans and versioned guides](repo-contract.md#task-plans-and-versioned-guides)
 when preparing an upgrade under the repository's existing process.
@@ -28,9 +32,13 @@ when preparing an upgrade under the repository's existing process.
 2. Compare target contracts, schema semantics, outputs and failure behavior.
    Account for each caller-local override; reject unsupported adaptations.
 3. In a dedicated consumer PR update all workflow pins and protocol/dependency
-   pointers to one full target SHA, plus necessary adaptations. Preserve
-   business facts and required checks. Dependency-pin and gate/policy changes
-   retain Owner review under the [agent protocol](agent-protocol.md).
+   pointers to one full released target SHA, plus necessary adaptations: update metadata
+   envelope (`repo_class` and optional category mappings) and CODEOWNERS to cover the
+   derived active pattern set (contract minimum plus guide, plus exact shared category
+   mappings if applicable). Preserve additional product-repository protections, business
+   facts and required checks. Dependency-pin,
+   metadata-class and gate/policy changes retain Owner review under the
+   [agent protocol](agent-protocol.md).
 4. Run the consumer verification entry, positive behavior and applicable
    negatives: wrong/mixed pin, missing required artifact, failing selected lane
    and stale candidate evidence. Record provider/consumer SHAs and actual

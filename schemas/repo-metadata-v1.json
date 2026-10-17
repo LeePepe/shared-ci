@@ -3,9 +3,14 @@
   "title": "Index-only repository metadata",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "guide", "shared_ci", "dependencies"],
+  "required": ["schema", "repo_class", "guide", "shared_ci", "dependencies"],
   "properties": {
     "schema": {"const": 1},
+    "repo_class": {
+      "type": "string",
+      "enum": ["product", "shared"],
+      "description": "Repository class: product (contract minimum only) or shared (minimum plus category-mapped paths)."
+    },
     "guide": {"type": "string", "description": "Tracked repository-relative guide; no parent traversal or symlink."},
     "shared_ci": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "dependencies": {
@@ -20,6 +25,53 @@
           "ai": {"type": "string", "pattern": "^https://", "description": "Version-specific /<version>/ai/ URL."}
         }
       }
+    },
+    "codeowners": {
+      "type": "object",
+      "description": "Category mapping for CODEOWNERS paths in shared repositories.",
+      "additionalProperties": false,
+      "properties": {
+        "cross_repo_contract": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^/"},
+          "uniqueItems": true
+        },
+        "gate_review": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^/"},
+          "uniqueItems": true
+        },
+        "release_signing": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^/"},
+          "uniqueItems": true
+        },
+        "privacy_credentials": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^/"},
+          "uniqueItems": true
+        }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"repo_class": {"const": "product"}}
+      },
+      "then": {
+        "properties": {
+          "codeowners": {
+            "type": "object",
+            "properties": {
+              "cross_repo_contract": {"maxItems": 0},
+              "gate_review": {"maxItems": 0},
+              "release_signing": {"maxItems": 0},
+              "privacy_credentials": {"maxItems": 0}
+            }
+          }
+        }
+      }
+    }
+  ]
 }

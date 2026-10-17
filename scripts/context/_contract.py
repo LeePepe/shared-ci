@@ -173,7 +173,7 @@ def _local_path(value: Any) -> bool:
         part not in ("", ".", "..") for part in value.split("/"))
 
 
-def _metadata(report: _Report, root: pathlib.Path, files: dict) -> dict | None:
+def _metadata(report: _Report, root: pathlib.Path, files: dict, contract: dict) -> dict | None:
     if (METADATA not in files and not (root / METADATA).exists()
             and not (root / METADATA).is_symlink() and not (root / ".github").is_symlink()):
         return None  # Legacy v1 callers retain their pinned AGENTS contract.
@@ -188,8 +188,13 @@ def _metadata(report: _Report, root: pathlib.Path, files: dict) -> dict | None:
                 result[key] = value
             return result
         data = json.loads(_tracked_text(root, METADATA, files) or "", object_pairs_hook=unique)
-        if not isinstance(data, dict) or set(data) != {"schema", "guide", "shared_ci", "dependencies"}:
-            raise ValueError("expected schema, guide, shared_ci and dependencies")
+        if not isinstance(data, dict):
+            raise ValueError("metadata must be an object")
+
+        required_keys = {"schema", "repo_class", "guide", "shared_ci", "dependencies"}
+        allowed_keys = {"schema", "repo_class", "guide", "shared_ci", "dependencies", "codeowners"}
+        if not required_keys.issubset(set(data)) or not set(data).issubset(allowed_keys):
+            raise ValueError("expected schema, repo_class, guide, shared_ci, dependencies (and optional codeowners)")
         if type(data["schema"]) is not int or data["schema"] != 1:
             raise ValueError("metadata schema must be 1")
         if not isinstance(data["shared_ci"], str) or not SHA.fullmatch(data["shared_ci"]):
@@ -211,6 +216,66 @@ def _metadata(report: _Report, root: pathlib.Path, files: dict) -> dict | None:
             if not isinstance(url, str) or not url.startswith("https://") or not re.search(
                     r"/" + re.escape(version) + r"/ai/", url):
                 raise ValueError(f"{name}: ai must point to that version's ai/ docs")
+
+        if "codeowners_classes" not in contract or "codeowners_categories" not in contract or "codeowners_required" not in contract:
+            raise ValueError("contract schema missing required codeowners parameters")
+
+        valid_classes = set(contract["codeowners_classes"])
+        valid_categories = set(contract["codeowners_categories"])
+        universal_min = set(contract["codeowners_required"])
+
+        repo_class = data["repo_class"]
+        if not isinstance(repo_class, str) or repo_class not in valid_classes:
+            raise ValueError(f"invalid repo_class: {repo_class!r}")
+
+        if "codeowners" in data:
+            codeowners = data["codeowners"]
+            if not isinstance(codeowners, dict):
+                raise ValueError("codeowners must be an object")
+            for cat, patterns in codeowners.items():
+                if cat not in valid_categories:
+                    raise ValueError(f"unknown codeowners category: {cat!r}")
+                if not isinstance(patterns, list):
+                    raise ValueError(f"codeowners.{cat} must be a list of patterns")
+
+            if repo_class == "product":
+                if any(bool(p) for p in codeowners.values()):
+                    raise ValueError("product repositories cannot declare category paths")
+
+            if repo_class == "shared":
+                seen_patterns: set[str] = set()
+                guide_pattern = "/" + data["guide"]
+                for cat, patterns in codeowners.items():
+                    for pattern in patterns:
+                        if not isinstance(pattern, str) or not pattern:
+                            raise ValueError(f"category pattern must be a non-empty string in {cat}")
+                        if not pattern.startswith("/"):
+                            raise ValueError(f"pattern must be root-anchored (start with /): {pattern!r}")
+                        if pattern in universal_min or pattern == guide_pattern:
+                            raise ValueError(f"universal minimum cannot be repeated as a category pattern: {pattern!r}")
+                        if pattern in seen_patterns:
+                            raise ValueError(f"duplicate pattern across categories: {pattern!r}")
+                        if any(c.isspace() or c == "@" for c in pattern):
+                            raise ValueError(f"owner token embedded in pattern: {pattern!r}")
+                        if _match_all_owner_pattern(pattern):
+                            raise ValueError(f"malformed or match-all pattern: {pattern!r}")
+
+                        # Validate path normalization: no repeated slashes, no dot/parent components
+                        if "//" in pattern:
+                            raise ValueError(f"unnormalized pattern with repeated slashes or empty components: {pattern!r}")
+                        parts = pattern.split("/")
+                        for p in parts[1:]:
+                            if p in (".", ".."):
+                                raise ValueError(f"unnormalized pattern with dot or parent components: {pattern!r}")
+                        if any(p == "" for p in parts[1:-1]):
+                            raise ValueError(f"unnormalized pattern with empty component: {pattern!r}")
+
+                        try:
+                            _owner_pattern(pattern, "test")
+                        except ValueError as err:
+                            raise ValueError(f"unsupported pattern {pattern!r}: {err}")
+                        seen_patterns.add(pattern)
+
         return data
     except (ValueError, TypeError) as error:
         report.add("agents", METADATA, f"invalid repository metadata: {error}")
@@ -485,6 +550,22 @@ def _owner_pattern(pattern: str, path: str) -> bool:
     return re.match(regex, path) is not None
 
 
+def _match_all_owner_pattern(pattern: str) -> bool:
+    if pattern in ("/", "*", "**") or pattern.endswith("/"):
+        return pattern == "/"
+    components = pattern.strip("/").split("/")
+    while components and components[0] == "**":
+        components.pop(0)
+    if not components:
+        return True
+    if len(components) != 1:
+        return False
+    component = components[0]
+    return ("*" in component
+            and set(component).issubset({"*", "?"})
+            and component.count("?") <= 1)
+
+
 def _valid_owner(owner: str) -> bool:
     # Syntactic admission only; existence, visibility and write access are live checks.
     login = r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"
@@ -505,30 +586,65 @@ def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict
     if text is None:
         report.add("ruleset", owners[0], "CODEOWNERS must be a readable, unconflicted tracked regular file")
         return
-    patterns = {line.split()[0] for line in text.splitlines()
-                if line.strip() and not line.lstrip().startswith("#")}
-    required_paths = list(contract["codeowners_required"])
+
+    rules: list[tuple[str, list[str]]] = []
+    for line in text.splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+        parts = stripped.split()
+        pattern = parts[0]
+        rule_owners = parts[1:]
+        rules.append((pattern, rule_owners))
+
+    for pattern, rule_owners in rules:
+        if not rule_owners:
+            report.add("ruleset", owners[0], f"CODEOWNERS rule has no owner: {pattern}")
+            continue
+        for owner in rule_owners:
+            if not _valid_owner(owner):
+                report.add("ruleset", owners[0], f"invalid CODEOWNERS owner: {owner!r}")
+
+    if "codeowners_required" not in contract:
+        report.add("ruleset", owners[0], "contract schema missing codeowners_required parameter")
+        return
+    required_patterns = list(contract["codeowners_required"])
     if metadata:
-        required_paths.append("/" + metadata["guide"])
-    for required in required_paths:
-        if required not in patterns:
-            report.add("ruleset", owners[0], f"CODEOWNERS does not cover {required}")
+        required_patterns.append("/" + metadata["guide"])
+        if metadata.get("repo_class") == "shared" and metadata.get("codeowners"):
+            for cat_patterns in metadata["codeowners"].values():
+                required_patterns.extend(cat_patterns)
+
+    active_patterns = [p for p, _ in rules]
+    try:
+        for pattern in active_patterns:
+            _owner_pattern(pattern, "")
+    except ValueError as error:
+        report.add("ruleset", owners[0], f"cannot verify CODEOWNERS patterns: {error}")
+        return
+
+    seen: set[str] = set()
+    for p in active_patterns:
+        if p in seen:
+            report.add("ruleset", owners[0], f"duplicate pattern in CODEOWNERS: {p}")
+        seen.add(p)
+
+    expected_set = set(required_patterns)
+    active_set = set(active_patterns)
+    for missing in sorted(expected_set - active_set):
+        report.add("ruleset", owners[0], f"CODEOWNERS does not cover {missing}")
+    if metadata and metadata.get("repo_class") == "shared":
+        for extra in sorted(active_set - expected_set):
+            report.add("ruleset", owners[0], f"CODEOWNERS contains extra pattern: {extra}")
+
     if metadata:
-        rules = [line.split("#", 1)[0].split() for line in text.splitlines()]
-        try:
-            for parts in rules:
-                for owner in parts[1:]:
-                    if not _valid_owner(owner):
-                        raise ValueError(f"invalid CODEOWNERS owner: {owner!r}")
-            for path in ("AGENTS.md", METADATA, metadata["guide"]):
-                last = []
-                for parts in rules:
-                    if parts and _owner_pattern(parts[0], path):
-                        last = parts[1:]
-                if not last:
-                    report.add("ruleset", owners[0], f"CODEOWNERS leaves protected document unowned: {path}")
-        except ValueError as error:
-            report.add("ruleset", owners[0], f"cannot verify protected document ownership: {error}")
+        for path in ("AGENTS.md", METADATA, metadata["guide"]):
+            last = []
+            for pattern, rule_owners in rules:
+                if _owner_pattern(pattern, path):
+                    last = rule_owners
+            if not last:
+                report.add("ruleset", owners[0], f"CODEOWNERS leaves protected document unowned: {path}")
 
 
 def _pr_template(report: _Report, root: pathlib.Path, files: dict, contract: dict) -> None:
@@ -623,7 +739,7 @@ def audit(ctx: Any, root: pathlib.Path) -> list[Any]:
     files = _git_files(root)
     calls = workflow_calls(report, root, files)
     refs = [call[:4] for call in calls]
-    metadata = _metadata(report, root, files)
+    metadata = _metadata(report, root, files, contract)
     agents = _agents(report, root, contract, refs, metadata, files)
     guide = (_text(root, metadata["guide"]) or "") if metadata else agents
     if metadata:

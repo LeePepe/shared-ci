@@ -1,6 +1,8 @@
 {
   "schema": 1,
+  "repo_class": "product",
   "guide": "docs/repository-guide.md",
   "shared_ci": "<40-char-sha>",
-  "dependencies": {}
+  "dependencies": {},
+  "codeowners": {}
 }

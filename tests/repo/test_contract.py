@@ -17,15 +17,79 @@ class ContractPositiveTests(unittest.TestCase):
         self.assertTrue(summary["ok"])
         self.assertEqual(4, summary["classifications"]["leaf"])  # 2 sources + 2 leaf contexts
 
+    def test_product_with_metadata_passes(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "product", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {}}))
+        self.repo.write("AGENTS.md", f"# Index\n- [Guide]({guide})\n")
+        self.repo.write(".github/CODEOWNERS", f"/.github/ @owner\n/AGENTS.md @owner\n/{guide} @owner\n")
+        status, findings, summary = self.repo.audit()
+        self.assertEqual([], findings)
+        self.assertEqual(0, status)
+        self.assertTrue(summary["ok"])
+
+    def test_shared_with_metadata_and_all_categories_passes(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {
+                "cross_repo_contract": ["/schemas/"],
+                "gate_review": ["/scripts/review/"],
+                "release_signing": ["/scripts/release/"],
+                "privacy_credentials": ["/stack/.env.example"],
+            }}))
+        self.repo.write("AGENTS.md", f"# Index\n- [Guide]({guide})\n")
+        self.repo.write(".github/CODEOWNERS",
+                        f"# Exact active pattern set for shared repo\n"
+                        f"/.github/ @owner\n"
+                        f"/AGENTS.md @owner\n"
+                        f"/{guide} @owner\n"
+                        f"/schemas/ @owner\n"
+                        f"/scripts/review/ @owner\n"
+                        f"/scripts/release/ @owner\n"
+                        f"/stack/.env.example @owner\n")
+        status, findings, summary = self.repo.audit()
+        self.assertEqual([], findings)
+        self.assertEqual(0, status)
+        self.assertTrue(summary["ok"])
+
+    def test_codeowners_valid_comments_blank_lines_and_owner_tokens(self):
+        self.repo.write(".github/CODEOWNERS",
+                        "# Top-level comment\n\n"
+                        "/.github/ @org/team-lead user@example.com # inline comment\n\n"
+                        "/AGENTS.md @individual-user\n")
+        status, findings, summary = self.repo.audit()
+        self.assertEqual([], findings)
+        self.assertEqual(0, status)
+        self.assertTrue(summary["ok"])
+
     def test_templates_are_self_consistent(self):
         # The published templates must themselves satisfy the section contract.
         contract = json.loads((REPO / "schemas/repo-contract-v1.json").read_text())["x-contract"]
         agents = (REPO / "templates/AGENTS.md").read_text()
+        codeowners = (REPO / "templates/CODEOWNERS").read_text()
         template = (REPO / "templates/pull_request_template.md").read_text()
         for title in contract["agents_sections"]:
             self.assertIn(f"## {title}", agents)
         for title in contract["pr_sections"]:
             self.assertIn(f"## {title}", template)
+        active_rules = {
+            parts[0]: parts[1:]
+            for line in codeowners.splitlines()
+            if (parts := line.split("#", 1)[0].split())
+        }
+        protected_patterns = ("/.github/", "/.githooks/", "/docs/repository-guide.md",
+                              "/docs/development.md", "/AGENTS.md", "/CLAUDE.md",
+                              "/.specify/memory/constitution.md", "/docs/architecture/",
+                              "**/tech-context.md", "/scripts/verify", "/policy/", "/schemas/",
+                              "**/Package.swift", "**/Package.resolved", "**/project.yml",
+                              "**/package.json", "**/package-lock.json", "**/pyproject.toml",
+                              "**/uv.lock", "**/requirements*.txt")
+        for pattern in protected_patterns:
+            self.assertEqual(["@OWNER"], active_rules.get(pattern))
         self.assertLessEqual(len(agents.splitlines()), contract["agents_max_lines"])
         self.assertEqual(8, len(contract["items"]))
 
@@ -143,7 +207,205 @@ class ContractNegativeTests(unittest.TestCase):
 
     def test_codeowners_incomplete(self):
         self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n")
-        self.assertFinding("contract_ruleset", "/AGENTS.md")
+        self.assertFinding("contract_ruleset", "does not cover /AGENTS.md")
+
+    def test_codeowners_product_additional_protection_passes(self):
+        self.repo.write(".github/CODEOWNERS",
+                        "/.github/ @owner\n/AGENTS.md @owner\n/scripts/verify @owner\n")
+        status, findings, summary = self.repo.audit()
+        self.assertEqual([], findings)
+        self.assertEqual(0, status)
+        self.assertTrue(summary["ok"])
+
+    def test_codeowners_product_unsupported_additional_pattern_rejected(self):
+        self.repo.write(".github/CODEOWNERS",
+                        "/.github/ @owner\n/AGENTS.md @owner\n!ignored @owner\n")
+        self.assertFinding("contract_ruleset", "unsupported CODEOWNERS pattern")
+
+    def test_codeowners_product_duplicate_pattern(self):
+        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/AGENTS.md @owner\n")
+        self.assertFinding("contract_ruleset", "duplicate pattern in CODEOWNERS: /AGENTS.md")
+
+    def test_codeowners_product_with_metadata_missing_guide(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "product", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {}}))
+        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n")
+        self.assertFinding("contract_ruleset", f"does not cover /{guide}")
+
+    def test_codeowners_product_with_metadata_additional_protection_passes(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "product", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {}}))
+        self.repo.write("AGENTS.md", f"# Index\n- [Guide]({guide})\n")
+        self.repo.write(".github/CODEOWNERS",
+                        f"/.github/ @owner\n/AGENTS.md @owner\n/{guide} @owner\n"
+                        f"/.githooks/ @owner\n/scripts/verify @owner\n/schemas/ @owner\n")
+        status, findings, summary = self.repo.audit()
+        self.assertEqual([], findings)
+        self.assertEqual(0, status)
+        self.assertTrue(summary["ok"])
+
+    def test_codeowners_shared_missing_category_pattern(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": ["/schemas/"]}}))
+        self.repo.write(".github/CODEOWNERS", f"/.github/ @owner\n/AGENTS.md @owner\n/{guide} @owner\n")
+        self.assertFinding("contract_ruleset", "does not cover /schemas/")
+
+    def test_codeowners_shared_extra_pattern(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": ["/schemas/"]}}))
+        self.repo.write(".github/CODEOWNERS",
+                        f"/.github/ @owner\n/AGENTS.md @owner\n/{guide} @owner\n/schemas/ @owner\n/extra/ @owner\n")
+        self.assertFinding("contract_ruleset", "contains extra pattern: /extra/")
+
+    def test_codeowners_rule_without_owner(self):
+        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md\n")
+        self.assertFinding("contract_ruleset", "rule has no owner: /AGENTS.md")
+
+    def test_codeowners_invalid_owner_token(self):
+        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md invalid_owner_token\n")
+        self.assertFinding("contract_ruleset", "invalid CODEOWNERS owner: 'invalid_owner_token'")
+
+    def test_metadata_product_declaring_category_paths_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "product", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": ["/schemas/"]}}))
+        self.assertFinding("contract_agents", "product repositories cannot declare category paths")
+
+    def test_metadata_explicit_null_codeowners_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "product", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": None}))
+        self.assertFinding("contract_agents", "codeowners must be an object")
+
+    def test_metadata_shared_duplicate_pattern_across_categories_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {
+                "cross_repo_contract": ["/schemas/"],
+                "gate_review": ["/schemas/"],
+            }}))
+        self.assertFinding("contract_agents", "duplicate pattern across categories")
+
+    def test_metadata_shared_universal_minimum_repeated_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": ["/.github/"]}}))
+        self.assertFinding("contract_agents", "universal minimum cannot be repeated")
+
+    def test_metadata_shared_guide_repeated_as_category_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": [f"/{guide}"]}}))
+        self.assertFinding("contract_agents", "universal minimum cannot be repeated")
+
+    def test_metadata_shared_owner_token_embedded_in_path_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": ["/schemas/ @owner"]}}))
+        self.assertFinding("contract_agents", "owner token embedded in pattern")
+
+    def test_metadata_shared_pattern_not_root_anchored_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": ["schemas/"]}}))
+        self.assertFinding("contract_agents", "pattern must be root-anchored")
+
+    def test_metadata_shared_match_all_pattern_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        for pattern in ("/*", "/*****", "/?*", "/**/*", "/**/*****"):
+            with self.subTest(pattern=pattern):
+                self.repo.write(".github/repo-contract.json", json.dumps({
+                    "schema": 1, "repo_class": "shared", "guide": guide,
+                    "shared_ci": PIN, "dependencies": {},
+                    "codeowners": {"cross_repo_contract": [pattern]}}))
+                self.assertFinding("contract_agents", "malformed or match-all pattern")
+
+    def test_metadata_shared_unknown_category_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"unknown_category": ["/schemas/"]}}))
+        self.assertFinding("contract_agents", "unknown codeowners category")
+
+    def test_metadata_shared_unnormalized_terminal_dot_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": ["/schemas/."]}}))
+        self.assertFinding("contract_agents", "unnormalized pattern")
+
+    def test_metadata_shared_unnormalized_terminal_dotdot_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": {"cross_repo_contract": ["/schemas/.."]}}))
+        self.assertFinding("contract_agents", "unnormalized pattern")
+
+    def test_metadata_shared_unnormalized_interior_dot_and_dotdot_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        for pattern in ("/schemas/./sub/", "/schemas/../sub/"):
+            with self.subTest(pattern=pattern):
+                self.repo.write(".github/repo-contract.json", json.dumps({
+                    "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+                    "dependencies": {}, "codeowners": {"cross_repo_contract": [pattern]}}))
+                self.assertFinding("contract_agents", "unnormalized pattern")
+
+    def test_metadata_shared_unnormalized_doubled_separators_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        for pattern in ("//schemas/", "/schemas//", "/schemas//sub/", "//file", "/file//"):
+            with self.subTest(pattern=pattern):
+                self.repo.write(".github/repo-contract.json", json.dumps({
+                    "schema": 1, "repo_class": "shared", "guide": guide, "shared_ci": PIN,
+                    "dependencies": {}, "codeowners": {"cross_repo_contract": [pattern]}}))
+                self.assertFinding("contract_agents", "unnormalized pattern")
+
+    def test_metadata_legacy_missing_repo_class_rejected_at_new_provider(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "guide": guide, "shared_ci": PIN,
+            "dependencies": {}}), exact=True)
+        self.assertFinding("contract_agents", "expected schema, repo_class, guide, shared_ci, dependencies")
+
+    def test_metadata_invalid_repo_class_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "invalid", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}}))
+        self.assertFinding("contract_agents", "invalid repo_class")
 
     # 6 pr_template
     def test_pr_template_missing(self):

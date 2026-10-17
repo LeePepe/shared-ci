@@ -38,12 +38,20 @@ if metadata.exists():
             result[key] = value
         return result
     data = json.loads(metadata.read_text(encoding="utf-8"), object_pairs_hook=unique)
-    if not isinstance(data, dict) or set(data) != {"schema", "guide", "shared_ci", "dependencies"}:
+    if not isinstance(data, dict):
+        raise SystemExit("invalid repository metadata fields")
+    required_keys = {"schema", "repo_class", "guide", "shared_ci", "dependencies"}
+    allowed_keys = {"schema", "repo_class", "guide", "shared_ci", "dependencies", "codeowners"}
+    if not required_keys.issubset(set(data)) or not set(data).issubset(allowed_keys):
         raise SystemExit("invalid repository metadata fields")
     if type(data["schema"]) is not int or data["schema"] != 1:
         raise SystemExit("unsupported repository metadata schema")
+    if not isinstance(data["repo_class"], str) or data["repo_class"] not in ("product", "shared"):
+        raise SystemExit("invalid repository metadata repo_class")
     if not isinstance(data["guide"], str) or not isinstance(data["dependencies"], dict):
         raise SystemExit("invalid repository metadata types")
+    if "codeowners" in data and not isinstance(data["codeowners"], dict):
+        raise SystemExit("invalid repository metadata codeowners")
     pin = data["shared_ci"]
 else:
     text = pathlib.Path("AGENTS.md").read_text(encoding="utf-8")

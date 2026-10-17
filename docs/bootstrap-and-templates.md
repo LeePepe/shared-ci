@@ -1,12 +1,12 @@
 # Caller bootstrap and directory template kit
 
 This is a proposed generation/migration kit, not provider self-adoption, a release
-or a consumer rollout. The supported metadata baseline is published commit
-`d8fe8e3c68182e3d8435120814bae955ee327372`. Its
-[contract](https://github.com/LeePepe/shared-ci/blob/d8fe8e3c68182e3d8435120814bae955ee327372/ai/repo-contract.md#opt-in-metadata-and-directory-audit)
-is authoritative for metadata support; read the versioned
-[AI usage bundle](https://github.com/LeePepe/shared-ci/blob/d8fe8e3c68182e3d8435120814bae955ee327372/ai/USAGE.md)
-as well. Older providers do not acquire metadata support retroactively.
+or a consumer rollout. The historical metadata baseline exercised by existing caller
+tests is published commit `d8fe8e3c68182e3d8435120814bae955ee327372` (supporting
+the legacy four-key metadata envelope). Adopting the upgraded class/category
+metadata contract (`repo_class`, `codeowners`) requires an immutable released
+target provider SHA containing this contract (AC-10/AC-11). Older providers
+do not acquire new contract support retroactively.
 
 ## Generate together
 
@@ -25,13 +25,17 @@ Copy the following from `templates/`, retaining executable bits on both scripts:
 Before verification, the pre-push hook refuses non-deletion pushes to `main` and
 the remote HEAD default branch (falling back to `main`); server rules remain the backstop.
 
-Replace every `<40-char-sha>` with the same supported full lowercase provider
-SHA and `@OWNER` with the actual review owner. Choose real repository layer
-responsibilities, ownership (including tests), dependencies and gate commands;
-the Swift examples are not a mandatory architecture. Preserve an existing
-`docs/development.md` and its goal-based PR kinds rather than replacing
-it mechanically. Keep `.shared-ci/` ignored. Stage the generated files so that
-the audit can validate executable bits and tracked regular routes.
+Replace every `<40-char-sha>` with the same released target provider SHA that
+contains this five-key metadata contract, and replace `@OWNER` with the actual
+review owner. The Generate together route does not upgrade a legacy caller by
+combining current templates with a historical provider: an unchanged legacy
+caller retains its compatible historical metadata, verifier, and configuration
+as one coordinated baseline. Choose real repository layer responsibilities,
+ownership (including tests), dependencies and gate commands; the Swift examples
+are not a mandatory architecture. Preserve an existing `docs/development.md`
+and its goal-based PR kinds rather than replacing it mechanically. Keep
+`.shared-ci/` ignored. Stage the generated files so that the audit can validate
+executable bits and tracked regular routes.
 
 The protected repository guide includes the complete shared protocol snapshot
 and a review-relevant extract of the development guide. Adapt that extract to
@@ -61,15 +65,25 @@ capacity can deadlock on macOS.
 
 The script requires Python 3.9+, Git and Bash. With metadata present, the
 bootstrap checks a tracked regular metadata envelope, schema integer 1, unique
-JSON keys and a full lowercase SHA. Malformed/untracked/symlink metadata fails
-without falling back to AGENTS. The pinned provider's audit then checks the
-complete guide/dependency/workflow contract before caller gates run.
+JSON keys, and the five mandatory fields `schema`, `repo_class`, `guide`,
+`shared_ci`, and `dependencies`; only `codeowners` is optional. It rejects
+missing or unknown fields before selecting or creating a provider, then
+unconditionally requires `repo_class` to be `product` or `shared` and validates
+an optional `codeowners` value as an object. Malformed/untracked/symlink metadata
+fails without falling back to AGENTS. The pinned provider's audit then checks the complete
+guide/dependency/workflow contract and derives the required active CODEOWNERS
+patterns before caller gates run. Product repositories may retain additional
+protective patterns; shared repositories use the exact category-derived set.
 
 Without metadata, use `AGENTS.legacy.md` in place of AGENTS.md, retaining the
 legacy headings and one full-SHA protocol pointer. The bootstrap supports this
 legacy mode; legacy consumers may keep their existing compatible provider.
-Do not combine directory-only AGENTS with an old provider or omit metadata.
-The tests exercise both modes with the published baseline, not every old SHA.
+The immutable historical baseline accepts its explicit legacy four-key metadata
+through historical provider code only; candidate verifier/schema code is not
+copied into that checkout. The new generated verifier rejects that four-key
+shape. Do not combine directory-only AGENTS with an old provider or omit
+metadata. The tests exercise both modes with the historical baseline, not every
+old SHA.
 
 An absent default `.shared-ci` is initialized and fetched at the exact SHA.
 An existing provider path is **never** deleted, reset, fetched into or switched.

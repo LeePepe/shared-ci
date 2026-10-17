@@ -1,5 +1,12 @@
 # Important paths need Owner review (enforced once the ruleset requires code-owner review).
 # Replace @OWNER with the repository owner account or team.
+#
+# The required active pattern set is derived from repo_class and metadata:
+# - Universal minimum: /.github/ and /AGENTS.md
+# - Metadata callers: /<guide> (e.g. /docs/repository-guide.md)
+# - Shared repositories (repo_class=shared): category paths declared in .github/repo-contract.json
+#   under cross_repo_contract, gate_review, release_signing, privacy_credentials.
+# Product repositories may retain additional patterns that protect important paths.
 /.github/                         @OWNER
 /.githooks/                       @OWNER
 /docs/repository-guide.md         @OWNER
