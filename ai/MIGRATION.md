@@ -33,9 +33,10 @@ when preparing an upgrade under the repository's existing process.
    Account for each caller-local override; reject unsupported adaptations.
 3. In a dedicated consumer PR update all workflow pins and protocol/dependency
    pointers to one full released target SHA, plus necessary adaptations: update metadata
-   envelope (`repo_class` and optional category mappings) and CODEOWNERS to the exact
-   derived active pattern set (contract minimum plus guide, plus shared category mappings
-   if applicable). Preserve business facts and required checks. Dependency-pin,
+   envelope (`repo_class` and optional category mappings) and CODEOWNERS to cover the
+   derived active pattern set (contract minimum plus guide, plus exact shared category
+   mappings if applicable). Preserve additional product-repository protections, business
+   facts and required checks. Dependency-pin,
    metadata-class and gate/policy changes retain Owner review under the
    [agent protocol](agent-protocol.md).
 4. Run the consumer verification entry, positive behavior and applicable

@@ -627,8 +627,9 @@ def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict
     active_set = set(active_patterns)
     for missing in sorted(expected_set - active_set):
         report.add("ruleset", owners[0], f"CODEOWNERS does not cover {missing}")
-    for extra in sorted(active_set - expected_set):
-        report.add("ruleset", owners[0], f"CODEOWNERS contains extra pattern: {extra}")
+    if metadata and metadata.get("repo_class") == "shared":
+        for extra in sorted(active_set - expected_set):
+            report.add("ruleset", owners[0], f"CODEOWNERS contains extra pattern: {extra}")
 
     if metadata:
         try:

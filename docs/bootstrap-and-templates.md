@@ -71,8 +71,9 @@ missing or unknown fields before selecting or creating a provider, then
 unconditionally requires `repo_class` to be `product` or `shared` and validates
 an optional `codeowners` value as an object. Malformed/untracked/symlink metadata
 fails without falling back to AGENTS. The pinned provider's audit then checks the complete
-guide/dependency/workflow contract and derives the exact active CODEOWNERS pattern
-set before caller gates run.
+guide/dependency/workflow contract and derives the required active CODEOWNERS
+patterns before caller gates run. Product repositories may retain additional
+protective patterns; shared repositories use the exact category-derived set.
 
 Without metadata, use `AGENTS.legacy.md` in place of AGENTS.md, retaining the
 legacy headings and one full-SHA protocol pointer. The bootstrap supports this

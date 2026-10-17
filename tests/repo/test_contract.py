@@ -194,9 +194,13 @@ class ContractNegativeTests(unittest.TestCase):
         self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n")
         self.assertFinding("contract_ruleset", "does not cover /AGENTS.md")
 
-    def test_codeowners_product_extra_pattern(self):
-        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/extra/ @owner\n")
-        self.assertFinding("contract_ruleset", "contains extra pattern: /extra/")
+    def test_codeowners_product_additional_protection_passes(self):
+        self.repo.write(".github/CODEOWNERS",
+                        "/.github/ @owner\n/AGENTS.md @owner\n/scripts/verify @owner\n")
+        status, findings, summary = self.repo.audit()
+        self.assertEqual([], findings)
+        self.assertEqual(0, status)
+        self.assertTrue(summary["ok"])
 
     def test_codeowners_product_duplicate_pattern(self):
         self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/AGENTS.md @owner\n")
@@ -211,14 +215,20 @@ class ContractNegativeTests(unittest.TestCase):
         self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n")
         self.assertFinding("contract_ruleset", f"does not cover /{guide}")
 
-    def test_codeowners_product_with_metadata_extra_pattern(self):
+    def test_codeowners_product_with_metadata_additional_protection_passes(self):
         guide = "docs/repository-guide.md"
         self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
         self.repo.write(".github/repo-contract.json", json.dumps({
             "schema": 1, "repo_class": "product", "guide": guide, "shared_ci": PIN,
             "dependencies": {}, "codeowners": {}}))
-        self.repo.write(".github/CODEOWNERS", f"/.github/ @owner\n/AGENTS.md @owner\n/{guide} @owner\n/extra/ @owner\n")
-        self.assertFinding("contract_ruleset", "contains extra pattern: /extra/")
+        self.repo.write("AGENTS.md", f"# Index\n- [Guide]({guide})\n")
+        self.repo.write(".github/CODEOWNERS",
+                        f"/.github/ @owner\n/AGENTS.md @owner\n/{guide} @owner\n"
+                        f"/.githooks/ @owner\n/scripts/verify @owner\n/schemas/ @owner\n")
+        status, findings, summary = self.repo.audit()
+        self.assertEqual([], findings)
+        self.assertEqual(0, status)
+        self.assertTrue(summary["ok"])
 
     def test_codeowners_shared_missing_category_pattern(self):
         guide = "docs/repository-guide.md"
