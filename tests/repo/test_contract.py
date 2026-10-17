@@ -70,11 +70,20 @@ class ContractPositiveTests(unittest.TestCase):
         # The published templates must themselves satisfy the section contract.
         contract = json.loads((REPO / "schemas/repo-contract-v1.json").read_text())["x-contract"]
         agents = (REPO / "templates/AGENTS.md").read_text()
+        codeowners = (REPO / "templates/CODEOWNERS").read_text()
         template = (REPO / "templates/pull_request_template.md").read_text()
         for title in contract["agents_sections"]:
             self.assertIn(f"## {title}", agents)
         for title in contract["pr_sections"]:
             self.assertIn(f"## {title}", template)
+        for pattern in ("/.github/", "/.githooks/", "/docs/repository-guide.md",
+                        "/docs/development.md", "/AGENTS.md", "/CLAUDE.md",
+                        "/.specify/memory/constitution.md", "/docs/architecture/",
+                        "**/tech-context.md", "/scripts/verify", "/policy/", "/schemas/",
+                        "**/Package.swift", "**/Package.resolved", "**/project.yml",
+                        "**/package.json", "**/package-lock.json", "**/pyproject.toml",
+                        "**/uv.lock", "**/requirements*.txt"):
+            self.assertIn(pattern, codeowners)
         self.assertLessEqual(len(agents.splitlines()), contract["agents_max_lines"])
         self.assertEqual(8, len(contract["items"]))
 
@@ -269,6 +278,14 @@ class ContractNegativeTests(unittest.TestCase):
             "schema": 1, "repo_class": "product", "guide": guide, "shared_ci": PIN,
             "dependencies": {}, "codeowners": {"cross_repo_contract": ["/schemas/"]}}))
         self.assertFinding("contract_agents", "product repositories cannot declare category paths")
+
+    def test_metadata_explicit_null_codeowners_rejected(self):
+        guide = "docs/repository-guide.md"
+        self.repo.write(guide, (self.repo.root / "AGENTS.md").read_text())
+        self.repo.write(".github/repo-contract.json", json.dumps({
+            "schema": 1, "repo_class": "product", "guide": guide, "shared_ci": PIN,
+            "dependencies": {}, "codeowners": None}))
+        self.assertFinding("contract_agents", "codeowners must be an object")
 
     def test_metadata_shared_duplicate_pattern_across_categories_rejected(self):
         guide = "docs/repository-guide.md"

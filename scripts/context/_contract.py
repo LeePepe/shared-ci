@@ -228,8 +228,8 @@ def _metadata(report: _Report, root: pathlib.Path, files: dict, contract: dict) 
         if not isinstance(repo_class, str) or repo_class not in valid_classes:
             raise ValueError(f"invalid repo_class: {repo_class!r}")
 
-        codeowners = data.get("codeowners")
-        if codeowners is not None:
+        if "codeowners" in data:
+            codeowners = data["codeowners"]
             if not isinstance(codeowners, dict):
                 raise ValueError("codeowners must be an object")
             for cat, patterns in codeowners.items():
