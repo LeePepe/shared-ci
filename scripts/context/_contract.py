@@ -616,6 +616,12 @@ def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict
                 required_patterns.extend(cat_patterns)
 
     active_patterns = [p for p, _ in rules]
+    try:
+        for pattern in active_patterns:
+            _owner_pattern(pattern, "")
+    except ValueError as error:
+        report.add("ruleset", owners[0], f"cannot verify CODEOWNERS patterns: {error}")
+        return
 
     seen: set[str] = set()
     for p in active_patterns:
@@ -632,16 +638,13 @@ def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict
             report.add("ruleset", owners[0], f"CODEOWNERS contains extra pattern: {extra}")
 
     if metadata:
-        try:
-            for path in ("AGENTS.md", METADATA, metadata["guide"]):
-                last = []
-                for pattern, rule_owners in rules:
-                    if _owner_pattern(pattern, path):
-                        last = rule_owners
-                if not last:
-                    report.add("ruleset", owners[0], f"CODEOWNERS leaves protected document unowned: {path}")
-        except ValueError as error:
-            report.add("ruleset", owners[0], f"cannot verify protected document ownership: {error}")
+        for path in ("AGENTS.md", METADATA, metadata["guide"]):
+            last = []
+            for pattern, rule_owners in rules:
+                if _owner_pattern(pattern, path):
+                    last = rule_owners
+            if not last:
+                report.add("ruleset", owners[0], f"CODEOWNERS leaves protected document unowned: {path}")
 
 
 def _pr_template(report: _Report, root: pathlib.Path, files: dict, contract: dict) -> None:

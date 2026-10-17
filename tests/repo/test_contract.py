@@ -202,6 +202,11 @@ class ContractNegativeTests(unittest.TestCase):
         self.assertEqual(0, status)
         self.assertTrue(summary["ok"])
 
+    def test_codeowners_product_unsupported_additional_pattern_rejected(self):
+        self.repo.write(".github/CODEOWNERS",
+                        "/.github/ @owner\n/AGENTS.md @owner\n!ignored @owner\n")
+        self.assertFinding("contract_ruleset", "unsupported CODEOWNERS pattern")
+
     def test_codeowners_product_duplicate_pattern(self):
         self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/AGENTS.md @owner\n")
         self.assertFinding("contract_ruleset", "duplicate pattern in CODEOWNERS: /AGENTS.md")
