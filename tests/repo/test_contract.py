@@ -76,14 +76,20 @@ class ContractPositiveTests(unittest.TestCase):
             self.assertIn(f"## {title}", agents)
         for title in contract["pr_sections"]:
             self.assertIn(f"## {title}", template)
-        for pattern in ("/.github/", "/.githooks/", "/docs/repository-guide.md",
-                        "/docs/development.md", "/AGENTS.md", "/CLAUDE.md",
-                        "/.specify/memory/constitution.md", "/docs/architecture/",
-                        "**/tech-context.md", "/scripts/verify", "/policy/", "/schemas/",
-                        "**/Package.swift", "**/Package.resolved", "**/project.yml",
-                        "**/package.json", "**/package-lock.json", "**/pyproject.toml",
-                        "**/uv.lock", "**/requirements*.txt"):
-            self.assertIn(pattern, codeowners)
+        active_rules = {
+            parts[0]: parts[1:]
+            for line in codeowners.splitlines()
+            if (parts := line.split("#", 1)[0].split())
+        }
+        protected_patterns = ("/.github/", "/.githooks/", "/docs/repository-guide.md",
+                              "/docs/development.md", "/AGENTS.md", "/CLAUDE.md",
+                              "/.specify/memory/constitution.md", "/docs/architecture/",
+                              "**/tech-context.md", "/scripts/verify", "/policy/", "/schemas/",
+                              "**/Package.swift", "**/Package.resolved", "**/project.yml",
+                              "**/package.json", "**/package-lock.json", "**/pyproject.toml",
+                              "**/uv.lock", "**/requirements*.txt")
+        for pattern in protected_patterns:
+            self.assertEqual(["@OWNER"], active_rules.get(pattern))
         self.assertLessEqual(len(agents.splitlines()), contract["agents_max_lines"])
         self.assertEqual(8, len(contract["items"]))
 
