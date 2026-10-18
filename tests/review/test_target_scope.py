@@ -40,6 +40,16 @@ class ScopeAdmissionTests(unittest.TestCase):
             self.assertIsNotNone(target_scope.parse(
                 fence + "\n" + declaration() + fence + "\n" + declaration()))
 
+    def test_closing_fence_requires_only_trailing_whitespace(self):
+        for fence in ("```", "~~~~"):
+            for token in (fence, fence + fence[0]):
+                for suffix in ("text", " text", "\ttext"):
+                    with self.subTest(fence=fence, token=token, suffix=suffix):
+                        body = fence + "\n" + token + suffix + "\n" + declaration()
+                        self.assertIsNone(target_scope.parse(body))
+                        self.assertEqual(["docs/**"], target_scope.parse(
+                            body + fence + " \t\n" + declaration(("docs/**",)))["paths"])
+
     def test_malformed_declarations_are_not_silently_unscoped(self):
         invalid = ["## Target scope\n", declaration(()), declaration(acceptance=""),
                    declaration() + declaration(),

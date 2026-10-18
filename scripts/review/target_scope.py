@@ -33,7 +33,8 @@ def parse(body: str) -> dict[str, Any] | None:
             token = marker.group(1)
             if not fence:
                 fence = token
-            elif token[0] == fence[0] and len(token) >= len(fence):
+            elif (token[0] == fence[0] and len(token) >= len(fence)
+                  and not line[marker.end():].strip()):
                 fence = ""
             if current is not None:
                 current.append(line)
