@@ -10,11 +10,12 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["file", "line", "severity", "why"],
+        "required": ["file", "line", "severity", "why", "p0_category"],
         "properties": {
           "file": {"type": "string"},
           "line": {"type": ["integer", "null"]},
           "severity": {"type": "string", "enum": ["critical", "high"]},
+          "p0_category": {"type": ["string", "null"], "enum": [null, "security", "privacy", "data_loss"]},
           "why": {"type": "string"}
         }
       }

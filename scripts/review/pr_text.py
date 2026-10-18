@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -34,6 +35,9 @@ def render(title: str, body: str) -> str:
 
 
 def main() -> int:
+    if len(sys.argv) not in (1, 3) or (len(sys.argv) == 3 and sys.argv[1] != "--record-file"):
+        print("usage: pr_text.py [--record-file FILE]", file=sys.stderr)
+        return 1
     patterns = {"PR_NUMBER": r"[1-9][0-9]*",
                 "BASE_REPO": r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"}
     for name, pattern in patterns.items():
@@ -54,8 +58,11 @@ def main() -> int:
                 or (record["body"] is not None and not isinstance(record["body"], str))):
             raise ValueError("PR record has missing fields or wrong types.")
         output = render(record["title"], record["body"] or "(empty)")
+        if len(sys.argv) == 3:
+            # Codex parses scope from the same complete API record, before display truncation.
+            pathlib.Path(sys.argv[2]).write_text(json.dumps(record), encoding="utf-8")
         sys.stdout.buffer.write(output.encode("utf-8"))
-    except (ValueError, UnicodeError):
+    except (OSError, ValueError, UnicodeError):
         print("pr-text: invalid PR JSON or title/body text.", file=sys.stderr)
         return 1
     return 0

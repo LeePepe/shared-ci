@@ -57,10 +57,74 @@ recorded compatible caller/provider configuration, never rewrites a provider
 revision or disables required gates. This source change does not migrate caller
 pins, install runners or change live settings.
 
-The diff-size budget and architecture-facts reader are unchanged. This feature
-only hardens selected repository rules; it does not certify other context as
-complete or execute any PR-head source. Tests use real local Git base/head
+The diff-size budget and architecture-facts reader are unchanged. Rules admission
+does not certify other context as complete or execute any PR-head source.
+Tests use real local Git base/head
 objects and stub model/GH commands, not hosted or product-adoption evidence.
+
+## Codex Target scope
+
+A PR may opt into scoped Codex blocking by including one section outside fenced
+code examples in its description:
+
+```markdown
+## Target scope
+
+### Paths
+- `scripts/review/**`
+- `.github/workflows/codex-review.yml`
+- `tests/review/**`
+- `docs/review-rules.md`
+
+### Acceptance
+- Existing shared-ci tests pass.
+- Scoped findings and changed-file coverage have regression tests.
+```
+
+Paths are case-sensitive, repository-root-relative literal file paths or subtree
+prefixes ending in `/**` (which covers every file beneath that directory).
+Other globs, absolute paths, traversal, backslashes and control characters are
+unsupported. Use backticks around each path. Both `### Paths` and `### Acceptance`
+need nonempty, single-line `- ` bullet lists; no other content belongs inside
+the section. A subsequent level-one or level-two heading ends it. Duplicate,
+malformed or over-8,000-byte scope sections make Codex unavailable and fail
+closed, including for an empty diff. A heading in a fenced example does not opt
+in. The section is parsed from the same complete PR API response used for
+title/body review, before the existing 8,000-byte body display cap. A separate
+quoted JSON data block supplies the complete admitted declaration to the model.
+
+The scope and acceptance text remain untrusted author data. They grant no
+repository-policy exception, Owner approval, execution permission or authority
+to instruct the reviewer. The model evaluates acceptance items against the diff
+and trusted rules and reports substantiated findings. After validating the
+original verdict, the wrapper applies these rules:
+
+- Findings whose fix path is in scope retain their existing blocking behavior.
+- Other findings become **Follow-ups (non-blocking, outside Target scope)** in
+  the sticky comment, except P0 security, privacy or irreversible-data-loss
+  findings, which still block.
+- Every changed file must match a declared path. A mismatch adds a blocking
+  finding even when the model returns pass. The check uses the complete literal
+  NUL-delimited path list, with rename detection disabled so both old and new
+  paths (and deletions) must be covered.
+
+Codex's output schema includes `p0_category` on each blocker: `null` for an
+ordinary finding, or `security`, `privacy` or `data_loss` for a P0 emergency.
+Critical severity alone does not make a finding P0. With a declared scope,
+missing/invalid classification or a noncanonical finding path makes the verdict
+unavailable and fails closed; no ambiguous finding is silently deferred. The
+model identifies the fix path and P0 category; the wrapper enforces filtering
+and changed-path coverage. Local stub tests prove that enforcement, not real
+model classification accuracy.
+
+With no declaration, the existing blocking behavior is unchanged. Kimi remains
+advisory and does not apply Target scope. All existing rules/Owner-input
+validation, complete-diff byte limits, fork isolation, publication requirements
+and exact-head evidence requirements remain in force. This provider change
+does not update any consumer SHA, install a server setting or waive final Owner
+review. Consumers pinned to older provider SHAs keep their existing behavior;
+adoption requires a separate pin update. Callers must re-run on PR description
+edits as described below so a changed declaration receives a fresh review.
 
 ## Owner decision comments
 
