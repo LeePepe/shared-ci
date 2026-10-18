@@ -8,8 +8,9 @@ name: codex-review
 #   * review scripts come from this shared-ci revision (job.workflow_sha).
 # Verdict: no blockers -> pass; critical/high blockers -> PR comment + failure;
 # tool/setup/parse errors -> PR comment + failure (fail closed).
-# Optional PR-body Target scope limits blocking findings to declared paths, plus
-# P0 security/privacy/data loss. Changed files outside those paths always block.
+# Optional PR-body Target scope defers only pre-existing non-security findings
+# that do not fail Target acceptance. Introduced problems, all security/privacy/
+# data-loss problems and changed files outside the declared paths still block.
 # Without a declaration, the existing gate is unchanged. See docs/review-rules.md.
 # Owner decisions are read at run time: re-run the job after the Owner comments.
 

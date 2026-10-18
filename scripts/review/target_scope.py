@@ -13,7 +13,7 @@ import sys
 from typing import Any
 
 MAX_SCOPE_BYTES = 8000
-P0_CATEGORIES = ("security", "privacy", "data_loss")
+SAFETY_CATEGORIES = ("security", "privacy", "data_loss")
 
 
 def valid_path(path: str) -> bool:
@@ -97,12 +97,15 @@ def apply(data: dict[str, Any], scope: dict[str, Any] | None) -> dict[str, Any]:
         return data
     blockers, followups = [], []
     for item in data["blockers"]:
-        if ("p0_category" not in item
-                or item["p0_category"] not in (None, *P0_CATEGORIES)):
-            raise ValueError("scoped blockers require p0_category: null, security, privacy or data_loss")
+        for field in ("introduced", "acceptance_failure"):
+            if type(item.get(field)) is not bool:
+                raise ValueError(f"scoped blockers require boolean {field}")
+        if ("safety_category" not in item
+                or item["safety_category"] not in (None, *SAFETY_CATEGORIES)):
+            raise ValueError("scoped blockers require safety_category: null, security, privacy or data_loss")
         if not valid_path(item["file"]):
             raise ValueError("scoped blockers require a canonical repository file path")
-        if contains(scope["paths"], item["file"]) or item["p0_category"] is not None:
+        if item["introduced"] or item["acceptance_failure"] or item["safety_category"] is not None:
             blockers.append(item)
         else:
             followups.append(item)
@@ -112,7 +115,7 @@ def apply(data: dict[str, Any], scope: dict[str, Any] | None) -> dict[str, Any]:
     return {**data, "verdict": "changes" if blockers else "pass", "blockers": blockers,
             "follow_ups": followups,
             "summary": (f"Target scope: {len(blockers)} blocking finding(s); "
-                        f"{len(followups)} out-of-scope follow-up(s). "
+                        f"{len(followups)} pre-existing follow-up(s). "
                         f"Reviewer summary before scope filtering: {data['summary']}")}
 
 

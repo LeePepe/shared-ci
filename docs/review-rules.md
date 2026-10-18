@@ -99,23 +99,34 @@ to instruct the reviewer. The model evaluates acceptance items against the diff
 and trusted rules and reports substantiated findings. After validating the
 original verdict, the wrapper applies these rules:
 
-- Findings whose fix path is in scope retain their existing blocking behavior.
-- Other findings become **Follow-ups (non-blocking, outside Target scope)** in
-  the sticky comment, except P0 security, privacy or irreversible-data-loss
-  findings, which still block.
+- Any problem introduced or worsened by this diff blocks, wherever its fix
+  belongs. This includes correctness defects and mandatory-rule/red-line
+  violations introduced by the change; excluding the fix path grants no exception.
+- Failures of the declared Target's acceptance items block, including pre-existing
+  failures and failures whose fix belongs outside the declared paths.
+- Any security, privacy or data-loss problem blocks, including pre-existing
+  problems. There is no P0 exception threshold.
+- Only pre-existing non-security problems that the diff did not introduce or
+  worsen and that do not fail Target acceptance become **Follow-ups (non-blocking,
+  pre-existing)** in the sticky comment. This also applies to files inside the
+  declared paths: classification depends on the problem's origin, not its fix path.
 - Every changed file must match a declared path. A mismatch adds a blocking
   finding even when the model returns pass. The check uses the complete literal
   NUL-delimited path list, with rename detection disabled so both old and new
   paths (and deletions) must be covered.
 
-Codex's output schema includes `p0_category` on each blocker: `null` for an
-ordinary finding, or `security`, `privacy` or `data_loss` for a P0 emergency.
-Critical severity alone does not make a finding P0. With a declared scope,
-missing/invalid classification or a noncanonical finding path makes the verdict
-unavailable and fails closed; no ambiguous finding is silently deferred. The
-model identifies the fix path and P0 category; the wrapper enforces filtering
-and changed-path coverage. Local stub tests prove that enforcement, not real
-model classification accuracy.
+Codex's output schema requires three fields on every blocker: boolean
+`introduced`, boolean `acceptance_failure`, and nullable `safety_category`
+(`security`, `privacy` or `data_loss`, otherwise `null`). A pre-existing
+classification requires evidence that the problem existed on base and was not
+introduced or worsened by this diff. When the evidence is insufficient, the
+reviewer must set `introduced` to true. With declared scope, security/privacy/
+data-loss problems must be reported as blockers rather than notes regardless of
+origin. Missing/invalid classification or a noncanonical finding path makes the
+verdict unavailable and fails closed; no ambiguous finding is silently deferred.
+The model judges origin, Target acceptance and safety; the wrapper enforces the
+resulting classification and changed-path coverage. Local stub tests prove that
+enforcement, not real model classification accuracy.
 
 With no declaration, the existing blocking behavior is unchanged. Kimi remains
 advisory and does not apply Target scope. All existing rules/Owner-input

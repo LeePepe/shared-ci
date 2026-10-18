@@ -14,11 +14,12 @@ def declaration(paths=("src/app/**",), acceptance="Scoped review passes."):
             + f"\n\n### Acceptance\n- {acceptance}\n")
 
 
-def findings(*items):
+def findings(*items, introduced=False, acceptance_failure=False):
     return json.dumps({"verdict": "changes", "summary": "Defects found.", "notes": [],
                        "blockers": [{"file": path, "line": 1, "severity": severity,
-                                     "why": "A concrete defect.", "p0_category": p0}
-                                    for path, severity, p0 in items]})
+                                     "why": "A concrete defect.", "introduced": introduced,
+                                     "acceptance_failure": acceptance_failure, "safety_category": category}
+                                    for path, severity, category in items]})
 
 
 class ScopeAdmissionTests(unittest.TestCase):
@@ -69,20 +70,35 @@ class ScopedCodexTests(unittest.TestCase):
                                                    "body": declaration() if body is None else body}),
                                **overrides)
 
-    def test_in_scope_diff_with_out_of_scope_non_p0_passes_with_followup(self):
-        for severity in ("high", "critical"):
-            with self.subTest(severity=severity):
-                result, comment = self.run_scoped(findings(("src/core/model.py", severity, None)))
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertIn("codex review: pass", comment)
-                self.assertIn("### Follow-ups (non-blocking, outside Target scope)", comment)
-                self.assertIn("src/core/model.py", comment)
-                self.assertIn("0 blocking finding(s); 1 out-of-scope follow-up(s)", comment)
-                self.assertNotIn("### Blocking", comment)
+    def test_pre_existing_non_security_becomes_followup_regardless_of_fix_path(self):
+        for path in ("src/app/main.py", "src/core/model.py"):
+            for severity in ("high", "critical"):
+                with self.subTest(path=path, severity=severity):
+                    result, comment = self.run_scoped(findings((path, severity, None)))
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertIn("codex review: pass", comment)
+                    self.assertIn("### Follow-ups (non-blocking, pre-existing)", comment)
+                    self.assertIn(path, comment)
+                    self.assertIn("0 blocking finding(s); 1 pre-existing follow-up(s)", comment)
+                    self.assertNotIn("### Blocking", comment)
 
-    def test_in_scope_finding_still_blocks_and_outside_finding_becomes_followup(self):
-        result, comment = self.run_scoped(findings(("src/app/main.py", "high", None),
-                                                  ("src/core/model.py", "high", None)))
+    def test_introduced_defect_outside_declared_paths_still_blocks(self):
+        for reason in ("This diff introduces a correctness defect requiring a fix in this file.",
+                       "This diff introduces a mandatory-rule/red-line violation requiring a fix here."):
+            with self.subTest(reason=reason):
+                data = json.loads(findings(("src/core/model.py", "high", None), introduced=True))
+                data["blockers"][0]["why"] = reason
+                result, comment = self.run_scoped(json.dumps(data))
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("changes requested (1 blocking)", comment)
+                self.assertIn("src/core/model.py", comment)
+                self.assertNotIn("### Follow-ups", comment)
+
+    def test_introduced_finding_blocks_alongside_pre_existing_followup(self):
+        data = json.loads(findings(("src/app/main.py", "high", None),
+                                   ("src/core/model.py", "high", None)))
+        data["blockers"][0]["introduced"] = True
+        result, comment = self.run_scoped(json.dumps(data))
         self.assertEqual(1, result.returncode, result.stderr)
         self.assertIn("changes requested (1 blocking)", comment)
         blocking, followup = comment.split("### Follow-ups", 1)
@@ -90,13 +106,23 @@ class ScopedCodexTests(unittest.TestCase):
         self.assertNotIn("src/core/model.py", blocking)
         self.assertIn("src/core/model.py", followup)
 
-    def test_out_of_scope_p0_still_blocks(self):
+    def test_pre_existing_security_privacy_or_data_loss_still_blocks_without_p0_threshold(self):
         for category in ("security", "privacy", "data_loss"):
-            with self.subTest(category=category):
-                result, comment = self.run_scoped(findings(("src/core/model.py", "critical", category)))
+            for severity in ("high", "critical"):
+                with self.subTest(category=category, severity=severity):
+                    result, comment = self.run_scoped(findings(("src/core/model.py", severity, category)))
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    self.assertIn("changes requested (1 blocking)", comment)
+                    self.assertIn(category, comment)
+                    self.assertNotIn("### Follow-ups", comment)
+
+    def test_pre_existing_target_acceptance_failure_still_blocks(self):
+        for path in ("src/app/main.py", "src/core/model.py"):
+            with self.subTest(path=path):
+                result, comment = self.run_scoped(findings((path, "high", None), acceptance_failure=True))
                 self.assertEqual(1, result.returncode, result.stderr)
                 self.assertIn("changes requested (1 blocking)", comment)
-                self.assertIn("P0 " + category, comment)
+                self.assertIn(path, comment)
                 self.assertNotIn("### Follow-ups", comment)
 
     def test_file_outside_declared_paths_blocks_even_when_model_passes(self):
@@ -133,7 +159,8 @@ class ScopedCodexTests(unittest.TestCase):
         self.assertIn("codex review: pass", comment)
 
     def test_no_scope_declared_preserves_original_verdict_and_comment(self):
-        for data, status in ((PASS, 0), (CHANGES, 1)):
+        pre_existing = json.loads(findings(("src/core/model.py", "high", None)))
+        for data, status in ((PASS, 0), (CHANGES, 1), (pre_existing, 1)):
             with self.subTest(verdict=data["verdict"]):
                 legacy, legacy_comment = self.run_script("codex-review.sh", json.dumps(data))
                 result, comment = self.run_scoped(json.dumps(data), "Ordinary PR description.")
@@ -154,17 +181,21 @@ class ScopedCodexTests(unittest.TestCase):
                 self.assertIn("PR Target scope is invalid", comment)
                 self.assertFalse((self.out / "prompt").exists())
 
-    def test_missing_or_invalid_p0_classification_cannot_silently_defer(self):
-        missing = json.loads(json.dumps(CHANGES))
-        for category in ("missing", "correctness", False, [], {}):
-            with self.subTest(category=category):
-                data = json.loads(json.dumps(missing))
-                if category != "missing":
-                    data["blockers"][0]["p0_category"] = category
-                result, comment = self.run_scoped(json.dumps(data))
-                self.assertEqual(1, result.returncode, result.stderr)
-                self.assertIn("review unavailable", comment)
-                self.assertIn("scoped blockers require p0_category", comment)
+    def test_missing_or_invalid_classification_cannot_silently_defer(self):
+        for field, invalid in (("introduced", (None, 0, 1, "false")),
+                               ("acceptance_failure", (None, 0, 1, "false")),
+                               ("safety_category", ("correctness", False, [], {}))):
+            for value in ("missing", *invalid):
+                with self.subTest(field=field, value=value):
+                    data = json.loads(findings(("src/core/model.py", "high", None)))
+                    if value == "missing":
+                        del data["blockers"][0][field]
+                    else:
+                        data["blockers"][0][field] = value
+                    result, comment = self.run_scoped(json.dumps(data))
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    self.assertIn("review unavailable", comment)
+                    self.assertIn(field, comment)
 
     def test_invalid_verdict_is_rejected_before_scope_filtering(self):
         invalid = json.loads(findings(("src/core/model.py", "high", None)))
