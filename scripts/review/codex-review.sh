@@ -57,14 +57,20 @@ python3 -I -B "$REVIEW_DIR/owner_decisions.py" >"$WORK/owner" \
 # Body lines are quoted, so only generated headers can contribute to this count.
 echo "[codex-review] admitted Owner decisions: $(grep -c '^### Owner decision comment ' "$WORK/owner")"
 
-python3 -I -B "$REVIEW_DIR/pr_text.py" >"$WORK/pr" \
+python3 -I -B "$REVIEW_DIR/pr_text.py" --record-file "$WORK/pr.json" >"$WORK/pr" \
     || fail_closed "PR title/body could not be fetched."
 
-git diff --no-ext-diff "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
-    || git diff --no-ext-diff "$BASE_SHA..$HEAD_SHA" >"$WORK/diff" \
-    || fail_closed "Could not compute the PR diff."
-git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null \
-    || git diff --name-only "$BASE_SHA..$HEAD_SHA" >"$WORK/changed"
+DIFF_RANGE="$BASE_SHA...$HEAD_SHA"
+if ! git diff --no-ext-diff "$DIFF_RANGE" >"$WORK/diff" 2>/dev/null; then
+    DIFF_RANGE="$BASE_SHA..$HEAD_SHA"
+    git diff --no-ext-diff "$DIFF_RANGE" >"$WORK/diff" \
+        || fail_closed "Could not compute the PR diff."
+fi
+git diff --name-only "$DIFF_RANGE" >"$WORK/changed" \
+    || fail_closed "Could not enumerate changed files."
+# No rename detection: both old and new paths must be covered. NULs preserve literal names.
+git diff --name-only --no-renames -z "$DIFF_RANGE" >"$WORK/changed.nul" \
+    || fail_closed "Could not enumerate literal changed files."
 
 # Admit the complete diff, never a prefix. Compare decimal strings in Python
 # to avoid shell integer overflow (the budget is configurable, not a PR policy).
@@ -86,6 +92,10 @@ if (len(size), size) > (len(limit), limit):
     sys.exit(1)
 ' "$MAX_BYTES" "$WORK/diff")" || fail_closed "${BUDGET_ERROR:-Could not validate the complete diff byte budget.}"
 
+python3 -I -B "$REVIEW_DIR/target_scope.py" "$WORK/pr.json" "$WORK/changed.nul" \
+    "$WORK/scope.json" >"$WORK/scope-prompt" \
+    || fail_closed "PR Target scope is invalid or could not be checked."
+
 if [ ! -s "$WORK/diff" ]; then
     post_sticky "$MARKER" "$MARKER
 ## codex review: pass
@@ -105,7 +115,8 @@ ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c
 PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
     TRUNCATED="" DIFF="$(cat "$WORK/diff")" \
     python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" \
-        --rules-file "$WORK/rules" --owner-file "$WORK/owner" --pr-file "$WORK/pr")" \
+        --rules-file "$WORK/rules" --owner-file "$WORK/owner" --pr-file "$WORK/pr" \
+        --scope-file "$WORK/scope-prompt")" \
     || fail_closed "Prompt rendering failed."
 
 EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
@@ -126,7 +137,7 @@ if [ "$RC" -ne 0 ] || [ ! -s "$WORK/verdict.json" ]; then
 fi
 
 BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
-    --head "$HEAD_SHA" "$WORK/verdict.json")"
+    --head "$HEAD_SHA" --scope-file "$WORK/scope.json" "$WORK/verdict.json")"
 STATUS=$?
 post_sticky "$MARKER" "$BODY" || {
     echo "[codex-review] review record publication failed; fail closed" >&2

@@ -57,10 +57,85 @@ recorded compatible caller/provider configuration, never rewrites a provider
 revision or disables required gates. This source change does not migrate caller
 pins, install runners or change live settings.
 
-The diff-size budget and architecture-facts reader are unchanged. This feature
-only hardens selected repository rules; it does not certify other context as
-complete or execute any PR-head source. Tests use real local Git base/head
+The diff-size budget and architecture-facts reader are unchanged. Rules admission
+does not certify other context as complete or execute any PR-head source.
+Tests use real local Git base/head
 objects and stub model/GH commands, not hosted or product-adoption evidence.
+
+## Codex Target scope
+
+A PR may opt into scoped Codex blocking by including one section outside fenced
+code examples in its description:
+
+```markdown
+## Target scope
+
+### Paths
+- `scripts/review/**`
+- `.github/workflows/codex-review.yml`
+- `tests/review/**`
+- `docs/review-rules.md`
+
+### Acceptance
+- Existing shared-ci tests pass.
+- Scoped findings and changed-file coverage have regression tests.
+```
+
+Paths are case-sensitive, repository-root-relative literal file paths or subtree
+prefixes ending in `/**` (which covers every file beneath that directory).
+Other globs, absolute paths, traversal, backslashes and control characters are
+unsupported. Use backticks around each path. Both `### Paths` and `### Acceptance`
+need nonempty, single-line `- ` bullet lists; no other content belongs inside
+the section. A subsequent level-one or level-two heading ends it. Duplicate,
+malformed or over-8,000-byte scope sections make Codex unavailable and fail
+closed, including for an empty diff. A heading in a fenced example does not opt
+in. The section is parsed from the same complete PR API response used for
+title/body review, before the existing 8,000-byte body display cap. A separate
+quoted JSON data block supplies the complete admitted declaration to the model.
+
+The scope and acceptance text remain untrusted author data. They grant no
+repository-policy exception, Owner approval, execution permission or authority
+to instruct the reviewer. The model evaluates acceptance items against the diff
+and trusted rules and reports substantiated findings. After validating the
+original verdict, the wrapper applies these rules:
+
+- Any problem introduced or worsened by this diff blocks, wherever its fix
+  belongs. This includes correctness defects and mandatory-rule/red-line
+  violations introduced by the change; excluding the fix path grants no exception.
+- Failures of the declared Target's acceptance items block, including pre-existing
+  failures and failures whose fix belongs outside the declared paths.
+- Any security, privacy or data-loss problem blocks, including pre-existing
+  problems. There is no P0 exception threshold.
+- Only pre-existing non-security problems that the diff did not introduce or
+  worsen and that do not fail Target acceptance become **Follow-ups (non-blocking,
+  pre-existing)** in the sticky comment. This also applies to files inside the
+  declared paths: classification depends on the problem's origin, not its fix path.
+- Every changed file must match a declared path. A mismatch adds a blocking
+  finding even when the model returns pass. The check uses the complete literal
+  NUL-delimited path list, with rename detection disabled so both old and new
+  paths (and deletions) must be covered.
+
+Codex's output schema requires three fields on every blocker: boolean
+`introduced`, boolean `acceptance_failure`, and nullable `safety_category`
+(`security`, `privacy` or `data_loss`, otherwise `null`). A pre-existing
+classification requires evidence that the problem existed on base and was not
+introduced or worsened by this diff. When the evidence is insufficient, the
+reviewer must set `introduced` to true. With declared scope, security/privacy/
+data-loss problems must be reported as blockers rather than notes regardless of
+origin. Missing/invalid classification or a noncanonical finding path makes the
+verdict unavailable and fails closed; no ambiguous finding is silently deferred.
+The model judges origin, Target acceptance and safety; the wrapper enforces the
+resulting classification and changed-path coverage. Local stub tests prove that
+enforcement, not real model classification accuracy.
+
+With no declaration, the existing blocking behavior is unchanged. Kimi remains
+advisory and does not apply Target scope. All existing rules/Owner-input
+validation, complete-diff byte limits, fork isolation, publication requirements
+and exact-head evidence requirements remain in force. This provider change
+does not update any consumer SHA, install a server setting or waive final Owner
+review. Consumers pinned to older provider SHAs keep their existing behavior;
+adoption requires a separate pin update. Callers must re-run on PR description
+edits as described below so a changed declaration receives a fresh review.
 
 ## Owner decision comments
 
