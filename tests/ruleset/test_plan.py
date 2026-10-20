@@ -2,6 +2,7 @@
 import copy
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -43,17 +44,24 @@ def effective(ruleset):
 def run_plan(current, rulesets, detail, **options):
     return planner.plan(TEMPLATE, current, rulesets, detail, extra=options.get("extra", []),
                         maps=options.get("maps", {}), strict=options.get("strict", False),
-                        code_owner=options.get("code_owner", True))
+                        **({"code_owner": options["code_owner"]} if "code_owner" in options else {}))
 
 
 class CreateTests(unittest.TestCase):
+    def test_template_requires_no_approving_or_code_owner_review(self):
+        rules = {r["type"]: r for r in TEMPLATE["rules"]}
+        parameters = rules["pull_request"]["parameters"]
+        self.assertEqual(0, parameters["required_approving_review_count"])
+        self.assertFalse(parameters["require_code_owner_review"])
+
     def test_empty_repository_creates_template(self):
         result = run_plan([], [], None)
         self.assertEqual(("create", None), (result["action"], result["ruleset_id"]))
         self.assertEqual([AGGREGATE, CODEX], result["diff"]["checks_new"])
         rules = {r["type"]: r for r in result["payload"]["rules"]}
         self.assertEqual({"deletion", "non_fast_forward", "pull_request", "required_status_checks"}, set(rules))
-        self.assertTrue(rules["pull_request"]["parameters"]["require_code_owner_review"])
+        self.assertFalse(rules["pull_request"]["parameters"]["require_code_owner_review"])
+        self.assertEqual(0, rules["pull_request"]["parameters"]["required_approving_review_count"])
         self.assertFalse(rules["required_status_checks"]["parameters"]["strict_required_status_checks_policy"])
         self.assertEqual([], result["payload"]["bypass_actors"])
 
@@ -89,8 +97,15 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse(rules["pull_request"]["parameters"]["require_code_owner_review"])
 
     def test_rule_parameter_diff_is_reported(self):
-        changes = run_plan(self.current, self.list, self.ruleset)["diff"]["rules"]
-        self.assertIn("~ pull_request.require_code_owner_review: false -> true", changes)
+        self.ruleset = existing_ruleset(required_approving_review_count=2, require_code_owner_review=True)
+        result = run_plan(effective(self.ruleset), self.list, self.ruleset)
+        rules = {r["type"]: r for r in result["payload"]["rules"]}
+        self.assertFalse(rules["pull_request"]["parameters"]["require_code_owner_review"])
+        self.assertEqual(0, rules["pull_request"]["parameters"]["required_approving_review_count"])
+        self.assertEqual([], result["diff"]["checks_removed"])
+        changes = result["diff"]["rules"]
+        self.assertIn("~ pull_request.require_code_owner_review: true -> false", changes)
+        self.assertIn("~ pull_request.required_approving_review_count: 2 -> 0", changes)
         self.assertIn("~ required_status_checks.strict_required_status_checks_policy: true -> false", changes)
 
     def test_unmanaged_parameters_and_rules_are_kept(self):
@@ -135,6 +150,23 @@ class VerifyTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_defaults_and_legacy_option_match(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            for name in ("current", "rulesets"):
+                (root / f"{name}.json").write_text("[]")
+            argv = [sys.executable, "-I", "-B", str(SCRIPT), "--current", str(root / "current.json"),
+                    "--rulesets", str(root / "rulesets.json")]
+            default = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+            legacy = subprocess.run(argv + ["--no-code-owner-review"],
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(0, default.returncode, default.stderr)
+            self.assertEqual(0, legacy.returncode, legacy.stderr)
+            self.assertEqual(json.loads(default.stdout), json.loads(legacy.stdout))
+            rules = {r["type"]: r for r in json.loads(default.stdout)["payload"]["rules"]}
+            self.assertFalse(rules["pull_request"]["parameters"]["require_code_owner_review"])
+            self.assertEqual(0, rules["pull_request"]["parameters"]["required_approving_review_count"])
+
     def test_cli_plan_and_verify(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
@@ -161,6 +193,31 @@ class CliTests(unittest.TestCase):
         dry_run_end = text.index('if [ "$apply" -ne 1 ]; then')
         self.assertNotIn("-X POST", text[:dry_run_end])
         self.assertNotIn("-X PUT", text[:dry_run_end])
+
+    def test_apply_dry_run_preserves_default_and_legacy_option(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            ruleset = existing_ruleset(required_approving_review_count=1, require_code_owner_review=True)
+            (root / "current.json").write_text(json.dumps(effective(ruleset)))
+            (root / "rulesets.json").write_text(json.dumps([{"id": 101, "name": "main protection"}]))
+            (root / "detail.json").write_text(json.dumps(ruleset))
+            gh = root / "gh"
+            gh.write_text('#!/bin/sh\ncase "$*" in\n'
+                          '  "api repos/o/r/rules/branches/main") cat "$RULESET_FIXTURES/current.json" ;;\n'
+                          '  "api repos/o/r/rulesets") cat "$RULESET_FIXTURES/rulesets.json" ;;\n'
+                          '  "api repos/o/r/rulesets/101") cat "$RULESET_FIXTURES/detail.json" ;;\n'
+                          '  *) echo "unexpected gh call: $*" >&2; exit 1 ;;\nesac\n')
+            gh.chmod(0o755)
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ.get("PATH", ""),
+                       RULESET_FIXTURES=str(root), PYTHON=sys.executable)
+            for options in ([], ["--no-code-owner-review"]):
+                with self.subTest(options=options):
+                    result = subprocess.run(["bash", str(REPO / "scripts/ruleset/apply.sh"), "o/r"] + options,
+                                            env=env, capture_output=True, text=True, timeout=20)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertIn("dry run for o/r: update", result.stdout)
+                    self.assertIn("pull_request.require_code_owner_review: true -> false", result.stderr)
+                    self.assertIn("pull_request.required_approving_review_count: 1 -> 0", result.stderr)
 
 
 if __name__ == "__main__":

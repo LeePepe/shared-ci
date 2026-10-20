@@ -6,6 +6,8 @@
 #
 # Plan options are passed to plan.py: --extra-check NAME, --map OLD=NEW, --strict,
 # --no-code-owner-review, --template FILE. Uses the caller's authenticated `gh`.
+# The default requires zero approving reviews and no code-owner review;
+# --no-code-owner-review is retained as a compatibility no-op.
 # Ruleset changes are important: run the dry run, get Owner approval, then --apply.
 set -euo pipefail
 
