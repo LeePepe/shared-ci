@@ -5,8 +5,8 @@ AGENTS indexes it.
 
 ## Protocol
 
-The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/0dc389c476e96389322b82b9b95504f5118f82ab/ai/agent-protocol.md)
-and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/0dc389c476e96389322b82b9b95504f5118f82ab/ai/repo-contract.md)
+The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/88c09b3f68ceea82a4ca979c689e3dc50266ee10/ai/agent-protocol.md)
+and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/88c09b3f68ceea82a4ca979c689e3dc50266ee10/ai/repo-contract.md)
 govern development; local [protocol source](../ai/agent-protocol.md),
 [contract source](../ai/repo-contract.md) and surface contracts are candidates,
 not overrides. The complete selected protocol below supports tool-free review;
@@ -14,8 +14,8 @@ only its relative contract link is rebased to the immutable provider URL.
 Refresh it with the pin, never an unapproved candidate or review-time link.
 This guide's repository-specific choices remain authoritative.
 
-Dogfood: external [CI](../.github/workflows/ci.yml) and
-[review](../.github/workflows/review.yml) calls pin an **earlier published commit**
+Dogfood: [CI](../.github/workflows/ci.yml), [review](../.github/workflows/review.yml)
+and [bot](../.github/workflows/stuck-pr-bot-self.yml) pin an **earlier published commit**
 of this repo, never the commit under test. After publication, update those pins,
 the AGENTS protocol route, [metadata](../.github/repo-contract.json) and this guide
 in a separate reviewed adoption PR. Local candidate calls are advisory, not
@@ -165,8 +165,8 @@ Approved exceptions: none.
 
 [Repository metadata](../.github/repo-contract.json) is the machine authority:
 schema 1, guide `docs/repository-guide.md`, `shared_ci`
-`0dc389c476e96389322b82b9b95504f5118f82ab`, and an empty `dependencies` map.
-The [versioned provider docs](https://github.com/LeePepe/shared-ci/tree/0dc389c476e96389322b82b9b95504f5118f82ab/ai/)
+`88c09b3f68ceea82a4ca979c689e3dc50266ee10`, and an empty `dependencies` map.
+The [versioned provider docs](https://github.com/LeePepe/shared-ci/tree/88c09b3f68ceea82a4ca979c689e3dc50266ee10/ai/)
 describe that provider. Record shared-ci only in `shared_ci`, never a duplicate
 library entry. Self-adoption changes no product consumer pin and installs nothing.
 
@@ -215,7 +215,7 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 ## 2. Develop against the repository contract
 
 - Read the repository's layer map and development/PR guide under the
-  [repository development contract](https://github.com/LeePepe/shared-ci/blob/0dc389c476e96389322b82b9b95504f5118f82ab/ai/repo-contract.md#repository-development-contract).
+  [repository development contract](https://github.com/LeePepe/shared-ci/blob/88c09b3f68ceea82a4ca979c689e3dc50266ee10/ai/repo-contract.md#repository-development-contract).
   Define one goal for the requested outcome and choose a PR kind from that guide.
   Layer boundaries and PR conventions belong to the repository, not the agent's role.
 - **Dev Team:** Planner maps requirements/spec acceptance to single-goal tasks,
