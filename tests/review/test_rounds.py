@@ -120,12 +120,61 @@ class RoundScriptTests(unittest.TestCase):
         self.assertEqual(1, result.returncode, result.stderr)
         self.assertFalse((self.out / "prompt").exists())
 
-    def test_case_4_title_body_base_and_rules_changes_reconsider_only_inputs(self):
+    def test_same_head_base_change_falls_back_to_review_newly_exposed_code(self):
+        previous_base = self.head
+        self.repo.git("checkout", "-q", "--detach", self.head)
+        self.repo.write("src/core/model.py", "X = 2\n")
+        self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "head")
+        self.head = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.repo.git("checkout", "-q", "--detach", self.base)
+        result, previous = self.run_script("codex-review.sh", json.dumps(review.PASS), BASE_SHA=previous_base)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("src/app/main.py", (self.out / "prompt").read_text().split("\nDIFF:\n")[1])
+
+        result, comment = self.rerun(previous, changes(blocker(introduced=True)))
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("full review fallback", comment)
+        prompt = (self.out / "prompt").read_text()
+        self.assertIn("Perform a full PR review", prompt)
+        self.assertNotIn("Re-evaluate only the changed review inputs", prompt)
+        self.assertIn("+Y = 3", prompt.split("\nDIFF:\n")[1])
+        self.assertIn("changes requested", comment)
+        self.assertEqual(self.head, round_state.decode(comment)["head"])
+        self.assertEqual(self.base, self.repo.git("rev-parse", "HEAD").stdout.strip())
+
+    def test_same_head_and_base_with_changed_merge_base_falls_back_to_full_review(self):
+        common = self.base
+        self.repo.write("src/app/main.py", "Y = 3\n")
+        self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "other base")
+        self.base = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.repo.git("checkout", "-q", "--detach", self.head)
+        self.repo.write("src/core/model.py", "X = 2\n")
+        self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "head")
+        self.head = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.repo.git("checkout", "-q", "--detach", self.base)
+        shallow = self.repo.root / ".git/shallow"
+        shallow.write_text(self.base + "\n")
+        result, previous = self.run_script("codex-review.sh", json.dumps(review.PASS))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("src/app/main.py", (self.out / "prompt").read_text().split("\nDIFF:\n")[1])
+
+        # Deeper history exposes the common ancestor without changing either endpoint SHA.
+        shallow.unlink()
+        self.assertEqual(common, self.repo.git("merge-base", self.base, self.head).stdout.strip())
+        result, comment = self.rerun(previous, changes(blocker(introduced=True)))
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("full review fallback", comment)
+        prompt = (self.out / "prompt").read_text()
+        self.assertIn("Perform a full PR review", prompt)
+        self.assertIn("+Y = 3", prompt.split("\nDIFF:\n")[1])
+        self.assertIn("changes requested", comment)
+        self.assertEqual(self.base, self.repo.git("rev-parse", "HEAD").stdout.strip())
+
+    def test_case_4_title_body_and_rules_changes_reconsider_only_inputs(self):
         body = self.first()
         for key, env in (
                 ("title", {"STUB_PR": json.dumps({"title": "Changed", "body": "A harmless change."})}),
                 ("body", {"STUB_PR": json.dumps({"title": "Review context", "body": "Changed body"})}),
-                ("base", {"BASE_SHA": self.head}),
                 ("rules", {"REVIEW_RULES_FILE": "src/app/tech-context.md"})):
             with self.subTest(key=key):
                 result, comment = self.rerun(body, **env)

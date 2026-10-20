@@ -154,13 +154,16 @@ The provider handles these cases:
    `previous-head...current-head` as the repair delta, and the complete PR diff
    as context only. Recheck previous findings and repair regressions without
    rescanning unchanged code. Changed review inputs are supplied too.
-3. The same head with identical title, body, base SHA/ref, complete rules and
-   admitted Owner decision set: reuse the effective pass or blocking conclusion,
+3. The same head with identical title, body, base SHA/ref and merge-base, complete
+   rules and admitted Owner decision set: reuse the effective pass or blocking conclusion,
    without invoking the model. Publication of the review record remains required.
-4. The same head with changed inputs: supply the changed inputs and previous
-   findings for reconsideration, with the complete diff as context only. Adding
+4. The same head and unchanged base SHA and merge-base with changed inputs:
+   supply the changed inputs and previous findings for reconsideration, with the
+   complete diff as context only. Adding
    an admitted `Owner decision:` comment therefore forces reconsideration, even
    without a push. Removed or no-longer-admitted decisions also change the input.
+   A changed base SHA or merge-base instead forces a full review fallback, because
+   it can expose code absent from the previous PR diff.
 
 Input snapshots compare complete title/body values, including text beyond the
 model display cap. State is bound to the repository, PR and a digest of Review

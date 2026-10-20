@@ -128,13 +128,19 @@ def provider_digest() -> str:
 def prepare(work: pathlib.Path, marker: str) -> None:
     pr = json.loads((work / "pr.json").read_text(encoding="utf-8"))
     inputs = {"title": pr["title"], "body": pr["body"],
-              "base": {"sha": os.environ["BASE_SHA"], "ref": (pr.get("base") or {}).get("ref")},
+              "base": {"sha": os.environ["BASE_SHA"], "ref": (pr.get("base") or {}).get("ref"),
+                       "merge_base": None},
               "rules": (work / "rules").read_bytes().decode("utf-8"),
               "owner": (work / "owner").read_bytes().decode("utf-8")}
     current = {"repo": os.environ["BASE_REPO"], "pr": os.environ["PR_NUMBER"],
                "head": os.environ["HEAD_SHA"], "inputs": inputs, "provider": provider_digest()}
     mode, reason, old, delta, changes = "full", "", None, "", {}
     try:
+        merge_base = subprocess.run(["git", "merge-base", inputs["base"]["sha"], current["head"]],
+                                    capture_output=True, encoding="utf-8", timeout=60)
+        if merge_base.returncode != 1:  # No common ancestor uses the caller's two-dot diff.
+            merge_base.check_returncode()
+        inputs["base"]["merge_base"] = merge_base.stdout.strip() if merge_base.returncode == 0 else None
         old = previous(marker)
         if old is not None:
             if any(old[key] != current[key] for key in ("repo", "pr", "provider")):
@@ -150,7 +156,12 @@ def prepare(work: pathlib.Path, marker: str) -> None:
             changes = {key: {"previous": old["inputs"][key], "current": value}
                        for key, value in inputs.items() if old["inputs"][key] != value}
             if old["head"] == current["head"]:
-                mode = "inputs" if changes else "reuse"
+                if any(old["inputs"]["base"][key] != inputs["base"][key]
+                       for key in ("sha", "merge_base")):
+                    mode, old, changes = "fallback", None, {}
+                    reason = "Review base or merge-base changed; full review fallback."
+                else:
+                    mode = "inputs" if changes else "reuse"
             else:
                 exists = subprocess.run(["git", "cat-file", "-e", old["head"] + "^{commit}"],
                                         capture_output=True).returncode == 0
