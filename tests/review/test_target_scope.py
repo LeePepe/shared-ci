@@ -6,6 +6,7 @@ import test_review as review_tests
 
 CHANGES, PASS = review_tests.CHANGES, review_tests.PASS
 target_scope = review_tests.load("target_scope")
+round_state = review_tests.load("round_state")
 
 
 def declaration(paths=("src/app/**",), acceptance="Scoped review passes."):
@@ -176,7 +177,14 @@ class ScopedCodexTests(unittest.TestCase):
                 result, comment = self.run_scoped(json.dumps(data), "Ordinary PR description.")
                 self.assertEqual(status, legacy.returncode, legacy.stderr)
                 self.assertEqual(status, result.returncode, result.stderr)
-                self.assertEqual(legacy_comment, comment)
+                # Visible gate behavior is identical; the new private data field
+                # must retain each run's distinct complete PR input snapshot.
+                self.assertEqual(legacy_comment.split(round_state.STATE_PREFIX)[0],
+                                 comment.split(round_state.STATE_PREFIX)[0])
+                self.assertEqual("A harmless change.", round_state.decode(legacy_comment)["inputs"]["body"])
+                self.assertEqual("Ordinary PR description.", round_state.decode(comment)["inputs"]["body"])
+                self.assertEqual(round_state.decode(legacy_comment)["verdict"],
+                                 round_state.decode(comment)["verdict"])
                 self.assertNotIn("### Follow-ups", comment)
         result, comment = self.run_scoped(json.dumps(CHANGES), "```markdown\n" + declaration() + "```\n")
         self.assertEqual(1, result.returncode, result.stderr)

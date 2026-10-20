@@ -39,8 +39,6 @@ fail_closed() {
     exit 1
 }
 
-command -v "$CODEX_BIN" >/dev/null 2>&1 || fail_closed "codex CLI is not available on the runner."
-
 if ! git fetch --no-tags --depth=200 origin "$BASE_SHA" "$HEAD_SHA" 2>"$WORK/fetch.err"; then
     fail_closed "Could not fetch the exact PR revisions."
 fi
@@ -96,49 +94,55 @@ python3 -I -B "$REVIEW_DIR/target_scope.py" "$WORK/pr.json" "$WORK/changed.nul" 
     "$WORK/scope.json" >"$WORK/scope-prompt" \
     || fail_closed "PR Target scope is invalid or could not be checked."
 
-if [ ! -s "$WORK/diff" ]; then
-    post_sticky "$MARKER" "$MARKER
-## codex review: pass
+python3 -I -B "$REVIEW_DIR/round_state.py" prepare "$WORK" "$MARKER" \
+    || fail_closed "Review round preparation failed."
+ROUND_MODE="$(cat "$WORK/round-mode")"
 
-Reviewed head: \`$HEAD_SHA\`
-
-No committed diff between base and head." || {
-        echo "[codex-review] review record publication failed; fail closed" >&2
-        exit 1
-    }
-    exit 0
+if [ "$ROUND_MODE" != reuse ]; then
+    command -v "$CODEX_BIN" >/dev/null 2>&1 || fail_closed "codex CLI is not available on the runner."
 fi
 
-# Review must leave a clean provider cache reusable by caller verification.
-ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
-
-PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
-    TRUNCATED="" DIFF="$(cat "$WORK/diff")" \
-    python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" \
-        --rules-file "$WORK/rules" --owner-file "$WORK/owner" --pr-file "$WORK/pr" \
-        --scope-file "$WORK/scope-prompt")" \
-    || fail_closed "Prompt rendering failed."
-
-EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
-    --skip-git-repo-check -c sandbox_mode=read-only -c approval_policy=never "$PROMPT")
-if [ -n "${CODEX_LAUNCHER:-}" ]; then
-    # Trusted base-tree launcher (e.g. a local provider router). Contract:
-    # `LAUNCHER CODEX_BIN <exec args>`; the launcher inserts `exec` itself.
-    # shellcheck disable=SC2206 # intentional word split of a trusted launcher prefix
-    LAUNCHER=(${CODEX_LAUNCHER})
-    "${LAUNCHER[@]}" "$CODEX_BIN" "${EXEC_ARGS[@]}" >/dev/null 2>"$WORK/codex.err"
+if [ "$ROUND_MODE" = reuse ]; then
+    : # prepare supplied the validated previous verdict; do not invoke the model.
+elif [ ! -s "$WORK/diff" ] && { [ "$ROUND_MODE" = full ] || [ "$ROUND_MODE" = fallback ]; }; then
+    printf '%s' '{"verdict":"pass","summary":"No committed diff between base and head.","blockers":[],"notes":[]}' >"$WORK/verdict.json"
 else
-    "$CODEX_BIN" exec "${EXEC_ARGS[@]}" >/dev/null 2>"$WORK/codex.err"
-fi
-RC=$?
-if [ "$RC" -ne 0 ] || [ ! -s "$WORK/verdict.json" ]; then
-    tail -c 2000 "$WORK/codex.err" >&2 || true
-    fail_closed "codex CLI failed (rc=$RC)."
+    # Review must leave a clean provider cache reusable by caller verification.
+    ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
+
+    PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
+        TRUNCATED="" DIFF="$(cat "$WORK/diff")" \
+        python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" \
+            --rules-file "$WORK/rules" --owner-file "$WORK/owner" --pr-file "$WORK/pr" \
+            --scope-file "$WORK/scope-prompt" --round-instructions-file "$WORK/round-instructions" \
+            --round-data-file "$WORK/round-data")" \
+        || fail_closed "Prompt rendering failed."
+
+    EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
+        --skip-git-repo-check -c sandbox_mode=read-only -c approval_policy=never "$PROMPT")
+    if [ -n "${CODEX_LAUNCHER:-}" ]; then
+        # Trusted base-tree launcher (e.g. a local provider router). Contract:
+        # `LAUNCHER CODEX_BIN <exec args>`; the launcher inserts `exec` itself.
+        # shellcheck disable=SC2206 # intentional word split of a trusted launcher prefix
+        LAUNCHER=(${CODEX_LAUNCHER})
+        "${LAUNCHER[@]}" "$CODEX_BIN" "${EXEC_ARGS[@]}" >/dev/null 2>"$WORK/codex.err"
+    else
+        "$CODEX_BIN" exec "${EXEC_ARGS[@]}" >/dev/null 2>"$WORK/codex.err"
+    fi
+    RC=$?
+    if [ "$RC" -ne 0 ] || [ ! -s "$WORK/verdict.json" ]; then
+        tail -c 2000 "$WORK/codex.err" >&2 || true
+        fail_closed "codex CLI failed (rc=$RC)."
+    fi
 fi
 
-BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
-    --head "$HEAD_SHA" --scope-file "$WORK/scope.json" "$WORK/verdict.json")"
+python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
+    --head "$HEAD_SHA" --scope-file "$WORK/scope.json" --round-file "$WORK/round.json" \
+    --record-file "$WORK/effective-verdict.json" "$WORK/verdict.json" >"$WORK/body"
 STATUS=$?
+python3 -I -B "$REVIEW_DIR/round_state.py" finish "$WORK" \
+    || fail_closed "Review round record preparation failed."
+BODY="$(cat "$WORK/body")"
 post_sticky "$MARKER" "$BODY" || {
     echo "[codex-review] review record publication failed; fail closed" >&2
     exit 1

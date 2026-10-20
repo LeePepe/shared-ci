@@ -10,12 +10,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["file", "line", "severity", "why", "introduced", "acceptance_failure", "safety_category"],
+        "required": ["file", "line", "severity", "why", "introduced", "acceptance_failure", "safety_category", "unresolved", "red_line"],
         "properties": {
           "file": {"type": "string"},
           "line": {"type": ["integer", "null"]},
           "severity": {"type": "string", "enum": ["critical", "high"]},
           "introduced": {"type": "boolean"},
+          "unresolved": {"type": "boolean"},
+          "red_line": {"type": "boolean"},
           "acceptance_failure": {"type": "boolean"},
           "safety_category": {"type": ["string", "null"], "enum": [null, "security", "privacy", "data_loss"]},
           "why": {"type": "string"}

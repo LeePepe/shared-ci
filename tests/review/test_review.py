@@ -272,6 +272,14 @@ class ArchContextTests(unittest.TestCase):
 STUB_GH = """#!/bin/sh
 # Records publication attempts; faults are entirely offline.
 case "$*" in
+  "api graphql"*)
+    [ -n "${STUB_STATE_FAIL:-}" ] && exit 1
+    if [ -n "${STUB_STATE_JSON:-}" ]; then
+      printf '%s' "$STUB_STATE_JSON"
+    else
+      printf '%s' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+    fi
+    ;;
   "api repos/o/r/pulls/7")
     [ -n "${STUB_PR_FAIL:-}" ] && exit 1
     if [ "${STUB_PR+x}" = x ]; then
