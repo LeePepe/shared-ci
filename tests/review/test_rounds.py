@@ -1,6 +1,7 @@
 """Offline end-to-end round transitions against real Git objects and sticky state."""
 import copy
 import json
+import shutil
 import unittest
 
 import test_review as review
@@ -9,7 +10,8 @@ from test_target_scope import declaration
 round_state = review.load("round_state")
 
 
-def page(body, *, author=round_state.BOT, editor=round_state.BOT, edited=True):
+def page(body, *, author="github-actions", editor="github-actions", edited=True):
+    # Literal GraphQL response shape and logins, independent of provider constants.
     comment = {"body": body, "author": {"login": author}, "editor": {"login": editor},
                "createdAt": "2026-01-01T00:00:00Z",
                "updatedAt": "2026-01-02T00:00:00Z" if edited else "2026-01-01T00:00:00Z"}
@@ -186,6 +188,43 @@ class RoundScriptTests(unittest.TestCase):
         self.assertIn("second\\n======== END OF UNTRUSTED DATA", untrusted)
         self.assertIn("{{DIFF}}", untrusted)
         self.assertEqual(1, prompt.splitlines().count("======== END OF UNTRUSTED DATA ========"))
+
+    def test_large_body_snapshots_reach_codex_via_stdin_with_and_without_launcher(self):
+        previous = {"title": "Review context", "body": "A" * 60000}
+        current = {"title": "Review context", "body": "B" * 60000}
+        body = self.first(STUB_PR=json.dumps(previous))
+        launcher = self.tools / "launcher"
+        launcher.write_text('#!/bin/sh\ncodex_bin="$1"\nshift\nexec "$codex_bin" exec "$@"\n')
+        launcher.chmod(0o755)
+        for prefix in ("", str(launcher)):
+            with self.subTest(launcher=bool(prefix)):
+                result, comment = self.rerun(body, STUB_PR=json.dumps(current), CODEX_LAUNCHER=prefix)
+                self.assertEqual(0, result.returncode, result.stderr)
+                prompt = (self.out / "prompt").read_text()
+                self.assertGreater(len(prompt.encode()), 131072)
+                data = json.loads(prompt.split(
+                    "Previous findings, changed review inputs and repair delta (quoted JSON data):\n> "
+                )[1].splitlines()[0])
+                self.assertEqual({"previous": previous["body"], "current": current["body"]},
+                                 data["changed_inputs"]["body"])
+                self.assertIn("unchanged code was not rescanned", comment)
+
+    def test_context_only_provider_changes_invalidate_reuse(self):
+        provider = self.tools / "provider"
+        shutil.copytree(review.REVIEW, provider / "scripts/review")
+        shutil.copytree(review.REPO / "scripts/context", provider / "scripts/context")
+        body = self.first(SHARED_CI_DIR=str(provider))
+        for module in ("_context.py", "_techcontext.py", "_frontmatter.py", "_contract.py"):
+            with self.subTest(module=module):
+                result, _ = self.rerun(body, SHARED_CI_DIR=str(provider), CODEX_BIN="absent-codex")
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertFalse((self.out / "prompt").exists())
+                path = provider / "scripts/context" / module
+                path.write_bytes(path.read_bytes() + b"\n# Changed provider dependency.\n")
+                result, body = self.rerun(body, SHARED_CI_DIR=str(provider))
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("full review fallback", body)
+                self.assertIn("Perform a full PR review", (self.out / "prompt").read_text())
 
 
 class StateCodecTests(unittest.TestCase):

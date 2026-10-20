@@ -14,7 +14,7 @@ import zlib
 
 STATE_PREFIX = "<!-- shared-ci-review-state:v1:"
 MAX_STATE_BYTES = 1_000_000
-BOT = "github-actions[bot]"
+BOT = "github-actions"  # GraphQL Actor.login (REST uses github-actions[bot]).
 
 INSTRUCTIONS = {
     "full": "Initial review: review the complete PR diff using the existing dimensions.",
@@ -113,10 +113,15 @@ def previous(marker: str) -> dict | None:
 
 
 def provider_digest() -> str:
+    """Cover Review inputs and all Context modules, including dynamic helpers."""
+    scripts = pathlib.Path(__file__).resolve().parent.parent
+    paths = [path for path in (scripts / "review").iterdir()
+             if path.is_file() and path.suffix in (".py", ".sh", ".md", ".json")]
+    paths.extend((scripts / "context").rglob("*.py"))
     digest = hashlib.sha256()
-    for path in sorted(pathlib.Path(__file__).parent.iterdir()):
-        if path.is_file() and path.suffix in (".py", ".sh", ".md", ".json"):
-            digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    for path in sorted(paths):
+        digest.update(path.relative_to(scripts).as_posix().encode() + b"\0"
+                      + path.read_bytes() + b"\0")
     return digest.hexdigest()
 
 

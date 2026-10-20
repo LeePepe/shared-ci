@@ -163,8 +163,9 @@ The provider handles these cases:
    without a push. Removed or no-longer-admitted decisions also change the input.
 
 Input snapshots compare complete title/body values, including text beyond the
-model display cap. State is bound to the repository, PR and provider script
-digest, so a provider change cannot reuse an earlier implementation's verdict.
+model display cap. State is bound to the repository, PR and a digest of Review
+source/template/schema files and all Context Python modules, including dynamically
+loaded helpers. Changes to these provider dependencies invalidate stored verdicts.
 Legacy/malformed/unavailable state, failed comment reads or an unavailable
 previous-head delta cause a full review fallback explicitly identified in the
 output. Storage beyond the comment/state capacity is never truncated into a

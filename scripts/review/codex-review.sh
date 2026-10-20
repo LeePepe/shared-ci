@@ -110,24 +110,24 @@ else
     # Review must leave a clean provider cache reusable by caller verification.
     ARCH="$(python3 -B "$REVIEW_DIR/arch_context.py" <"$WORK/changed" 2>&1 | head -c 24000)"
 
-    PROMPT="$(ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
+    ARCHITECTURE="$ARCH" CHANGED="$(cat "$WORK/changed")" \
         TRUNCATED="" DIFF="$(cat "$WORK/diff")" \
         python3 -B "$REVIEW_DIR/render_prompt.py" "$REVIEW_DIR/review-prompt.md" \
             --rules-file "$WORK/rules" --owner-file "$WORK/owner" --pr-file "$WORK/pr" \
             --scope-file "$WORK/scope-prompt" --round-instructions-file "$WORK/round-instructions" \
-            --round-data-file "$WORK/round-data")" \
+            --round-data-file "$WORK/round-data" >"$WORK/prompt" \
         || fail_closed "Prompt rendering failed."
 
     EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
-        --skip-git-repo-check -c sandbox_mode=read-only -c approval_policy=never "$PROMPT")
+        --skip-git-repo-check -c sandbox_mode=read-only -c approval_policy=never -)
     if [ -n "${CODEX_LAUNCHER:-}" ]; then
         # Trusted base-tree launcher (e.g. a local provider router). Contract:
         # `LAUNCHER CODEX_BIN <exec args>`; the launcher inserts `exec` itself.
         # shellcheck disable=SC2206 # intentional word split of a trusted launcher prefix
         LAUNCHER=(${CODEX_LAUNCHER})
-        "${LAUNCHER[@]}" "$CODEX_BIN" "${EXEC_ARGS[@]}" >/dev/null 2>"$WORK/codex.err"
+        "${LAUNCHER[@]}" "$CODEX_BIN" "${EXEC_ARGS[@]}" <"$WORK/prompt" >/dev/null 2>"$WORK/codex.err"
     else
-        "$CODEX_BIN" exec "${EXEC_ARGS[@]}" >/dev/null 2>"$WORK/codex.err"
+        "$CODEX_BIN" exec "${EXEC_ARGS[@]}" <"$WORK/prompt" >/dev/null 2>"$WORK/codex.err"
     fi
     RC=$?
     if [ "$RC" -ne 0 ] || [ ! -s "$WORK/verdict.json" ]; then

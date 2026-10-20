@@ -313,10 +313,11 @@ esac
 exit 0
 """
 STUB_CODEX = """#!/bin/sh
-# Writes $STUB_VERDICT to the -o file; records the prompt (last argument).
+# Writes $STUB_VERDICT to the -o file; records the prompt from stdin.
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; last="$a"; done
-printf '%s' "$last" > "$STUB_OUT/prompt"
+[ "$last" = "-" ] || exit 9
+cat > "$STUB_OUT/prompt"
 [ -n "$STUB_FAIL" ] && exit 7
 printf '%s' "$STUB_VERDICT" > "$out"
 """
