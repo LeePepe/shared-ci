@@ -1,64 +1,53 @@
 # shared-ci repository guide
 
-shared-ci provides the agent protocol, repository contract/checker, layer-map
-resolver, fail-closed quality gate, AI review workflows and workflow-lint.
-Consumers pin full commit SHAs. This guide owns repository-specific development
-and PR rules; AGENTS is its index.
+Consumers pin full SHAs. This guide owns repository development/PR rules;
+AGENTS indexes it.
 
 ## Protocol
 
-The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/agent-protocol.md)
-and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/repo-contract.md)
+The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/0dc389c476e96389322b82b9b95504f5118f82ab/ai/agent-protocol.md)
+and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/0dc389c476e96389322b82b9b95504f5118f82ab/ai/repo-contract.md)
 govern development; local [protocol source](../ai/agent-protocol.md),
-[contract source](../ai/repo-contract.md) and surface contracts below are
-candidates, not overrides of pinned common rules. The complete selected protocol
-below supports tool-free review; only its relative contract link is rebased to
-the immutable provider URL. Refresh it with the pin, not an unapproved candidate
-or review-time linked document. This guide's repository-specific choices remain
-authoritative.
+[contract source](../ai/repo-contract.md) and surface contracts are candidates,
+not overrides. The complete selected protocol below supports tool-free review;
+only its relative contract link is rebased to the immutable provider URL.
+Refresh it with the pin, never an unapproved candidate or review-time link.
+This guide's repository-specific choices remain authoritative.
 
 Dogfood: external [CI](../.github/workflows/ci.yml) and
 [review](../.github/workflows/review.yml) calls pin an **earlier published commit**
-of this repo, never the commit under test. After selected-provider publication,
-update those pins, the AGENTS protocol route, [metadata](../.github/repo-contract.json)
-and this guide together in a separate reviewed adoption PR. Local candidate
-workflow calls are advisory tests, not self-approval of their gate. Rollback
-restores coordinated consumer configuration to its recorded compatible baseline;
-it neither rewrites provider history nor waives required checks.
+of this repo, never the commit under test. After publication, update those pins,
+the AGENTS protocol route, [metadata](../.github/repo-contract.json) and this guide
+in a separate reviewed adoption PR. Local candidate calls are advisory, not
+self-approval. Rollback restores coordinated consumer configuration to its
+recorded compatible baseline without rewriting history or waiving checks.
 
 ## Architecture
 
 Before editing, read the [root layer map](architecture/tech-context.md), every
-affected layer's leaf context and surface contract. Root and leaves own layer
-IDs, implementation/test paths and allowed dependencies; their globs are not
-duplicated here. Tests belong to the responsibility they exercise. Support paths
-cover documentation, templates and CI wiring and remain verified.
+affected leaf context and surface contract. They own layer IDs, implementation/
+test paths and allowed dependencies. Tests belong to the responsibility they
+exercise. Documentation, templates and CI wiring are verified support paths.
 
-Use the [Context CLI](context-cli-contract.md) to resolve planned paths:
+Resolve planned paths with the [Context CLI](context-cli-contract.md).
 
-```sh
-scripts/context/resolve scripts/context/_contract.py --format layer
-scripts/context/contexts tests/repo/test_self_adoption.py
-```
-
-Declared ownership/dependency checks do not prove arbitrary import boundaries;
-there is no general import-boundary linter. Behaviour/interface tests below add
-evidence. New dependency edges require an explicit architecture change with
-explicit architecture documentation and AI review.
+Ownership/dependency checks do not prove arbitrary import boundaries; there is
+no general import-boundary linter. Behaviour/interface tests add evidence.
+New dependency edges require explicit architecture changes, documentation and AI review.
 
 ## PR work units
 
-Each task uses a dedicated branch/worktree and one independently acceptable PR
-purpose from the units below, with necessary tests and interface docs. Separate
-independent requirements even within one layer. Cross-layer features use
-interface-based, dependency-ordered PRs that build/test independently. Boundary
-changes are explicit contract changes, not task-local layers or scope expansion.
+Each task uses a dedicated branch/worktree. Each PR has one independently
+acceptable purpose from the units below, with tests/interface docs. Separate
+independent requirements within a layer too. Cross-layer PRs follow interfaces
+and dependencies and build/test independently. Boundary changes are explicit
+contract changes, never task-local layers or scope expansion.
 
 | Unit and responsibility | Ownership / interface source | Necessary companions | Verification and review |
 | --- | --- | --- | --- |
-| Context: resolve ownership, audit contracts, run declared gates | [Context leaf](../scripts/context/tech-context.md), [CLI contract](context-cli-contract.md), [orphan test reachability](orphan-test-contract.md), [repository contract](../ai/repo-contract.md) | Required context/repo regressions, affected existing schema and contract documentation | Context and repo suites; checker/schema/policy changes need AI review |
+| Context: ownership, contract audit, declared gates | [Context leaf](../scripts/context/tech-context.md), [CLI contract](context-cli-contract.md), [orphan test reachability](orphan-test-contract.md), [repository contract](../ai/repo-contract.md) | Context/repo regressions; affected existing schema/contract docs | Context/repo suites; checker/schema/policy changes need AI review |
 | Lint: validate reusable workflow callers | [Lint leaf](../scripts/lint/tech-context.md), [architecture](architecture.md) | Caller-validation regressions and usage documentation | Lint suite and workflow-lint; AI review |
-| Quality: aggregate explicit gate results, PR-range checks and 6DQ evidence | [Quality leaf](../scripts/quality/tech-context.md), [aggregation contract](quality-aggregation-contract.md), [test integrity](test-integrity.md), [commit identity](commit-identity.md) | Gate/integrity/identity/aggregation regressions and affected result schema/contract | Quality suites; AI review |
+| Quality: explicit aggregation, PR-range checks, 6DQ evidence | [Quality leaf](../scripts/quality/tech-context.md), [aggregation contract](quality-aggregation-contract.md), [test integrity](test-integrity.md), [commit identity](commit-identity.md) | Gate/integrity/identity/aggregation regressions; affected result schema/contract | Quality suites; AI review |
 | Select: choose changed layers and dependents, falling back to full runs | [Select leaf](../scripts/select/tech-context.md), [selection contract](changed-layer-selection.md) | Selection regressions and selection documentation | Select suite; AI review |
 | Policy: evaluate eligibility as a pure function | [Policy leaf](../scripts/policy/tech-context.md), [validation contract](policy-validation-contract.md) | Validation regressions and affected policy schema/contract | Policy suite; AI review |
 | Review: immutable-base rules, diff ingestion and verdicts | [Review leaf](../scripts/review/tech-context.md), [rules admission](review-rules.md) | Reviewer regressions and prompt/usage documentation | Review suite; AI review; real model acceptance remains separate |
@@ -66,13 +55,12 @@ changes are explicit contract changes, not task-local layers or scope expansion.
 | Schemas: define versioned data interfaces | [Schemas leaf](../schemas/tech-context.md), the affected schema's surface contract | Compatibility tests in each consuming layer and matching contract documentation | JSON syntax plus affected consumer suites; AI review |
 | Ruleset: plan default-branch protection and explicitly apply approved changes | [Ruleset leaf](../scripts/ruleset/tech-context.md), [repository contract](../ai/repo-contract.md) | Planner regressions and the affected ruleset template/documentation | Ruleset suite; AI review; a local test is not live readback |
 | CI / self-adoption: wire this repository to a published provider | [CI](../.github/workflows/ci.yml), [review caller](../.github/workflows/review.yml), [hook](../.githooks/pre-push), [verify entry](../scripts/verify) | Coordinated metadata, index, guide, CODEOWNERS and relevant wiring/adoption tests | Full verification, audit and workflow-lint; AI review |
-| Common protocol / repository contract: change one shared development rule | [Protocol source](../ai/agent-protocol.md), [contract source](../ai/repo-contract.md) | Necessary contract tests and matching template/versioned documentation | Repo suite plus affected checks; AI review; consumer repinning is a later PR |
+| Common protocol / repository contract: one shared rule | [Protocol source](../ai/agent-protocol.md), [contract source](../ai/repo-contract.md) | Contract tests and matching template/versioned docs | Repo suite plus affected checks; AI review; consumer repinning is a later PR |
 | Docs / spec: one documentation topic or requirement | The relevant document and root support declaration | Its diagrams/examples and documentation regressions | Link/contract checks and topic review; actual policy changes still need AI review |
 
-PR boundaries are **manual** planning/code-review rules; the aggregate neither
-infers purpose nor validates this table. No universal file/line ceiling,
-package-equals-layer rule, one-layer-only requirement or extra PR Manager scope
-gate applies. PR Manager uses existing check/review evidence to manage lifecycle.
+PR boundaries are **manual** planning/code-review rules, not aggregate checks.
+No universal file/line ceiling, package-equals-layer rule, one-layer-only rule or
+extra PR Manager scope gate applies. PR Manager uses existing check/review evidence.
 For staged plans and multi-stage feature contracts, the in-tree contract is the
 matching documentation for intermediate declaration/schema PRs; surface-document
 updates (such as CLI contracts or architecture guides) belong to their designated
@@ -88,89 +76,80 @@ scripts/verify
 scripts/verify --all                 # same full run
 ```
 
-Native verification runs full suites: shell/Python/JSON syntax, layer
-map and selected-provider live-root contract, workflow-lint, Context,
-repo, Lint, Review, Ruleset, Select, StuckPR, Quality
-(including test integrity and commit identity) and Policy tests, then
-committed-tree whitespace. Before committing, also run `git diff --check` and
-`git diff --cached --check`. Stage new metadata/documents for the tracked-file
-audit; staging does not prove equality between worktree content and a commit.
+Native verification runs shell/Python/JSON syntax, layer-map/selected-provider
+live-root contract, workflow-lint, Context, repo, Lint, Review, Ruleset, Select,
+StuckPR, Quality (including test integrity and commit identity), Policy and
+committed-tree whitespace checks. Before committing, run `git diff --check` and
+`git diff --cached --check`. Stage new metadata/documents for tracked-file audit;
+staging does not prove worktree/commit equality.
 
-For a focused iteration, use the corresponding suite from the entry, for example:
+Focused iteration uses the relevant suite from that entry.
 
-```sh
-python3 -I -B -m unittest discover -s tests/repo -p test_self_adoption.py -v
-python3 -I -B scripts/context/_context.py audit
-python3 -I -B scripts/lint/workflows.py --root .
-```
-
-`audit-selected` accepts only tracked regular metadata (no fallback). It
-preflights required runtime/schema blobs, preserves path/type/mode/blob while
-materializing all selected Context files and schema, and forbids
-fetch/cache/substitution. It requires full local history. The separate caller
+`audit-selected` requires tracked regular metadata and full local history, with
+no fallback. It preflights and materializes all selected Context/runtime/schema
+blobs, preserving path/type/mode/blob; fetch/cache/substitution are forbidden.
+The separate caller
 [metadata-aware template bootstrap](bootstrap-and-templates.md) validates metadata
 and clean exact-pin caches, preserves wrong/dirty caches and isolates provider
-Git state. This repo uses native full verification, not that bootstrap.
+Git state. This repo uses native verification, not that bootstrap.
 
-The pinned quality workflow's default-on test-integrity lane compares recognized
-test losses from immutable Git data and requires substantive per-file PR-body
-rationale. Missing/stale selected results fail the aggregate. Test edits need
-rationale, CI and review, not a separate Owner test class; actual gate/policy/
-permission changes remain protected. Local supplied-body checks do not prove
-live PR-body acceptance; lexical detector limits require independent review.
+The pinned default-on test-integrity lane compares recognized test losses from
+immutable Git data and requires substantive per-file PR-body rationale.
+Missing/stale selected results fail the aggregate. Test edits need rationale,
+CI and review, not separate Owner approval; gate/policy/permission changes remain
+protected. Supplied-body checks do not prove live acceptance; lexical detector
+limits require independent review.
 
 Candidate commit identity defaults to `basic` (malformed/local-email rejection).
 Once the Owner switches local Git and GitHub web commit emails to noreply,
 enable strict mode per repo with `commit-identity-mode: noreply` in its quality
 caller; see [both modes](commit-identity.md).
 
-`scripts/verify` excludes `tests/contracts`. Registry isolation, behaviour and
-schema-engine fixtures need separate external tool/source and envelope admission,
-then independent D1 acceptance before behaviour execution; see
+`scripts/verify` excludes `tests/contracts`. Registry isolation/behaviour/schema
+fixtures require separate external tool/source and envelope admission, then
+independent D1 acceptance before behaviour execution; see
 [registry verification](registry-resolution-contract.md#isolated-verification-source-and-admission).
-Ordinary unittest discovery must not execute registry fixtures. Source checks do
-not certify registry distribution, real consumers, recovery or full 6DQ.
+Ordinary discovery must not execute them. Source checks do not certify registry
+distribution, real consumers, recovery or full 6DQ.
 
-| Rule | Status and evidence boundary |
-| --- | --- |
-| Tracked-path coverage, declared graph, metadata/index routes, caller pin parity and guide protection | **Enforced** by native audit and the CI contract lane; effective server ownership still needs readback |
-| Syntax, workflow validity and behaviour in the native suites | **Enforced** by `scripts/verify` locally and in CI; the hook calls this entry, but local hook configuration is not a tree property |
-| Actual import boundaries and PR purpose/unit fit | **Manual** interface/code review plus relevant tests; no universal import or PR-size gate |
-| Registry fixtures, consumer/recovery and live reviewer acceptance | **Separate / setup-held** evidence, never inferred from the native suite |
+Native audit/CI contract enforce tracked-path coverage, declared graph, metadata/
+index routes, caller pin parity and guide protection; server ownership needs
+readback. `scripts/verify` enforces syntax, workflows and native behaviour locally
+and in CI; the hook uses it, but hook configuration is not a tree property.
+Import boundaries and PR purpose/unit fit remain manual interface/code review
+plus tests; no universal import/PR-size gate. Registry fixtures, consumer/recovery
+and live reviewer acceptance remain separate/setup-held, never inferred from native tests.
 
 ## Required checks
 
 - `quality / aggregate`
 
-The pinned `quality` job supplies this aggregate, including selected integrity
-results. Local `candidate` and `candidate-select` jobs stay advisory and
-nonrequired; a candidate cannot approve itself. Effective server-required
-contexts must come from fresh leader/Owner readback, not this source declaration.
+Pinned `quality` supplies the aggregate, including selected integrity results.
+`candidate` and `candidate-select` remain advisory/nonrequired; a candidate cannot
+approve itself. Effective server-required contexts need fresh leader/Owner
+readback, not source declarations.
 
 [Review caller](../.github/workflows/review.yml) jobs run only when
-`SHARED_CI_REVIEW_RUNNER` is `true` and a trusted runner is available. When that
-setup is absent, skipped jobs do not establish model completion. The approved
-inline `codex-review-gate` always runs on a hosted runner with empty permissions,
-depends only on Codex and accepts only an explicit `success` result. Skipped,
-failed, cancelled or unavailable Codex review fails that gate. Owner approval
-and Kimi success cannot substitute; Kimi stays advisory and does not delay it.
-Actual non-skipped current-head evidence is still required to prove completion.
-Requiring this check on the server needs specific Owner settings authorization
-and fresh readback; source approval and the gate's existence do not install it.
+`SHARED_CI_REVIEW_RUNNER` is `true` and a trusted runner is available; skips never
+prove model completion. Inline `codex-review-gate` always runs hosted with empty
+permissions, depends only on Codex and accepts only explicit `success`.
+Skipped/failed/cancelled/unavailable Codex review fails it. Owner approval and
+Kimi success cannot substitute; Kimi remains advisory and does not delay it.
+Completion requires non-skipped current-head evidence. Server enforcement needs
+specific Owner settings authorization and fresh readback; source approval and
+the gate's existence do not install it.
 
 Both reviewers receive this guide as `rules-file`, but `pull_request_target`
-uses trusted-main workflow configuration and the guide's immutable `BASE_SHA`
-Git blob, not the mutable checkout, index or head. A guide newly added in a PR
-is not already available on base. The source PR, a local
-pass or a hosted quality run cannot prove reviewer enablement or acceptance;
-those require separate trusted setup and actual current-head evidence.
+uses trusted-main configuration and the guide's immutable `BASE_SHA` Git blob,
+not checkout/index/head. A guide added in a PR is unavailable on base. Source,
+local passes and hosted quality cannot prove reviewer enablement/acceptance;
+separate trusted setup and actual current-head evidence are required.
 
-The selected provider admits only a regular base-tree file containing nonempty
-UTF-8 text within 24,000 bytes. Missing, invalid or oversized explicit rules
-never fall back or truncate: they stop before either model, with Codex failing
-closed and Kimi advisory unavailable. Admitted rules arrive complete, including
-all trailing newlines. The self-adoption regressions compare exact guide bytes,
-ignore head/index/worktree decoys and verify unavailable-before-model negatives.
+Selected review rules must be a regular base-tree file with 1..24,000 UTF-8
+bytes. Missing/invalid/oversized explicit rules stop before either model without
+fallback/truncation: Codex fails closed; Kimi is advisory unavailable. Rules
+arrive complete, including trailing newlines. Self-adoption regressions compare
+exact guide bytes, reject head/index/worktree decoys and test pre-model failure.
 
 ## Red lines
 
@@ -186,32 +165,29 @@ Approved exceptions: none.
 
 [Repository metadata](../.github/repo-contract.json) is the machine authority:
 schema 1, guide `docs/repository-guide.md`, `shared_ci`
-`6e354f476bc53d68f0f09fc231d5cd938466af9c`, and an empty `dependencies` map.
-The [versioned provider documentation](https://github.com/LeePepe/shared-ci/tree/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/)
-describes that selected provider. Shared-ci is recorded only in `shared_ci`,
-not duplicated as a library entry. This self-adoption changes no product
-consumer pin and installs nothing.
+`0dc389c476e96389322b82b9b95504f5118f82ab`, and an empty `dependencies` map.
+The [versioned provider docs](https://github.com/LeePepe/shared-ci/tree/0dc389c476e96389322b82b9b95504f5118f82ab/ai/)
+describe that provider. Record shared-ci only in `shared_ci`, never a duplicate
+library entry. Self-adoption changes no product consumer pin and installs nothing.
 
 ## Delivery
 
-Use the [PR template](../.github/pull_request_template.md) and name the repository
-unit and relevant requirement/spec/task in Intent. Keep base/default-branch,
-stacking, auto-merge, approval and ordinary-test-change policy in the pinned
-protocol; this guide introduces no separate human approval class for test edits.
-State reasons for test changes and provide applicable CI/review evidence.
+Use the [PR template](../.github/pull_request_template.md); Intent names the unit
+and requirement/spec/task. Pinned protocol governs base/stacking/auto-merge/
+approval/test changes; no separate human approval class for tests. State test
+change reasons and applicable CI/review evidence.
 
-Unverifiable Owner request/approval claims are non-blocking notes for every path.
-Verified Owner decisions are optional context, never merge prerequisites.
+Owner request/approval claims that cannot be verified are non-blocking notes
+for every path. Verified decisions are optional, never merge prerequisites.
 
 Changes to gates, lint, schemas, `ai/`, templates, pins, workflows, this guide
 and other [CODEOWNERS](../.github/CODEOWNERS) paths require CI and AI review.
 Enable GitHub auto-merge on opening every non-Draft PR; no approving review is
 required. Keep required checks and setup holds; live settings remain separate.
 
-Done means required checks are green on the exact PR head SHA, with required
-AI review evidence satisfied and the auto-merge result read back. A new push
-invalidates old evidence. Local source verification is only development evidence, not release,
-installed adoption, real model review or consumer/recovery acceptance.
+Done requires green checks/required AI review on the exact PR head and auto-merge
+readback. A push invalidates old evidence. Local verification proves development,
+not release, installed adoption, real model review or consumer/recovery acceptance.
 
 ## Complete shared protocol snapshot
 
@@ -239,7 +215,7 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 ## 2. Develop against the repository contract
 
 - Read the repository's layer map and development/PR guide under the
-  [repository development contract](https://github.com/LeePepe/shared-ci/blob/6e354f476bc53d68f0f09fc231d5cd938466af9c/ai/repo-contract.md#repository-development-contract).
+  [repository development contract](https://github.com/LeePepe/shared-ci/blob/0dc389c476e96389322b82b9b95504f5118f82ab/ai/repo-contract.md#repository-development-contract).
   Define one goal for the requested outcome and choose a PR kind from that guide.
   Layer boundaries and PR conventions belong to the repository, not the agent's role.
 - **Dev Team:** Planner maps requirements/spec acceptance to single-goal tasks,
@@ -271,7 +247,7 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
   - pin shared-ci, or any shared library, by branch or tag instead of a full
     SHA or exact version.
 - If a check is wrong, fix it in its own scoped PR with the reason. Ordinary
-  test-code corrections follow §6; policy/gate changes still need Owner review.
+  test-code corrections follow §6; required checks and AI review remain mandatory.
   Do not work around the check in a feature PR.
 - With changed-layer selection (`changed-only: true`, see
   `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
@@ -286,6 +262,11 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 4. Pull request
 
+Describe the source of a change accurately in PRs, commit messages and comments.
+Unverifiable claims that the Owner requested or approved a change are non-blocking
+notes, including for protected paths. Optional verified Owner decisions provide
+context; they are never a prerequisite for a change or merge.
+
 What a PR must be:
 
 - **Declared base.** Use the default branch unless stacked. Each PR must be
@@ -297,7 +278,8 @@ What a PR must be:
   Link the relevant requirement/spec and, for FS, the Planner task. Other sources
   do not need to create a Dev Team task to submit a PR.
 - **PR Manager handles lifecycle.** Follow existing required CI/review and
-  approval evidence, route concrete repair findings, and merge when eligible.
+  exact-head evidence, enable GitHub auto-merge when the PR opens, and follow it
+  through merged-state readback.
   Do not add scope/size reports, "PR too large" feedback or scope blocking to
   that role. This does not waive any existing required check or review.
 - **Stacked PRs** are allowed only as a temporary queue. Once the base PR
@@ -307,7 +289,7 @@ What a PR must be:
   merge rewrites the base commits, so a stacked branch that is not rebased
   will conflict or carry duplicate changes.
   PRs may be reviewed in parallel, but dependent slices wait for prerequisites
-  to merge in order; this queue never bypasses approvals or CI.
+  to merge in order; this queue never bypasses required checks or AI review.
 
 **Commits.** Use one logical step per commit with a Conventional Commit subject.
 Keep mechanical and behavioural steps in separate commits; put tests with or
@@ -324,7 +306,7 @@ Fill in every section of the repository's PR template:
 | Existing behaviour | What the code does today, including behaviour that must be kept |
 | Intent | One-sentence goal first, then what changes and why; PR kind and requirement/spec/task link when present |
 | Compatibility | API/data/config compatibility, migrations, rollback |
-| Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
+| Removed or weakened tests or policy | Each item with its reason, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
 
 The `quality / aggregate` check rejects empty or placeholder sections.
@@ -335,23 +317,46 @@ The `quality / aggregate` check rejects empty or placeholder sections.
   the commit it names. **Every new push invalidates the old evidence.** Wait
   for the new required checks and a new review before you claim the work is
   done.
-- "Done" means the required checks are green on the PR head SHA. A finished
-  local run is not "done", and a sent message is not an accepted handoff.
+- Handing over a PR is an intermediate lifecycle event, not "done". A finished
+  local run is not "done", and a sent message alone is not an accepted
+  handoff or completion signal.
+- After PR handoff, the author may either:
+  - remain active to wait for the required checks on the current PR head and
+    repair failures; or
+  - stop after handoff. The protocol does not require continued waiting.
+- When an author remains active, it waits only for required checks and concrete
+  repair results; it never waits for human approvals. Required checks and AI review remain
+  mandatory; GitHub auto-merge performs the merge without human approval.
+- PR Manager handles lifecycle as defined in §4 and serves as the backstop when
+  the author is not waiting or is unavailable. PR Manager follows current-head
+  CI and AI review evidence, and routes concrete repair findings through
+  the original path. It does not write to the branch and gains no new gate.
+- During repair, the author remains the sole branch writer under §1; nobody
+  else is assigned to write concurrently, and unexpected writers still require
+  stopping and reporting. Every repair push must follow §3 verification before
+  pushing. Because each push invalidates prior checks, reviews and tested-SHA
+  evidence, any later completion claim requires fresh evidence for the new
+  PR head.
+- "Done" means the required checks are green on the exact PR head SHA plus any
+  required AI review evidence. No human approval is required; delivery also
+  records the auto-merge result on the exact head. PR handoff never
+  waives these gates.
 
-## 6. Important PRs need the Owner
+## 6. Auto-merge without human approval
 
-Changes under `CODEOWNERS` paths need Owner approval (for example
-`.github/**`, policy, schemas, gates, `AGENTS.md`, the constitution,
-dependency pins, credentials, privacy and data migrations). Ordinary test-code
-edits or deletions require a stated reason, CI and AI review, not separate
-Owner approval merely because tests changed. Changes to actual gate/policy
-semantics or permissions remain important even when placed in a test or Markdown
-file. Existing behaviour changes without an approved spec also need the Owner.
-Use trusted policy and effective CODEOWNERS protections, not an author's label,
-to route review. Until CODEOWNERS review is enforced, add `owner-review` for
-important PRs and wait; do not bypass existing protections.
+Every non-Draft PR uses GitHub auto-merge from the time it opens. Once required
+checks and required AI review pass on the exact head, GitHub merges it without
+Owner, code-owner or other approving reviews. This applies to all PR sources
+and all paths, including gates, CI, review rules, CODEOWNERS and rulesets.
+Do not add an approval label or wait for an Owner decision. CODEOWNERS records
+ownership; it does not impose a merge prerequisite. Never disable auto-merge to
+hold a PR. Track its checks and merge result, and route concrete repair findings
+to the original writer.
 
-Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
+Test changes still need a stated reason, CI and AI review. Security and privacy
+red lines and CI trust boundaries remain blocking. Optional Owner decisions can
+clarify intent but cannot waive those red lines or required checks. Unverifiable
+Owner request/approval claims are non-blocking notes for every path.
 
 ## 7. Incidents become rules
 

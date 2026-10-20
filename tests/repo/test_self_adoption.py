@@ -12,7 +12,7 @@ import unittest
 from fixture import ContractRepo, OTHER, REPO, environment, run_bounded
 
 
-PROVIDER = "6e354f476bc53d68f0f09fc231d5cd938466af9c"
+PROVIDER = "0dc389c476e96389322b82b9b95504f5118f82ab"
 GUIDE = "docs/repository-guide.md"
 METADATA = ".github/repo-contract.json"
 SPEC = importlib.util.spec_from_file_location(
