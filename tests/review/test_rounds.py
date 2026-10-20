@@ -76,6 +76,33 @@ class RoundScriptTests(unittest.TestCase):
         self.assertIn("full diff is context only", comment)
         self.assertEqual(self.base, self.repo.git("rev-parse", "HEAD").stdout.strip())
 
+    def test_reset_to_ancestor_falls_back_to_full_review(self):
+        reset_head = self.head
+        self.repo.git("checkout", "-q", "--detach", reset_head)
+        self.repo.write("src/app/main.py", "Y = 4\n")
+        self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "fix")
+        self.head = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        reviewed_head = self.head
+        self.repo.git("checkout", "-q", "--detach", self.base)
+        result, previous = self.run_script("codex-review.sh", json.dumps(review.PASS))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("pass", round_state.decode(previous)["verdict"]["verdict"])
+
+        # Model a PR reset that removes the reviewed fix, without moving the trusted checkout.
+        self.head = reset_head
+        self.repo.git("merge-base", "--is-ancestor", self.head, reviewed_head)
+        self.assertEqual("", self.repo.git("diff", reviewed_head + "..." + self.head).stdout)
+        result, comment = self.rerun(previous, changes(blocker(introduced=True)))
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("full review fallback", comment)
+        prompt = (self.out / "prompt").read_text()
+        self.assertIn("Perform a full PR review", prompt)
+        self.assertNotIn("Re-review only the previous findings and the repair delta", prompt)
+        self.assertIn("+Y = 3", prompt.split("\nDIFF:\n")[1])
+        self.assertIn("changes requested", comment)
+        self.assertEqual(self.head, round_state.decode(comment)["head"])
+        self.assertEqual(self.base, self.repo.git("rev-parse", "HEAD").stdout.strip())
+
     def test_case_3_same_inputs_reuses_both_pass_and_blocking_conclusions(self):
         for raw, status in ((None, 0), (changes(blocker(introduced=True)), 1)):
             with self.subTest(status=status):

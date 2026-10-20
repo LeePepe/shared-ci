@@ -157,6 +157,9 @@ def prepare(work: pathlib.Path, marker: str) -> None:
                 if not exists:
                     subprocess.run(["git", "fetch", "--no-tags", "--depth=200", "origin", old["head"]],
                                    check=True, capture_output=True, timeout=60)
+                # A three-dot repair diff is complete only for a descendant head.
+                subprocess.run(["git", "merge-base", "--is-ancestor", old["head"], current["head"]],
+                               check=True, capture_output=True, timeout=60)
                 delta = subprocess.run(["git", "diff", "--no-ext-diff", "--no-textconv",
                                         old["head"] + "..." + current["head"]],
                                        check=True, capture_output=True, encoding="utf-8", timeout=60).stdout
