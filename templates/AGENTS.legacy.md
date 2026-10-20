@@ -20,7 +20,7 @@ and [verify entry](scripts/verify).
 ## Required checks
 
 [CI caller](.github/workflows/ci.yml), repository protection settings and
-[review ownership](.github/CODEOWNERS).
+[review policy](docs/development.md#verification-and-review-sources).
 
 ## Red lines
 

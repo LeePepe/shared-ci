@@ -39,9 +39,14 @@ class AIBundleTests(unittest.TestCase):
         headings = re.findall(r"^#{1,6} +(.+)$", selected, re.M)
         self.assertIn(fragment, [heading.lower().replace(" ", "-") for heading in headings])
         self.assertIn("clarification only if present at that SHA", " ".join(dependencies.split()))
-        baseline = run_bounded(["git", "show", f"{pin}:templates/repository-guide.md"], cwd=REPO,
+        protocol = run_bounded(["git", "show", f"{pin}:ai/agent-protocol.md"], cwd=REPO,
                                env=environment(), timeout=10, check=True).stdout
-        self.assertEqual(baseline.split("## Complete shared protocol snapshot\n", 1)[1], snapshot)
+        relative = "](repo-contract.md#repository-development-contract)"
+        self.assertEqual(1, protocol.count(relative))
+        protocol = protocol.replace(relative, "](" +
+            f"https://github.com/LeePepe/shared-ci/blob/{pin}/ai/"
+            "repo-contract.md#repository-development-contract)")
+        self.assertIn(protocol, snapshot.replace("<40-char-sha>", pin))
 
     def test_plan_guidance_keeps_existing_process_and_separate_responsibilities(self):
         # Text-contract guards, not proof of an agent's planning behavior.
