@@ -74,9 +74,14 @@ class ReleaseTemplateTests(unittest.TestCase):
             self.assertEqual("needs.admit.outputs.release == 'true'", release["if"])
             self.assertEqual("${{ steps.eligible.outputs.release }}",
                              config["jobs"]["admit"]["outputs"]["release"])
-            for invalid in ({"RUN_EVENT": "pull_request"}, {"RUN_RESULT": "failure"},
-                            {"RUN_REPOSITORY": "fork/project"}):
-                result = self.execute(kind, "candidate", **self.candidate(**invalid))
+            rejected = (self.candidate(RUN_EVENT="pull_request"),
+                        self.candidate(RUN_RESULT="failure"),
+                        self.candidate(RUN_REPOSITORY="fork/project")) if kind == "sdk" else (
+                            self.tf_candidate(EVENT_NAME="pull_request"),
+                            self.tf_candidate(EVENT_REF="refs/heads/topic"),
+                            self.tf_candidate(EVENT_REPOSITORY="fork/project"))
+            for values in rejected:
+                result = self.execute(kind, "candidate", **values)
                 self.assertNotEqual(0, result.returncode)
             # Failed admission cannot satisfy needs/if, so pending C is intact.
 
@@ -114,6 +119,19 @@ class ReleaseTemplateTests(unittest.TestCase):
         values.update(overrides)
         return values
 
+    def tf_candidate(self, **overrides):
+        values = dict(CANDIDATE="1" * 40, EVENT_NAME="schedule",
+                      EVENT_REF="refs/heads/main", EVENT_REPOSITORY="fixture/project",
+                      REPOSITORY="fixture/project", DEFAULT_BRANCH="main", INPUT_FORCE="")
+        values.update(overrides)
+        return values
+
+    def outputs(self):
+        path = self.root / "outputs"
+        values = dict(line.split("=", 1) for line in path.read_text().splitlines())
+        path.unlink()
+        return values
+
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.root, env=self.env,
                               check=True, capture_output=True, text=True).stdout.strip()
@@ -134,7 +152,79 @@ class ReleaseTemplateTests(unittest.TestCase):
         candidate = self.git("rev-parse", "HEAD")
         self.git("update-ref", "refs/remotes/origin/main", candidate)
         return dict(CANDIDATE=candidate, BASELINE=baseline, DEFAULT_BRANCH="main",
-                    CHECKED_SHA=candidate, REQUIRED_CHECKS="success", PUBLISHABLE="true")
+                    CHECKED_SHA=candidate, REQUIRED_CHECKS="success", PUBLISHABLE="true",
+                    FORCE="false")
+
+    def test_tf_admits_exact_event_candidate_and_bounds_manual_force(self):
+        values = self.history()
+        for event, requested, force in (("schedule", "", "false"),
+                                         ("schedule", "true", "false"),
+                                         ("workflow_dispatch", "false", "false"),
+                                         ("workflow_dispatch", "true", "true")):
+            with self.subTest(event=event, requested=requested):
+                result = self.execute("testflight", "candidate", **self.tf_candidate(
+                    CANDIDATE=values["CANDIDATE"], EVENT_NAME=event, INPUT_FORCE=requested))
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                admitted = self.outputs()
+                self.assertEqual(dict(candidate=values["CANDIDATE"], force=force), admitted)
+                # Run both real guards with the candidate/force from admission.
+                for job in ("admit", "release"):
+                    result = self.execute("testflight", "eligible", job=job, **dict(
+                        values, CANDIDATE=admitted["candidate"], FORCE=admitted["force"],
+                        BASELINE=values["CANDIDATE"], PUBLISHABLE="false"))
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertEqual({"release": force}, self.outputs())
+
+    def test_tf_rejects_untrusted_events_refs_and_nonexact_candidates_even_with_force(self):
+        candidate = self.history()["CANDIDATE"]
+        invalid = [{"EVENT_NAME": event} for event in (
+            "pull_request", "pull_request_target", "workflow_run", "push", "unexpected")]
+        invalid += [{"EVENT_REF": "refs/heads/topic"}, {"EVENT_REF": "refs/tags/main"},
+                    {"EVENT_REPOSITORY": "fork/project"}, {"REPOSITORY": ""},
+                    {"DEFAULT_BRANCH": ""}]
+        invalid += [{"CANDIDATE": sha} for sha in ("main", "", "a" * 39, "g" * 40)]
+        for updates in invalid:
+            with self.subTest(updates=updates):
+                values = self.tf_candidate(CANDIDATE=candidate, EVENT_NAME="workflow_dispatch",
+                                           INPUT_FORCE="true")
+                result = self.execute("testflight", "candidate", **dict(values, **updates))
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("::error::", result.stdout)
+                self.assertFalse((self.root / "outputs").exists())
+
+    def test_tf_ref_guard_negative_control_is_sensitive(self):
+        values = self.tf_candidate(EVENT_NAME="workflow_dispatch", INPUT_FORCE="true",
+                                   EVENT_REF="refs/heads/topic")
+        self.assertNotEqual(0, self.execute("testflight", "candidate", **values).returncode)
+        script = step("testflight", "candidate")["run"]
+        changed = script.replace('[ "$EVENT_REF" != "refs/heads/$DEFAULT_BRANCH" ]',
+                                 '[ false = true ]')
+        self.assertNotEqual(script, changed)
+        self.assertEqual(0, self.execute("testflight", "candidate", script=changed, **values).returncode)
+
+    def test_tf_force_preserves_checks_baseline_and_current_candidate_guards(self):
+        values = self.history()
+        sibling = self.git("commit-tree", "HEAD^{tree}", "-p", values["BASELINE"],
+                           "-m", "nonancestor release")
+        invalid = [{"CHECKED_SHA": "2" * 40}, {"CANDIDATE": "main"},
+                   {"BASELINE": ""}, {"BASELINE": "3" * 40}, {"BASELINE": sibling},
+                   {"PUBLISHABLE": "unknown"}, {"FORCE": ""}, {"FORCE": "yes"}]
+        invalid += [{"REQUIRED_CHECKS": status} for status in (
+            "", "missing", "pending", "failure", "cancelled", "skipped")]
+        for job in ("admit", "release"):
+            for updates in invalid:
+                with self.subTest(job=job, updates=updates):
+                    result = self.execute("testflight", "eligible", job=job,
+                                          **dict(dict(values, FORCE="true"), **updates))
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("::error::", result.stdout)
+        older = self.git("rev-parse", "HEAD^")
+        self.git("checkout", "-q", "--detach", older)
+        for job in ("admit", "release"):
+            result = self.execute("testflight", "eligible", job=job, **dict(
+                values, CANDIDATE=older, CHECKED_SHA=older, FORCE="true"))
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("not the current default-branch tip", result.stdout)
 
     def test_release_admission_accepts_ancestor_baseline_and_rejects_stale_checks(self):
         values = self.history()
@@ -163,13 +253,16 @@ class ReleaseTemplateTests(unittest.TestCase):
 
     def test_check_guard_negative_control_is_sensitive(self):
         values = dict(self.history(), REQUIRED_CHECKS="failure")
-        self.assertNotEqual(0, self.execute("sdk", "eligible", **values).returncode)
-        script = step("sdk", "eligible")["run"]
-        changed = "\n".join(line for line in script.splitlines() if '"$CHECKED_SHA"' not in line)
-        self.assertNotEqual(script, changed)
-        # Removing the actual guard admits the bad input: the normal rejection
-        # is not caused by an unrelated fixture or Git failure.
-        self.assertEqual(0, self.execute("sdk", "eligible", script=changed, **values).returncode)
+        for kind in ("sdk", "testflight"):
+            with self.subTest(kind=kind):
+                guarded = dict(values, FORCE="true" if kind == "testflight" else "false")
+                self.assertNotEqual(0, self.execute(kind, "eligible", **guarded).returncode)
+                script = step(kind, "eligible")["run"]
+                changed = "\n".join(line for line in script.splitlines() if '"$CHECKED_SHA"' not in line)
+                self.assertNotEqual(script, changed)
+                # Removing the actual guard admits the bad input: the normal rejection
+                # is not caused by an unrelated fixture or Git failure.
+                self.assertEqual(0, self.execute(kind, "eligible", script=changed, **guarded).returncode)
 
     def test_sdk_result_requires_accurate_candidate_and_artifact_verification(self):
         values = dict(CANDIDATE="1" * 40, PUBLISHED_SHA="1" * 40, VERIFIED_ARTIFACTS="success")
@@ -182,8 +275,26 @@ class ReleaseTemplateTests(unittest.TestCase):
         for kind in ("sdk", "testflight"):
             with self.subTest(kind=kind):
                 config = workflow(kind)
-                self.assertEqual(["workflow_run"], list(config["on"]))
-                self.assertEqual(["completed"], config["on"]["workflow_run"]["types"])
+                if kind == "sdk":
+                    self.assertEqual(["workflow_run"], list(config["on"]))
+                    self.assertEqual(["completed"], config["on"]["workflow_run"]["types"])
+                else:
+                    self.assertEqual(["schedule", "workflow_dispatch"], list(config["on"]))
+                    self.assertEqual([{"cron": "17 0,12 * * *"}], config["on"]["schedule"])
+                    inputs = config["on"]["workflow_dispatch"]["inputs"]
+                    self.assertEqual(["force"], list(inputs))
+                    self.assertEqual("boolean", inputs["force"]["type"])
+                    self.assertFalse(inputs["force"]["default"])
+                    self.assertEqual("${{ github.sha }}", step(kind, "candidate")["env"]["CANDIDATE"])
+                    self.assertEqual("${{ inputs.force }}", step(kind, "candidate")["env"]["INPUT_FORCE"])
+                    self.assertEqual("${{ steps.candidate.outputs.force }}",
+                                     config["jobs"]["admit"]["outputs"]["force"])
+                    self.assertEqual("${{ needs.admit.outputs.force }}",
+                                     config["jobs"]["release"]["env"]["FORCE"])
+                    for name in ("prepare", "eligible"):
+                        env = step(kind, name, "admit")["env"]
+                        self.assertEqual("${{ steps.candidate.outputs.candidate }}", env["CANDIDATE"])
+                        self.assertEqual("${{ steps.candidate.outputs.force }}", env["FORCE"])
                 self.assertEqual({"contents": "read"}, config["permissions"])
                 self.assertFalse(config["jobs"]["release"]["concurrency"]["cancel-in-progress"])
                 self.assertEqual("max", config["jobs"]["release"]["concurrency"]["queue"])
@@ -196,7 +307,9 @@ class ReleaseTemplateTests(unittest.TestCase):
                     self.assertEqual(ids, [s["id"] for s in entries if "id" in s])
                     checkout = next(s for s in entries if "uses" in s)
                     self.assertFalse(checkout["with"]["persist-credentials"])
-                    self.assertEqual("${{ env.CANDIDATE }}", checkout["with"]["ref"])
+                    expected = "${{ steps.candidate.outputs.candidate }}" if (
+                        kind == "testflight" and job == "admit") else "${{ env.CANDIDATE }}"
+                    self.assertEqual(expected, checkout["with"]["ref"])
                     steps.extend(entries)
                 self.assertEqual(step(kind, "eligible", "admit")["run"],
                                  step(kind, "eligible", "release")["run"])
@@ -215,8 +328,6 @@ class ReleaseTemplateTests(unittest.TestCase):
                                       str(REPO / "scripts/lint/workflows.py"), "--root", str(self.root)],
                                      env=self.env, timeout=10)
                 self.assertEqual(0, result.returncode, result.stderr)
-        for name in ("candidate", "eligible"):
-            self.assertEqual(step("sdk", name)["run"], step("testflight", name)["run"])
 
     def test_versioned_document_entry_and_template_links(self):
         document = REPO / "docs/automated-release.md"
@@ -243,16 +354,18 @@ class ReleaseTemplateTests(unittest.TestCase):
                       EXPECTED_BUILD="7", ACTUAL_APP="fixture.app",
                       ACTUAL_PLATFORM="macos", ACTUAL_BUILD="7",
                       PROCESSING="complete", INTERNAL_GROUPS="available")
-        result = self.execute("testflight", "confirmed", **values)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        for changes in ({"PUBLISHED_SHA": "2" * 40}, {"ACTUAL_APP": "other.app"},
-                        {"ACTUAL_PLATFORM": "ios"}, {"ACTUAL_BUILD": "6"},
-                        {"PROCESSING": "processing"}, {"INTERNAL_GROUPS": "unknown"},
-                        {"INTERNAL_GROUPS": ""}, {"EXPECTED_BUILD": ""}):
-            with self.subTest(changes=changes):
-                result = self.execute("testflight", "confirmed", **dict(values, **changes))
-                self.assertNotEqual(0, result.returncode)
-                self.assertIn("::error::", result.stdout)
+        for force in ("false", "true"):
+            result = self.execute("testflight", "confirmed", **dict(values, FORCE=force))
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            for changes in ({"PUBLISHED_SHA": "2" * 40}, {"ACTUAL_APP": "other.app"},
+                            {"ACTUAL_PLATFORM": "ios"}, {"ACTUAL_BUILD": "6"},
+                            {"PROCESSING": "processing"}, {"INTERNAL_GROUPS": "unknown"},
+                            {"INTERNAL_GROUPS": ""}, {"EXPECTED_BUILD": ""}):
+                with self.subTest(force=force, changes=changes):
+                    result = self.execute("testflight", "confirmed", **dict(
+                        dict(values, FORCE=force), **changes))
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("::error::", result.stdout)
 
 
 if __name__ == "__main__":
