@@ -1,6 +1,7 @@
 """Repository contract v1: one positive fixture and a failing fixture per item."""
 import importlib.util
 import json
+import os
 from types import SimpleNamespace
 from unittest import mock
 import unittest
@@ -39,7 +40,8 @@ class ContractPositiveTests(unittest.TestCase):
         schema.write_text(json.dumps(data))
         self.repo.remove(".github/CODEOWNERS")
         self.repo.add()
-        with mock.patch.object(contract, "CONTRACT_FILE", schema):
+        with mock.patch.object(contract, "CONTRACT_FILE", schema), \
+                mock.patch.dict(os.environ, self.repo.env, clear=True):
             self.assertEqual([], contract.audit(SimpleNamespace(Finding=lambda *args: args),
                                                 self.repo.root))
 
