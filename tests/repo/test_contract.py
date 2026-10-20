@@ -1,5 +1,8 @@
 """Repository contract v1: one positive fixture and a failing fixture per item."""
+import importlib.util
 import json
+from types import SimpleNamespace
+from unittest import mock
 import unittest
 
 from fixture import CI, ContractRepo, OTHER, PIN, REPO
@@ -16,6 +19,29 @@ class ContractPositiveTests(unittest.TestCase):
         self.assertEqual(0, status)
         self.assertTrue(summary["ok"])
         self.assertEqual(4, summary["classifications"]["leaf"])  # 2 sources + 2 leaf contexts
+
+    def test_repository_without_codeowners_passes(self):
+        self.repo.remove(".github/CODEOWNERS")
+        self.assertEqual((0, []), self.repo.audit()[:2])
+
+    def test_repository_with_legacy_codeowners_passes(self):
+        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n")
+        self.assertEqual((0, []), self.repo.audit()[:2])
+
+    def test_legacy_contract_parameter_is_ignored(self):
+        spec = importlib.util.spec_from_file_location(
+            "compat_contract", REPO / "scripts/context/_contract.py")
+        contract = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(contract)
+        data = json.loads((REPO / "schemas/repo-contract-v1.json").read_text())
+        data["x-contract"]["codeowners_required"] = ["/not-present"]
+        schema = self.repo.root / ".github/legacy-contract.json"
+        schema.write_text(json.dumps(data))
+        self.repo.remove(".github/CODEOWNERS")
+        self.repo.add()
+        with mock.patch.object(contract, "CONTRACT_FILE", schema):
+            self.assertEqual([], contract.audit(SimpleNamespace(Finding=lambda *args: args),
+                                                self.repo.root))
 
     def test_templates_are_self_consistent(self):
         # The published templates must themselves satisfy the section contract.
@@ -135,15 +161,6 @@ class ContractNegativeTests(unittest.TestCase):
     def test_ci_does_not_call_verify(self):
         self.repo.write(".github/workflows/ci.yml", CI.replace("scripts/verify --all", "make test"))
         self.assertFinding("contract_verify", "CI does not invoke scripts/verify")
-
-    # 5 ruleset (tree-visible part)
-    def test_codeowners_missing(self):
-        self.repo.remove(".github/CODEOWNERS")
-        self.assertFinding("contract_ruleset", "CODEOWNERS is missing")
-
-    def test_codeowners_incomplete(self):
-        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n")
-        self.assertFinding("contract_ruleset", "/AGENTS.md")
 
     # 6 pr_template
     def test_pr_template_missing(self):

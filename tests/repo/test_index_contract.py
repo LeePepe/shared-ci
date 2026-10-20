@@ -1,7 +1,6 @@
 """Metadata/index contract adoption through the real audit CLI."""
 import json
 import re
-import subprocess
 import unittest
 
 from fixture import AGENTS, ContractRepo, OTHER, PIN, REPO
@@ -14,7 +13,6 @@ class IndexContractTests(unittest.TestCase):
         self.metadata = {"schema": 1, "guide": "docs/repository-guide.md", "shared_ci": PIN, "dependencies": {}}
         self.repo.write("docs/repository-guide.md", AGENTS)
         self.repo.write("AGENTS.md", "# Document index\n\n- Before editing: [Guide](docs/repository-guide.md)\n")
-        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/docs/repository-guide.md @owner\n")
         self.write_metadata()
 
     def write_metadata(self):
@@ -59,63 +57,29 @@ class IndexContractTests(unittest.TestCase):
                 self.write_metadata()
                 self.finding("guide must")
 
-    def test_guide_remains_owner_protected(self):
-        self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n")
-        self.finding("CODEOWNERS does not cover /docs/repository-guide.md")
+    def test_index_contract_passes_without_codeowners(self):
+        self.repo.remove(".github/CODEOWNERS")
+        self.assertEqual((0, []), self.repo.audit()[:2])
 
-    def test_later_ownerless_rule_cannot_unprotect_guide_or_metadata(self):
-        for pattern in ("**/repository-guide.md", "**/repo-contract.json"):
-            with self.subTest(pattern=pattern):
-                self.repo.write(".github/CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/docs/repository-guide.md @owner\n" + pattern + "\n")
-                self.finding("unowned")
+    def test_legacy_codeowners_contents_are_ignored(self):
+        # Presence, precedence, syntax and ownerless rules have no contract role.
+        path = "docs/architecture/tech-context.md"
+        context = (self.repo.root / path).read_text()
+        self.repo.write(path, context.replace('["*.md",', '["*.md", "CODEOWNERS",'))
+        for text in ("", "/.github/ @owner\n", "**/repository-guide.md\n",
+                     "[unsupported] not-an-owner\n"):
+            with self.subTest(text=text):
+                self.repo.write(".github/CODEOWNERS", text)
+                self.repo.write("CODEOWNERS", "legacy fallback\n")
+                self.repo.write("docs/CODEOWNERS", "legacy fallback\n")
+                self.assertEqual((0, []), self.repo.audit()[:2])
 
-    def test_empty_primary_codeowners_does_not_use_root_fallback(self):
-        self.repo.write("CODEOWNERS", "/.github/ @owner\n/AGENTS.md @owner\n/docs/repository-guide.md @owner\n")
-        self.repo.write(".github/CODEOWNERS", "")
-        self.finding("unowned")
-
-    def test_staged_codeowners_symlink_cannot_use_regular_worktree_or_fallback(self):
-        path = ".github/CODEOWNERS"
-        target = self.repo.root / path
-        text = target.read_text(encoding="utf-8")
-        self.repo.write("docs/CODEOWNERS", text)
-        self.repo.add()
-        target.unlink()
-        target.symlink_to("../docs/CODEOWNERS")
-        self.repo.git("add", path)
-        target.unlink()
-        target.write_text(text, encoding="utf-8")
-        self.assertTrue(self.repo.git("ls-files", "--stage", path).stdout.startswith("120000 "))
-        # Do not call fixture.audit(): it stages the regular worktree over the probe.
-        result = self.repo.cli("audit")
-        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-        self.assertIn("contract_ruleset", result.stderr)
-        self.assertIn("CODEOWNERS", result.stderr)
-
-    def test_unmerged_codeowners_cannot_use_regular_worktree(self):
-        path = ".github/CODEOWNERS"
-        self.repo.add()
-        blob = self.repo.git("rev-parse", ":" + path).stdout.strip()
-        subprocess.run(["git", "update-index", "--index-info"], cwd=self.repo.root,
-                       env=self.repo.env, text=True, capture_output=True, check=True, timeout=20,
-                       input=f"0 {'0' * 40}\t{path}\n100644 {blob} 2\t{path}\n"
-                             f"100644 {blob} 3\t{path}\n")
-        self.assertEqual(2, len(self.repo.git("ls-files", "--unmerged", path).stdout.splitlines()))
-        result = self.repo.cli("audit")
-        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-        self.assertIn("contract_ruleset", result.stderr)
-        self.assertIn("CODEOWNERS", result.stderr)
-
-    def test_regular_and_executable_codeowners_are_accepted(self):
-        path = ".github/CODEOWNERS"
-        self.repo.add()
-        for flag, mode in (("-x", "100644"), ("+x", "100755")):
-            with self.subTest(mode=mode):
-                self.repo.git("update-index", "--chmod=" + flag, path)
-                self.assertTrue(self.repo.git("ls-files", "--stage", path).stdout.startswith(mode + " "))
-                result = self.repo.cli("audit")
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertTrue(json.loads(result.stdout)["ok"])
+    def test_obsolete_ownership_key_is_rejected_by_metadata_v1(self):
+        # Metadata v1 has always been an exact four-key envelope. Retiring the
+        # provider parameter does not silently admit extra caller metadata.
+        self.metadata["codeowners_required"] = ["/AGENTS.md"]
+        self.write_metadata()
+        self.finding("expected schema, guide, shared_ci and dependencies")
 
     def test_required_check_duplication_is_read_from_guide(self):
         self.repo.write("CLAUDE.md", "Read AGENTS.md first.\nRequired: `quality / aggregate`\n")
@@ -200,24 +164,6 @@ jobs:
           uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@main
 """)
         self.assertEqual([], self.repo.audit()[1])
-
-    def test_invalid_owner_tokens_fail_closed(self):
-        for token in ("not-an-owner", "@", "@org/", "@org/team/extra", "owner@", "@bad_name",
-                      "@bad--name", "@" + "a" * 40, "a..b@example.invalid", "@owner invalid"):
-            with self.subTest(token=token):
-                self.repo.write(".github/CODEOWNERS", "".join(
-                    f"{path} {token}\n" for path in ("/.github/", "/AGENTS.md", "/docs/repository-guide.md")))
-                self.finding("invalid CODEOWNERS owner")
-
-    def test_supported_owners_and_ownerless_override(self):
-        for token in ("@owner", "@org/team-name", "owner@example.invalid", "a.b@foo--bar.invalid"):
-            with self.subTest(token=token):
-                owners = "".join(f"{path} {token}\n" for path in (
-                    "/.github/", "/AGENTS.md", "/docs/repository-guide.md"))
-                self.repo.write(".github/CODEOWNERS", owners)
-                self.assertEqual([], self.repo.audit()[1])
-                self.repo.write(".github/CODEOWNERS", owners + "**/repository-guide.md\n")
-                self.finding("unowned")
 
     def test_exact_versions_agree_with_schema(self):
         schema = json.loads((REPO / "schemas/repo-metadata-v1.json").read_text())

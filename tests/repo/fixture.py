@@ -127,6 +127,7 @@ jobs:
 """
 
 PR_TEMPLATE = (REPO / "templates" / "pull_request_template.md").read_text(encoding="utf-8")
+# Retained only for compatibility with historical providers used by bundle tests.
 CODEOWNERS = "/.github/ @owner\n/AGENTS.md @owner\n"
 HOOK = "#!/bin/sh\nexec scripts/verify\n"
 VERIFY = "#!/bin/sh\necho ok\n"

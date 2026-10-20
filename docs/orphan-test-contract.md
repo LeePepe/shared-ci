@@ -162,8 +162,9 @@ gate:
 - `exclusions` is only for real tests deliberately outside PR CI. Every entry
   has nonempty patterns and a substantive reason. It remains visible in the
   audit summary; exclusion is never reported as reach.
-- The root policy lives in the CODEOWNERS-protected context map. Moving either
-  exception class to an unprotected side file is not supported.
+- The root policy lives in the context map, subject to required checks and AI
+  review. Moving either exception class to a side file outside that policy is
+  not supported.
 
 ### Layer policy
 

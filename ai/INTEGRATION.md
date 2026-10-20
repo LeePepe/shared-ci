@@ -52,7 +52,7 @@ Audit validates declarations, not arbitrary language imports or PR intent.
 Run the consumer's existing verification entry and check positive and negative
 cases from its own acceptance inventory. Wire local hooks and CI to that same
 entry; preserve existing checks. Compare effective remote required checks and
-CODEOWNERS with the intended configuration. Settings changes require the
+server rules with the intended configuration. Settings changes require the
 separate approved dry-run/apply/readback process in the
 [repository contract](repo-contract.md); local success cannot establish remote
 enforcement.

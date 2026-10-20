@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — planned v0.7.2
+
+### Changed
+
+- Repository contract audits no longer require or parse CODEOWNERS. Repositories
+  without the file and consumers retaining legacy files both pass; obsolete
+  ownership parameters in provider contract data are ignored. Caller metadata
+  keeps its existing schema and rejects unsupported extra keys.
+- Current provider policy and review documentation routes protected changes
+  through policy/gate/CI/ruleset/schema responsibilities, required checks and
+  AI review.
+- Contract, candidate self-adoption and reviewer regression tests now cover
+  this policy. Templates, bootstrap tests, selected historical protocol snapshots
+  and bundle assertions remain at their published baseline. Template migration
+  and self-adoption of the new provider are separate changes after publication.
+
+### Adoption and publication
+
+Publish a lightweight tag and GitHub Release at the final merged commit after
+required checks pass, following v0.7.0/v0.7.1. Consumers pin that full commit SHA.
+Older providers still require their compatible ownership files; upgrade the
+provider before removing them, and restore the complete recorded configuration
+on rollback. This release changes no live repository settings or rulesets.
+
 ## [v0.7.1](https://github.com/LeePepe/shared-ci/releases/tag/v0.7.1) — 2026-10-20
 
 Published source: `88c09b3f68ceea82a4ca979c689e3dc50266ee10`.
