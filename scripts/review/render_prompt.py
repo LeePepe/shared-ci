@@ -14,7 +14,8 @@ import pathlib
 import re
 import sys
 
-PLACEHOLDERS = ("REPO_RULES", "ARCHITECTURE", "OWNER_DECISIONS", "PR_TEXT", "TARGET_SCOPE", "CHANGED", "TRUNCATED", "DIFF")
+PLACEHOLDERS = ("REPO_RULES", "ARCHITECTURE", "OWNER_DECISIONS", "PR_TEXT", "TARGET_SCOPE", "CHANGED", "TRUNCATED", "DIFF",
+                "ROUND_INSTRUCTIONS", "ROUND_DATA")
 REQUIRED = ("REPO_RULES", "ARCHITECTURE", "CHANGED", "DIFF")
 OWNER_DEFAULT = "(Owner decision input is not configured for this repository.)"
 PR_DEFAULT = "(PR title/body not supplied.)"
@@ -33,7 +34,8 @@ def render(template: str, values: dict[str, str]) -> str:
 
 def main() -> int:
     allowed = {"--rules-file": "REPO_RULES", "--owner-file": "OWNER_DECISIONS", "--pr-file": "PR_TEXT",
-               "--scope-file": "TARGET_SCOPE"}
+               "--scope-file": "TARGET_SCOPE", "--round-instructions-file": "ROUND_INSTRUCTIONS",
+               "--round-data-file": "ROUND_DATA"}
     args = sys.argv[2:]
     if (len(sys.argv) < 2 or len(args) % 2
             or any(arg not in allowed for arg in args[::2])
@@ -47,7 +49,7 @@ def main() -> int:
         return 2
     try:
         values = {name: os.environ.get(name, "") for name in PLACEHOLDERS
-                  if name not in ("OWNER_DECISIONS", "PR_TEXT", "TARGET_SCOPE")}
+                  if name not in ("OWNER_DECISIONS", "PR_TEXT", "TARGET_SCOPE", "ROUND_INSTRUCTIONS", "ROUND_DATA")}
         for option, filename in options.items():
             # Preserve exact newlines; shell command substitution strips them.
             values[allowed[option]] = pathlib.Path(filename).read_bytes().decode("utf-8")

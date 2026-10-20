@@ -92,9 +92,9 @@ def contains(paths: list[str], path: str) -> bool:
                for pattern in paths)
 
 
-def apply(data: dict[str, Any], scope: dict[str, Any] | None) -> dict[str, Any]:
+def apply(data: dict[str, Any], scope: dict[str, Any] | None, *, incremental: bool = False) -> dict[str, Any]:
     """Filter only after the original verdict has passed structural validation."""
-    if scope is None:
+    if scope is None and not incremental:
         return data
     blockers, followups = [], []
     for item in data["blockers"]:
@@ -106,16 +106,19 @@ def apply(data: dict[str, Any], scope: dict[str, Any] | None) -> dict[str, Any]:
             raise ValueError("scoped blockers require safety_category: null, security, privacy or data_loss")
         if not valid_path(item["file"]):
             raise ValueError("scoped blockers require a canonical repository file path")
-        if item["introduced"] or item["acceptance_failure"] or item["safety_category"] is not None:
+        if incremental and any(type(item.get(field)) is not bool for field in ("unresolved", "red_line")):
+            raise ValueError("re-review blockers require boolean unresolved and red_line")
+        if (item["introduced"] or item["acceptance_failure"] or item["safety_category"] is not None
+                or (incremental and (item["unresolved"] or item["red_line"]))):
             blockers.append(item)
         else:
             followups.append(item)
-    for path in scope["outside"]:
+    for path in scope["outside"] if scope else []:
         blockers.append({"file": path, "line": None, "severity": "high",
                          "why": "Changed file is outside the declared Target paths."})
     return {**data, "verdict": "changes" if blockers else "pass", "blockers": blockers,
             "follow_ups": followups,
-            "summary": (f"Target scope: {len(blockers)} blocking finding(s); "
+            "summary": (f"{'Re-review' if incremental else 'Target scope'}: {len(blockers)} blocking finding(s); "
                         f"{len(followups)} pre-existing follow-up(s). "
                         f"Reviewer summary before scope filtering: {data['summary']}")}
 

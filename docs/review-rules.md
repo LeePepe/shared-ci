@@ -136,6 +136,68 @@ does not update any consumer SHA or install a server setting. Consumers pinned t
 adoption requires a separate pin update. Callers must re-run on PR description
 edits as described below so a changed declaration receives a fresh review.
 
+## Codex review rounds
+
+Codex records the complete effective verdict and review-input snapshot in a
+bounded, compressed data field in its sticky comment. It reads that field through
+the PR comment API on each run. The comment author must be the GitHub Actions
+bot; an updated comment must also have that bot as its last editor (checked
+through GraphQL). A human-edited or forged marker cannot authorize reuse. This
+trusts the repository's Actions bot and trusted workflows that can act as it;
+the state is review data, never repository rules or Owner authority.
+
+The provider handles these cases:
+
+1. No previous sticky review: the initial full review and gate behavior stay
+   unchanged.
+2. A new descendant head with usable previous state and unchanged base SHA and
+   merge-base: supply all previous findings,
+   `previous-head...current-head` as the repair delta, and the complete PR diff
+   as context only. Recheck previous findings and repair regressions without
+   rescanning unchanged code. Changed review inputs are supplied too.
+3. The same head with identical title, body, base SHA/ref and merge-base, complete
+   rules and admitted Owner decision set: reuse the effective pass or blocking conclusion,
+   without invoking the model. Publication of the review record remains required.
+4. The same head and unchanged base SHA and merge-base with changed inputs:
+   supply the changed inputs and previous findings for reconsideration, with the
+   complete diff as context only. Adding
+   an admitted `Owner decision:` comment therefore forces reconsideration, even
+   without a push. Removed or no-longer-admitted decisions also change the input.
+
+A changed base SHA or merge-base always forces a full review fallback, whether
+the head is unchanged or new, because it can expose code absent from the previous
+PR diff.
+
+Input snapshots compare complete title/body values, including text beyond the
+model display cap. State is bound to the repository, PR and a digest of Review
+source/template/schema files and all Context Python modules, including dynamically
+loaded helpers. Changes to these provider dependencies invalidate stored verdicts.
+Legacy/malformed/unavailable state, failed comment reads or an unavailable
+previous-head delta cause a full review fallback explicitly identified in the
+output. Storage beyond the comment/state capacity is never truncated into a
+reusable record: the output notes that the next run will fall back. Invalid
+current rules, Owner input, scope or complete-diff budgets still fail closed
+before any reuse; a failed model/invalid verdict never creates reusable state.
+
+On re-review, V2 blockers remain: delta-introduced problems, unresolved previous
+findings, declared acceptance failures, red-line violations, and any security,
+privacy or data-loss problem. The last two categories block even outside the
+delta; the reviewer does not rescan unchanged code to search for them. The
+schema's `unresolved` and `red_line` flags preserve those findings through scope
+filtering; `introduced` refers to the current repair delta or changed inputs.
+Other pre-existing problems become non-blocking follow-ups. Changed paths
+outside the declared Target still block. Missing round classification fails
+closed. On the first/full-fallback review, existing scope behavior is preserved.
+
+This implements V3's bounded re-review input: original findings, previous/current
+heads, repair delta and fresh evidence for the new head, without opening a new
+full scan. It does not add a retry counter, reset a Task's review history, or
+replace the coordinator's two-round escalation or independent Target acceptance.
+Kimi remains advisory and does not use this state. No caller pins are upgraded:
+only provider source gains these behaviors; existing consumers need separate
+adoption. Stub tests cover transitions and gate enforcement, not real model
+classification or live caller enablement.
+
 ## Owner decision comments
 
 PR title and description are fetched at review time as untrusted author input,
@@ -165,7 +227,8 @@ only after they adopt this version and the updated `templates/review.yml`.
 Codex optionally consumes PR issue comments as trusted, PR-scoped decisions.
 Set the reusable workflow's `owner-user-id` to the Owner's numeric GitHub user ID
 through trusted caller configuration (`OWNER_DECISION_USER_ID` for the wrapper).
-The default is empty: no comment API call is made. Kimi does not consume these
+The default is empty: no Owner-decision comment read is made (Codex still reads
+its sticky round state). Kimi does not consume these
 decisions. The trusted workflow reads comments at run time with its workflow
 token; it never executes or reads PR-head code to obtain them.
 

@@ -272,6 +272,14 @@ class ArchContextTests(unittest.TestCase):
 STUB_GH = """#!/bin/sh
 # Records publication attempts; faults are entirely offline.
 case "$*" in
+  "api graphql"*)
+    [ -n "${STUB_STATE_FAIL:-}" ] && exit 1
+    if [ -n "${STUB_STATE_JSON:-}" ]; then
+      printf '%s' "$STUB_STATE_JSON"
+    else
+      printf '%s' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+    fi
+    ;;
   "api repos/o/r/pulls/7")
     [ -n "${STUB_PR_FAIL:-}" ] && exit 1
     if [ "${STUB_PR+x}" = x ]; then
@@ -305,10 +313,16 @@ esac
 exit 0
 """
 STUB_CODEX = """#!/bin/sh
-# Writes $STUB_VERDICT to the -o file; records the prompt (last argument).
+# Records both candidate stdin and published-provider argv prompts.
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; last="$a"; done
-printf '%s' "$last" > "$STUB_OUT/prompt"
+if [ "$last" = "-" ]; then
+  printf '%s' stdin > "$STUB_OUT/prompt-input"
+  cat > "$STUB_OUT/prompt"
+else
+  printf '%s' argv > "$STUB_OUT/prompt-input"
+  printf '%s' "$last" > "$STUB_OUT/prompt"
+fi
 [ -n "$STUB_FAIL" ] && exit 7
 printf '%s' "$STUB_VERDICT" > "$out"
 """
