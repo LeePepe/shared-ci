@@ -313,11 +313,16 @@ esac
 exit 0
 """
 STUB_CODEX = """#!/bin/sh
-# Writes $STUB_VERDICT to the -o file; records the prompt from stdin.
+# Records both candidate stdin and published-provider argv prompts.
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; last="$a"; done
-[ "$last" = "-" ] || exit 9
-cat > "$STUB_OUT/prompt"
+if [ "$last" = "-" ]; then
+  printf '%s' stdin > "$STUB_OUT/prompt-input"
+  cat > "$STUB_OUT/prompt"
+else
+  printf '%s' argv > "$STUB_OUT/prompt-input"
+  printf '%s' "$last" > "$STUB_OUT/prompt"
+fi
 [ -n "$STUB_FAIL" ] && exit 7
 printf '%s' "$STUB_VERDICT" > "$out"
 """

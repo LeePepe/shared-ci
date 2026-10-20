@@ -200,6 +200,7 @@ class RoundScriptTests(unittest.TestCase):
             with self.subTest(launcher=bool(prefix)):
                 result, comment = self.rerun(body, STUB_PR=json.dumps(current), CODEX_LAUNCHER=prefix)
                 self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual("stdin", (self.out / "prompt-input").read_text())
                 prompt = (self.out / "prompt").read_text()
                 self.assertGreater(len(prompt.encode()), 131072)
                 data = json.loads(prompt.split(
