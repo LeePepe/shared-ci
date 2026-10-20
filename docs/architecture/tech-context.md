@@ -6,7 +6,7 @@ support:
 red_lines:
   - Engines are stdlib-only Python 3.9+, Git and POSIX shell; no third-party packages.
   - Review scripts never execute PR head code; the PR diff is data.
-  - Gate, lint, schema and contract changes are important PRs (Owner review).
+  - Gate, lint, schema and contract changes are important PRs (AI review).
 ---
 
 # shared-ci tech context
@@ -21,6 +21,7 @@ red_lines:
 | Review | codex/kimi review scripts and prompt | `scripts/review/tech-context.md` | Context |
 | Registry | Committed registry resolver | `scripts/contracts/tech-context.md` | (none) |
 | Schemas | JSON schemas incl. repository contract parameters | `schemas/tech-context.md` | (none) |
+| StuckPR | Scheduled report-only PR supervision | `scripts/stuck_pr/tech-context.md` | (none) |
 | Ruleset | Ruleset-as-code planner and applier | `scripts/ruleset/tech-context.md` | (none) |
 
 `Quality` reads `schemas/repo-contract-v1.json` as data (no code dependency).

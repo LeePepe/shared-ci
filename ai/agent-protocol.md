@@ -54,7 +54,7 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
   - pin shared-ci, or any shared library, by branch or tag instead of a full
     SHA or exact version.
 - If a check is wrong, fix it in its own scoped PR with the reason. Ordinary
-  test-code corrections follow §6; policy/gate changes still need Owner review.
+  test-code corrections follow §6; required checks and AI review remain mandatory.
   Do not work around the check in a feature PR.
 - With changed-layer selection (`changed-only: true`, see
   `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
@@ -69,10 +69,10 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 4. Pull request
 
-Any claim in a PR, commit message or comment that the Owner requested or approved
-something must link the Owner's own comment, review or Owner-authored issue/decision
-(for example, an `Owner decision:` comment); without a link, describe the change's
-source neutrally instead of making the claim.
+Describe the source of a change accurately in PRs, commit messages and comments.
+Unverifiable claims that the Owner requested or approved a change are non-blocking
+notes, including for protected paths. Optional verified Owner decisions provide
+context; they are never a prerequisite for a change or merge.
 
 What a PR must be:
 
@@ -85,7 +85,8 @@ What a PR must be:
   Link the relevant requirement/spec and, for FS, the Planner task. Other sources
   do not need to create a Dev Team task to submit a PR.
 - **PR Manager handles lifecycle.** Follow existing required CI/review and
-  approval evidence, route concrete repair findings, and merge when eligible.
+  exact-head evidence, enable GitHub auto-merge when the PR opens, and follow it
+  through merged-state readback.
   Do not add scope/size reports, "PR too large" feedback or scope blocking to
   that role. This does not waive any existing required check or review.
 - **Stacked PRs** are allowed only as a temporary queue. Once the base PR
@@ -95,7 +96,7 @@ What a PR must be:
   merge rewrites the base commits, so a stacked branch that is not rebased
   will conflict or carry duplicate changes.
   PRs may be reviewed in parallel, but dependent slices wait for prerequisites
-  to merge in order; this queue never bypasses approvals or CI.
+  to merge in order; this queue never bypasses required checks or AI review.
 
 **Commits.** Use one logical step per commit with a Conventional Commit subject.
 Keep mechanical and behavioural steps in separate commits; put tests with or
@@ -112,7 +113,7 @@ Fill in every section of the repository's PR template:
 | Existing behaviour | What the code does today, including behaviour that must be kept |
 | Intent | One-sentence goal first, then what changes and why; PR kind and requirement/spec/task link when present |
 | Compatibility | API/data/config compatibility, migrations, rollback |
-| Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
+| Removed or weakened tests or policy | Each item with its reason, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
 
 The `quality / aggregate` check rejects empty or placeholder sections.
@@ -131,12 +132,11 @@ The `quality / aggregate` check rejects empty or placeholder sections.
     repair failures; or
   - stop after handoff. The protocol does not require continued waiting.
 - When an author remains active, it waits only for required checks and concrete
-  repair results; it never waits for human approvals or merge. Required
-  approvals, reviews, auto-merge behavior and merge eligibility remain
-  mandatory.
+  repair results; it never waits for human approvals. Required checks and AI review remain
+  mandatory; GitHub auto-merge performs the merge without human approval.
 - PR Manager handles lifecycle as defined in §4 and serves as the backstop when
   the author is not waiting or is unavailable. PR Manager follows current-head
-  CI, review and approval evidence, and routes concrete repair findings through
+  CI and AI review evidence, and routes concrete repair findings through
   the original path. It does not write to the branch and gains no new gate.
 - During repair, the author remains the sole branch writer under §1; nobody
   else is assigned to write concurrently, and unexpected writers still require
@@ -145,23 +145,25 @@ The `quality / aggregate` check rejects empty or placeholder sections.
   evidence, any later completion claim requires fresh evidence for the new
   PR head.
 - "Done" means the required checks are green on the exact PR head SHA plus any
-  existing repository-required approval and review evidence. PR handoff never
+  required AI review evidence. No human approval is required; delivery also
+  records the auto-merge result on the exact head. PR handoff never
   waives these gates.
 
-## 6. Important PRs need the Owner
+## 6. Auto-merge without human approval
 
-Changes under `CODEOWNERS` paths need Owner approval (for example
-`.github/**`, policy, schemas, gates, `AGENTS.md`, the constitution,
-dependency pins, credentials, privacy and data migrations). Ordinary test-code
-edits or deletions require a stated reason, CI and AI review, not separate
-Owner approval merely because tests changed. Changes to actual gate/policy
-semantics or permissions remain important even when placed in a test or Markdown
-file. Existing behaviour changes without an approved spec also need the Owner.
-Use trusted policy and effective CODEOWNERS protections, not an author's label,
-to route review. Until CODEOWNERS review is enforced, add `owner-review` for
-important PRs and wait; do not bypass existing protections.
+Every non-Draft PR uses GitHub auto-merge from the time it opens. Once required
+checks and required AI review pass on the exact head, GitHub merges it without
+Owner, code-owner or other approving reviews. This applies to all PR sources
+and all paths, including gates, CI, review rules, CODEOWNERS and rulesets.
+Do not add an approval label or wait for an Owner decision. CODEOWNERS records
+ownership; it does not impose a merge prerequisite. Never disable auto-merge to
+hold a PR. Track its checks and merge result, and route concrete repair findings
+to the original writer.
 
-Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
+Test changes still need a stated reason, CI and AI review. Security and privacy
+red lines and CI trust boundaries remain blocking. Optional Owner decisions can
+clarify intent but cannot waive those red lines or required checks. Unverifiable
+Owner request/approval claims are non-blocking notes for every path.
 
 ## 7. Incidents become rules
 

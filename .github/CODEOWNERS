@@ -1,4 +1,4 @@
-# Important paths need Owner review.
+# Path ownership for routing and context; no approving review is a merge prerequisite.
 /.github/            @LeePepe
 /.githooks/          @LeePepe
 /AGENTS.md           @LeePepe

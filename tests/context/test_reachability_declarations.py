@@ -10,8 +10,10 @@ Covers US2-A (T101 Schemas + T102 Context normalization):
 """
 
 import json
+import os
 import re
 import unittest
+from unittest.mock import patch
 
 from fixture import Fixture, REPO, layer_context
 
@@ -331,6 +333,11 @@ class TechContextNormalizationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = Fixture()
         self.addCleanup(self.fixture.close)
+        # In-process audits also spawn Git; use the fixture's isolated
+        # environment so hook-exported routing cannot select the outer repo.
+        environment = patch.dict(os.environ, self.fixture.environment, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def test_legacy_string_gate_normalizes_and_preserves_behavior(self) -> None:
         self.fixture.tech_root([

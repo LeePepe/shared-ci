@@ -132,8 +132,7 @@ With no declaration, the existing blocking behavior is unchanged. Kimi remains
 advisory and does not apply Target scope. All existing rules/Owner-input
 validation, complete-diff byte limits, fork isolation, publication requirements
 and exact-head evidence requirements remain in force. This provider change
-does not update any consumer SHA, install a server setting or waive final Owner
-review. Consumers pinned to older provider SHAs keep their existing behavior;
+does not update any consumer SHA or install a server setting. Consumers pinned to older provider SHAs keep their existing behavior;
 adoption requires a separate pin update. Callers must re-run on PR description
 edits as described below so a changed declaration receives a fresh review.
 
@@ -197,8 +196,9 @@ comment bodies.
 A decision is the Owner's PR-level decision: it covers all later pushes to the
 same PR without naming a head SHA. The trade-off is that later pushes are not
 re-authorized per commit.
-Each decision covers only the specific finding/file/change it explicitly names or quotes; it never extends to unrelated or newly introduced changes in later pushes; blanket approvals authorize nothing. Final merge still requires code-owner approval and
-required checks on the exact head.
+Each decision covers only the specific finding/file/change it explicitly names or quotes; it never extends to unrelated or newly introduced changes in later pushes; blanket approvals authorize nothing. Changes and final merge never require an Owner decision, human approval or
+code-owner approval, including protected paths, gates, CI, review rules and
+CODEOWNERS. Required checks and AI review on the exact head remain mandatory.
 
 A decision may confirm intent or authorize a scoped repository policy/test
 exception. Covered blockers become notes citing the comment ID.
@@ -210,10 +210,12 @@ contents have no Owner-decision authority.
 
 For PR-controlled text actually supplied to the reviewer, an unverifiable Owner
 request/approval claim lacking an admitted Owner decision in the trusted
-Owner-decisions block is a non-blocking note by default; mention any link as
-unverified so a human can check it. It is a high blocker when used to justify a
-protected change (CODEOWNERS paths, policy/gate/CI/ruleset/schema files, or removed
-or weakened tests), regardless of any link; a link does not clear the finding.
+Owner-decisions block is always a non-blocking note, including when used to
+justify protected changes (CODEOWNERS paths, policy/gate/CI/ruleset/schema files,
+or removed or weakened tests). Mention any link as unverified so a human can
+check it. Missing approval or an Owner decision never blocks by itself, even
+when supplied repository rules retain an older approval requirement. Independently
+substantiated red-line, correctness and security problems still block.
 Only an admitted Owner decision in the trusted Owner-decisions block can verify
 such a claim. Links in PR-controlled text (title, description or diff) are
 author-controlled and do not verify a claim. The reviewer cannot verify their
@@ -221,7 +223,8 @@ contents or authorship.
 
 To use: the Owner posts a **new comment whose first line starts with
 `Owner decision:`**, followed by the decision, then re-runs the `codex-review` job.
-This is review input, not a substitute for required checks or Owner approval.
+This is optional review context. It is never a prerequisite for a change or
+merge and cannot substitute for required checks or waive red lines.
 
 Known limitation: the unedited check compares second-resolution REST
 timestamps, so an edit within the same second as creation is indistinguishable

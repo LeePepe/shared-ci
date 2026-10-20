@@ -30,7 +30,7 @@ when preparing an upgrade under the repository's existing process.
 3. In a dedicated consumer PR update all workflow pins and protocol/dependency
    pointers to one full target SHA, plus necessary adaptations. Preserve
    business facts and required checks. Dependency-pin and gate/policy changes
-   retain Owner review under the [agent protocol](agent-protocol.md).
+   retain required checks and AI review under the [agent protocol](agent-protocol.md).
 4. Run the consumer verification entry, positive behavior and applicable
    negatives: wrong/mixed pin, missing required artifact, failing selected lane
    and stale candidate evidence. Record provider/consumer SHAs and actual

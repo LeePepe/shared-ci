@@ -1,7 +1,7 @@
 # Test integrity — development candidate
 
 The [detector](../scripts/quality/test_integrity.py) and the proposed default-on
-lane in [quality.yml](../.github/workflows/quality.yml) require Owner review as
+lane in [quality.yml](../.github/workflows/quality.yml) require AI review as
 a gate change before merging. This is not a released capability or evidence of
 live enforcement/adoption. Existing consumers keep their pinned behavior until
 a separately reviewed full-SHA update. Ordinary test edits/deletions require a

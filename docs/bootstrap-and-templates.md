@@ -50,7 +50,7 @@ into missing caller-local documents. Preserve all protocol policy text.
 Before switching review routing, put the protected complete guide on the trusted
 default branch through its own reviewed prerequisite. `pull_request_target`
 reads base configuration: a guide present only in PR head does not fix base
-review input. Bootstrap/protection changes remain important Owner-reviewed PRs.
+review input. Bootstrap/protection changes remain important AI-reviewed PRs.
 No ruleset, runner or server enforcement is installed by copying these files.
 
 ## Bootstrap behavior and compatibility
@@ -99,7 +99,7 @@ selection runs all. Fixture selection state must not leak from provider CI.
    bootstrap, matching workflow pins, review routing and protection as one goal.
 3. Run audit, `scripts/verify --all`, changed/selected paths, and the actual hook.
    Check malformed metadata, cache preservation and rendered complete reviewer
-   input. Keep the same required checks; obtain current-head CI and Owner review.
+   input. Keep the same required checks; obtain current-head CI and AI review.
 4. On rollback, restore the **whole recorded compatible caller configuration**:
    old provider pin, metadata presence/absence, AGENTS, bootstrap, guide/review
    routes and CODEOWNERS. Preserve every existing cache; point `SHARED_CI` at a

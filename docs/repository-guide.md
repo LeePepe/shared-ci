@@ -43,8 +43,8 @@ scripts/context/contexts tests/repo/test_self_adoption.py
 
 Declared ownership/dependency checks do not prove arbitrary import boundaries;
 there is no general import-boundary linter. Behaviour/interface tests below add
-evidence. New dependency edges require an explicit architecture change under
-existing Owner review.
+evidence. New dependency edges require an explicit architecture change with
+explicit architecture documentation and AI review.
 
 ## PR work units
 
@@ -56,18 +56,18 @@ changes are explicit contract changes, not task-local layers or scope expansion.
 
 | Unit and responsibility | Ownership / interface source | Necessary companions | Verification and review |
 | --- | --- | --- | --- |
-| Context: resolve ownership, audit contracts, run declared gates | [Context leaf](../scripts/context/tech-context.md), [CLI contract](context-cli-contract.md), [orphan test reachability](orphan-test-contract.md), [repository contract](../ai/repo-contract.md) | Required context/repo regressions, affected existing schema and contract documentation | Context and repo suites; checker/schema/policy changes need Owner review |
-| Lint: validate reusable workflow callers | [Lint leaf](../scripts/lint/tech-context.md), [architecture](architecture.md) | Caller-validation regressions and usage documentation | Lint suite and workflow-lint; Owner review |
-| Quality: aggregate explicit gate results, PR-range checks and 6DQ evidence | [Quality leaf](../scripts/quality/tech-context.md), [aggregation contract](quality-aggregation-contract.md), [test integrity](test-integrity.md), [commit identity](commit-identity.md) | Gate/integrity/identity/aggregation regressions and affected result schema/contract | Quality suites; Owner review |
-| Select: choose changed layers and dependents, falling back to full runs | [Select leaf](../scripts/select/tech-context.md), [selection contract](changed-layer-selection.md) | Selection regressions and selection documentation | Select suite; Owner review |
-| Policy: evaluate eligibility as a pure function | [Policy leaf](../scripts/policy/tech-context.md), [validation contract](policy-validation-contract.md) | Validation regressions and affected policy schema/contract | Policy suite; Owner review |
-| Review: immutable-base rules, diff ingestion and verdicts | [Review leaf](../scripts/review/tech-context.md), [rules admission](review-rules.md) | Reviewer regressions and prompt/usage documentation | Review suite; Owner review; real model acceptance remains separate |
-| Registry: resolve committed documents and capabilities | [Registry leaf](../scripts/contracts/tech-context.md), [resolution contract](registry-resolution-contract.md) | Required registry/schema/example source and its isolated tests | Separately admitted registry verification below; protected companions need Owner review |
-| Schemas: define versioned data interfaces | [Schemas leaf](../schemas/tech-context.md), the affected schema's surface contract | Compatibility tests in each consuming layer and matching contract documentation | JSON syntax plus affected consumer suites; Owner review |
-| Ruleset: plan default-branch protection and explicitly apply approved changes | [Ruleset leaf](../scripts/ruleset/tech-context.md), [repository contract](../ai/repo-contract.md) | Planner regressions and the affected ruleset template/documentation | Ruleset suite; Owner review; a local test is not live readback |
-| CI / self-adoption: wire this repository to a published provider | [CI](../.github/workflows/ci.yml), [review caller](../.github/workflows/review.yml), [hook](../.githooks/pre-push), [verify entry](../scripts/verify) | Coordinated metadata, index, guide, CODEOWNERS and relevant wiring/adoption tests | Full verification, audit and workflow-lint; Owner review |
-| Common protocol / repository contract: change one shared development rule | [Protocol source](../ai/agent-protocol.md), [contract source](../ai/repo-contract.md) | Necessary contract tests and matching template/versioned documentation | Repo suite plus affected checks; Owner review; consumer repinning is a later PR |
-| Docs / spec: one documentation topic or requirement | The relevant document and root support declaration | Its diagrams/examples and documentation regressions | Link/contract checks and topic review; actual policy changes still need Owner review |
+| Context: resolve ownership, audit contracts, run declared gates | [Context leaf](../scripts/context/tech-context.md), [CLI contract](context-cli-contract.md), [orphan test reachability](orphan-test-contract.md), [repository contract](../ai/repo-contract.md) | Required context/repo regressions, affected existing schema and contract documentation | Context and repo suites; checker/schema/policy changes need AI review |
+| Lint: validate reusable workflow callers | [Lint leaf](../scripts/lint/tech-context.md), [architecture](architecture.md) | Caller-validation regressions and usage documentation | Lint suite and workflow-lint; AI review |
+| Quality: aggregate explicit gate results, PR-range checks and 6DQ evidence | [Quality leaf](../scripts/quality/tech-context.md), [aggregation contract](quality-aggregation-contract.md), [test integrity](test-integrity.md), [commit identity](commit-identity.md) | Gate/integrity/identity/aggregation regressions and affected result schema/contract | Quality suites; AI review |
+| Select: choose changed layers and dependents, falling back to full runs | [Select leaf](../scripts/select/tech-context.md), [selection contract](changed-layer-selection.md) | Selection regressions and selection documentation | Select suite; AI review |
+| Policy: evaluate eligibility as a pure function | [Policy leaf](../scripts/policy/tech-context.md), [validation contract](policy-validation-contract.md) | Validation regressions and affected policy schema/contract | Policy suite; AI review |
+| Review: immutable-base rules, diff ingestion and verdicts | [Review leaf](../scripts/review/tech-context.md), [rules admission](review-rules.md) | Reviewer regressions and prompt/usage documentation | Review suite; AI review; real model acceptance remains separate |
+| Registry: resolve committed documents and capabilities | [Registry leaf](../scripts/contracts/tech-context.md), [resolution contract](registry-resolution-contract.md) | Required registry/schema/example source and its isolated tests | Separately admitted registry verification below; protected companions need AI review |
+| Schemas: define versioned data interfaces | [Schemas leaf](../schemas/tech-context.md), the affected schema's surface contract | Compatibility tests in each consuming layer and matching contract documentation | JSON syntax plus affected consumer suites; AI review |
+| Ruleset: plan default-branch protection and explicitly apply approved changes | [Ruleset leaf](../scripts/ruleset/tech-context.md), [repository contract](../ai/repo-contract.md) | Planner regressions and the affected ruleset template/documentation | Ruleset suite; AI review; a local test is not live readback |
+| CI / self-adoption: wire this repository to a published provider | [CI](../.github/workflows/ci.yml), [review caller](../.github/workflows/review.yml), [hook](../.githooks/pre-push), [verify entry](../scripts/verify) | Coordinated metadata, index, guide, CODEOWNERS and relevant wiring/adoption tests | Full verification, audit and workflow-lint; AI review |
+| Common protocol / repository contract: change one shared development rule | [Protocol source](../ai/agent-protocol.md), [contract source](../ai/repo-contract.md) | Necessary contract tests and matching template/versioned documentation | Repo suite plus affected checks; AI review; consumer repinning is a later PR |
+| Docs / spec: one documentation topic or requirement | The relevant document and root support declaration | Its diagrams/examples and documentation regressions | Link/contract checks and topic review; actual policy changes still need AI review |
 
 PR boundaries are **manual** planning/code-review rules; the aggregate neither
 infers purpose nor validates this table. No universal file/line ceiling,
@@ -90,7 +90,7 @@ scripts/verify --all                 # same full run
 
 Native verification runs full suites: shell/Python/JSON syntax, layer
 map and selected-provider live-root contract, workflow-lint, Context,
-repo, Lint, Review, Ruleset, Select, Quality
+repo, Lint, Review, Ruleset, Select, StuckPR, Quality
 (including test integrity and commit identity) and Policy tests, then
 committed-tree whitespace. Before committing, also run `git diff --check` and
 `git diff --cached --check`. Stage new metadata/documents for the tracked-file
@@ -200,18 +200,17 @@ stacking, auto-merge, approval and ordinary-test-change policy in the pinned
 protocol; this guide introduces no separate human approval class for test edits.
 State reasons for test changes and provide applicable CI/review evidence.
 
-Any claim in a PR, commit message or comment that the Owner requested or approved
-something must link the Owner's own comment, review or Owner-authored issue/decision;
-without a link, describe the change's source neutrally instead of making the claim.
+Unverifiable Owner request/approval claims are non-blocking notes for every path.
+Verified Owner decisions are optional context, never merge prerequisites.
 
 Changes to gates, lint, schemas, `ai/`, templates, pins, workflows, this guide
-and other [CODEOWNERS](../.github/CODEOWNERS) paths are important PRs requiring
-real Owner review. Source ownership declarations do not prove server protection;
-preserve the existing approval gates and setup holds.
+and other [CODEOWNERS](../.github/CODEOWNERS) paths require CI and AI review.
+Enable GitHub auto-merge on opening every non-Draft PR; no approving review is
+required. Keep required checks and setup holds; live settings remain separate.
 
-Done means required checks are green on the exact PR head SHA, with existing
-required approvals/review evidence satisfied. A new push invalidates old
-evidence. Local source verification is only development evidence, not release,
+Done means required checks are green on the exact PR head SHA, with required
+AI review evidence satisfied and the auto-merge result read back. A new push
+invalidates old evidence. Local source verification is only development evidence, not release,
 installed adoption, real model review or consumer/recovery acceptance.
 
 ## Complete shared protocol snapshot
