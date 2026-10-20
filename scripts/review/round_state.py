@@ -14,7 +14,8 @@ import zlib
 
 STATE_PREFIX = "<!-- shared-ci-review-state:v1:"
 MAX_STATE_BYTES = 1_000_000
-BOT = "github-actions"  # GraphQL Actor.login (REST uses github-actions[bot]).
+# Observed on PR #50: GraphQL uses "github-actions"; REST uses "github-actions[bot]".
+BOT_LOGINS = {"github-actions", "github-actions[bot]"}
 
 INSTRUCTIONS = {
     "full": "Initial review: review the complete PR diff using the existing dimensions.",
@@ -105,8 +106,8 @@ def previous(marker: str) -> dict | None:
     if latest is None:
         return None
     editor = latest["editor"]
-    if ((latest["author"] or {}).get("login") != BOT
-            or (editor is not None and editor.get("login") != BOT)
+    if ((latest["author"] or {}).get("login") not in BOT_LOGINS
+            or (editor is not None and editor.get("login") not in BOT_LOGINS)
             or (latest["createdAt"] != latest["updatedAt"] and editor is None)):
         raise ValueError("sticky review author/editor is not the Actions bot")
     return decode(latest["body"])

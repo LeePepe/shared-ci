@@ -230,6 +230,32 @@ class RoundScriptTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse((self.out / "prompt").exists())
 
+    def test_sticky_bot_author_and_editor_accept_both_literal_logins(self):
+        body = self.first()
+        for author in ("github-actions", "github-actions[bot]"):
+            for editor in ("github-actions", "github-actions[bot]"):
+                with self.subTest(author=author, editor=editor):
+                    (self.out / "prompt").unlink(missing_ok=True)
+                    result, comment = self.run_script(
+                        "codex-review.sh", json.dumps(review.PASS), CODEX_BIN="absent-codex",
+                        STUB_STATE_JSON=page(body, author=author, editor=editor))
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertFalse((self.out / "prompt").exists())
+                    self.assertIn("Reused previous conclusion", comment)
+                    self.assertEqual(round_state.decode(body)["verdict"],
+                                     round_state.decode(comment)["verdict"])
+
+    def test_sticky_human_editor_is_rejected_for_both_bot_authors(self):
+        body = self.first()
+        for author in ("github-actions", "github-actions[bot]"):
+            with self.subTest(author=author):
+                result, comment = self.run_script(
+                    "codex-review.sh", json.dumps(review.PASS),
+                    STUB_STATE_JSON=page(body, author=author, editor="human-editor"))
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("full review fallback", comment)
+                self.assertIn("Perform a full PR review", (self.out / "prompt").read_text())
+
     def test_fallback_on_api_legacy_invalid_and_edited_state(self):
         body = self.first()
         invalid = copy.deepcopy(round_state.decode(body))
