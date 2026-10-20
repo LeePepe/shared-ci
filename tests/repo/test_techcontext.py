@@ -84,8 +84,7 @@ class TechContextResolverTests(unittest.TestCase):
 
     def use_published_templates(self):
         for source, target in (("repo-contract.json", ".github/repo-contract.json"),
-                               ("repository-guide.md", "docs/repository-guide.md"),
-                               ("CODEOWNERS", ".github/CODEOWNERS")):
+                               ("repository-guide.md", "docs/repository-guide.md")):
             text = (REPO / "templates" / source).read_text(encoding="utf-8")
             self.repo.write(target, text.replace("<40-char-sha>", PIN).replace("@OWNER", "@owner"))
         agents = (REPO / "templates/AGENTS.md").read_text(encoding="utf-8")

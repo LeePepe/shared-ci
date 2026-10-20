@@ -2,10 +2,10 @@
 
 This is a proposed generation/migration kit, not provider self-adoption, a release
 or a consumer rollout. The supported metadata baseline is published commit
-`d8fe8e3c68182e3d8435120814bae955ee327372`. Its
-[contract](https://github.com/LeePepe/shared-ci/blob/d8fe8e3c68182e3d8435120814bae955ee327372/ai/repo-contract.md#opt-in-metadata-and-directory-audit)
+`ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc`. Its
+[contract](https://github.com/LeePepe/shared-ci/blob/ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc/ai/repo-contract.md#opt-in-metadata-and-directory-audit)
 is authoritative for metadata support; read the versioned
-[AI usage bundle](https://github.com/LeePepe/shared-ci/blob/d8fe8e3c68182e3d8435120814bae955ee327372/ai/USAGE.md)
+[AI usage bundle](https://github.com/LeePepe/shared-ci/blob/ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc/ai/USAGE.md)
 as well. Older providers do not acquire metadata support retroactively.
 
 ## Generate together
@@ -15,7 +15,7 @@ Copy the following from `templates/`, retaining executable bits on both scripts:
 | Template | Caller path |
 | --- | --- |
 | AGENTS.md, CLAUDE.md | same root filenames |
-| repo-contract.json, CODEOWNERS, pull_request_template.md | `.github/` |
+| repo-contract.json, pull_request_template.md | `.github/` |
 | ci.yml, review.yml | `.github/workflows/` |
 | repository-guide.md, development.md | `docs/` |
 | tech-context.root.md | `docs/architecture/tech-context.md` |
@@ -26,7 +26,7 @@ Before verification, the pre-push hook refuses non-deletion pushes to `main` and
 the remote HEAD default branch (falling back to `main`); server rules remain the backstop.
 
 Replace every `<40-char-sha>` with the same supported full lowercase provider
-SHA and `@OWNER` with the actual review owner. Choose real repository layer
+SHA. No CODEOWNERS file is generated or required. Choose real repository layer
 responsibilities, ownership (including tests), dependencies and gate commands;
 the Swift examples are not a mandatory architecture. Preserve an existing
 `docs/development.md` and its goal-based PR kinds rather than replacing
@@ -39,9 +39,9 @@ the repository's PR kinds and include all additional review policy inline.
 The development guide remains the authority for repository development choices;
 changes to those choices must update the reviewer extract in the same change.
 A tool-free reviewer cannot follow links. Both review callers therefore pass
-`rules-file: docs/repository-guide.md`; CODEOWNERS protects this guide and the
-development source. Keep the **entire** guide below the selected provider's
-24,000-byte input limit and verify rendered prompt contents, not just a link.
+`rules-file: docs/repository-guide.md`; changes to this guide and the
+development source require CI and AI review. Keep the **entire** guide below
+the selected provider's 24,000-byte input limit and verify rendered prompt contents, not just a link.
 When copying protocol text into a caller guide, rebase provider-relative links
 to immutable URLs at that same selected SHA. Validate the target document and
 fragment in the selected provider; do not silently turn shared-contract links
@@ -102,8 +102,8 @@ selection runs all. Fixture selection state must not leak from provider CI.
    input. Keep the same required checks; obtain current-head CI and AI review.
 4. On rollback, restore the **whole recorded compatible caller configuration**:
    old provider pin, metadata presence/absence, AGENTS, bootstrap, guide/review
-   routes and CODEOWNERS. Preserve every existing cache; point `SHARED_CI` at a
-   clean checkout for the rollback pin. Never reset shared tags or waive checks.
+   routes and any files required by that older provider. Preserve every existing
+   cache; point `SHARED_CI` at a clean checkout for the rollback pin. Never reset shared tags or waive checks.
 
 `tests/repo/test_bootstrap.py` generates actual templates and exercises the
 published provider locally. Hosted review/model execution, live rulesets and real

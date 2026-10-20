@@ -22,7 +22,7 @@ There is no universal line/file ceiling. Follow-ups become new PRs/tasks.
 | --- | --- | --- | --- |
 | Mechanical | Rename/move/format/generated/codemod for one goal | Behavioural changes | Existing behaviour tests; code review |
 | Dependency / pin | Manifest/lockfile/shared-ci pin and necessary compatibility evidence | Non-trivial adaptation | Full verification; AI review |
-| Governance | AGENTS, policy, ruleset, CI wiring, CODEOWNERS paths for one rule, with tests/docs | Feature code | Policy checks, workflow lint as applicable, full verification; AI review |
+| Governance | AGENTS, policy, ruleset, CI wiring and schema paths for one rule, with tests/docs | Feature code | Policy checks, workflow lint as applicable, full verification; AI review |
 | Behaviour / feature slice | One observable outcome with required tests and implementation docs | Mechanical changes, dependency/pin bumps, governance, unrelated features | Affected layer/dependent gates; code review |
 | Interface-first | Cross-layer: lower-layer interface + tests + a real or test usage first | Upward adoption that can follow separately | Interface/compatibility tests; architecture/code review |
 | Docs / spec | One documentation topic or requirement, its diagrams and examples | Unrelated implementation | Documentation checks/review; policy changes retain AI review |
@@ -45,8 +45,8 @@ scripts/verify
 scripts/verify --all
 ```
 
-Point to the repository's verify entry, CI configuration and review policy /
-CODEOWNERS. Record the command/evidence and `enforced`, `manual`, `planned` or
+Point to the repository's verify entry, CI configuration and review policy.
+Record the command/evidence and `enforced`, `manual`, `planned` or
 `N/A` status for actual checks; do not present this example table as enforcement.
 PR authors use these conventions regardless of workflow. PRM follows existing
 CI/review outcomes without adding a separate size or scope review.

@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   quality:
-    uses: LeePepe/shared-ci/.github/workflows/quality.yml@88c09b3f68ceea82a4ca979c689e3dc50266ee10
+    uses: LeePepe/shared-ci/.github/workflows/quality.yml@ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc
     with:
       runs-on: ubuntu-latest
       verify-command: scripts/verify --all

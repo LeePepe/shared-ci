@@ -11,7 +11,7 @@ import unittest
 from fixture import AGENTS, ContractRepo, PIN, REPO, environment, run_bounded
 
 # Published provider supporting the metadata/index contract and versioned AI docs.
-PROVIDER = "d8fe8e3c68182e3d8435120814bae955ee327372"
+PROVIDER = "ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc"
 
 
 class BootstrapTests(unittest.TestCase):
@@ -31,9 +31,11 @@ class BootstrapTests(unittest.TestCase):
     def setUp(self):
         self.repo = ContractRepo()
         self.addCleanup(self.repo.close)
+        # Start without the generic fixture's legacy ownership file.
+        self.repo.remove(".github/CODEOWNERS")
         copies = {
             "AGENTS.md": "AGENTS.md", "CLAUDE.md": "CLAUDE.md",
-            "CODEOWNERS": ".github/CODEOWNERS", "repo-contract.json": ".github/repo-contract.json",
+            "repo-contract.json": ".github/repo-contract.json",
             "repository-guide.md": "docs/repository-guide.md", "development.md": "docs/development.md",
             "ci.yml": ".github/workflows/ci.yml", "review.yml": ".github/workflows/review.yml",
             "scripts/verify": "scripts/verify", "githooks/pre-push": ".githooks/pre-push",
@@ -70,6 +72,23 @@ class BootstrapTests(unittest.TestCase):
     def metadata(self, text):
         self.repo.write(".github/repo-contract.json", text)
         self.repo.add()
+
+    def test_bootstrap_generates_no_codeowners_and_passes_contract(self):
+        self.assertFalse((REPO / "templates/CODEOWNERS").exists())
+        tracked = self.repo.git("ls-files").stdout.splitlines()
+        for path in ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"):
+            with self.subTest(path=path):
+                self.assertFalse((self.repo.root / path).exists())
+                self.assertNotIn(path, tracked)
+        result = run_bounded(["python3", "-I", "-B",
+                              str(self.provider / "scripts/context/_context.py"), "audit"],
+                             cwd=self.repo.root, env=self.repo.env, timeout=30)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(json.loads(result.stdout)["ok"])
+        status = run_bounded(["git", "-C", str(self.provider), "status", "--porcelain",
+                              "--untracked-files=all", "--ignored"],
+                             env=self.repo.env, timeout=20, check=True)
+        self.assertEqual("", status.stdout, "Contract audit must leave the pinned provider clean")
 
     def test_actual_kit_metadata_all_and_selected(self):
         self.assert_pass(self.verify("--all"))
@@ -264,7 +283,7 @@ class BootstrapTests(unittest.TestCase):
                                          CHANGED="src/core/model.py", DIFF="synthetic diff", TRUNCATED=""),
                                 capture_output=True, text=True, check=True)
         self.assertIn(guide, result.stdout)
-        self.assertIn("Ordinary test-code", result.stdout)
+        self.assertIn("Ordinary test-code", " ".join(result.stdout.split()))
         self.assertIn("| Core | Core leaf", result.stdout)
         for job in ("codex-review", "kimi-review"):
             self.assertIn(job, (self.repo.root / ".github/workflows/review.yml").read_text())

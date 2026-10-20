@@ -117,10 +117,10 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 - Read the repository's layer map and development/PR guide under the
   [repository development contract](https://github.com/LeePepe/shared-ci/blob/<40-char-sha>/ai/repo-contract.md#repository-development-contract).
-  Choose its existing PR unit for the requested outcome. Layer boundaries and
-  PR conventions belong to the repository, not to the agent's role.
-- **Dev Team:** Planner maps requirements/spec acceptance to tasks within those
-  units, passes the existing spec/plan gate, and TL dispatches FS. FS implements
+  Define one goal for the requested outcome and choose a PR kind from that guide.
+  Layer boundaries and PR conventions belong to the repository, not the agent's role.
+- **Dev Team:** Planner maps requirements/spec acceptance to single-goal tasks,
+  passes the existing spec/plan gate, and TL dispatches FS. FS implements
   the assigned task; a gap returns through TL to Planner. A task cannot redefine
   the repository's architecture or PR policy.
 - **Other agents:** follow the same repository contract directly for the user's
@@ -148,7 +148,7 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
   - pin shared-ci, or any shared library, by branch or tag instead of a full
     SHA or exact version.
 - If a check is wrong, fix it in its own scoped PR with the reason. Ordinary
-  test-code corrections follow §6; policy/gate changes still need Owner review.
+  test-code corrections follow §6; required checks and AI review remain mandatory.
   Do not work around the check in a feature PR.
 - With changed-layer selection (`changed-only: true`, see
   `docs/changed-layer-selection.md`), CI runs the layers the whole PR diff
@@ -163,16 +163,24 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 
 ## 4. Pull request
 
+Describe the source of a change accurately in PRs, commit messages and comments.
+Unverifiable claims that the Owner requested or approved a change are non-blocking
+notes, including for protected paths. Optional verified Owner decisions provide
+context; they are never a prerequisite for a change or merge.
+
 What a PR must be:
 
-- **Base is the default branch.** A PR must be mergeable on its own. Do not
-  make it depend on another open PR being merged first.
-- **Repository-defined unit.** Follow the repository guide's PR conventions:
-  one purpose, an existing unit and its necessary tests/companion documentation.
+- **Declared base.** Use the default branch unless stacked. Each PR must be
+  mergeable once its declared base PR has merged; the final PR of a stack
+  targets the default branch.
+- **One goal.** Start `Intent` with `After this PR, <observable outcome>` as
+  one sentence. Choose the PR kind per the repository guide and include necessary
+  tests/companion documentation.
   Link the relevant requirement/spec and, for FS, the Planner task. Other sources
   do not need to create a Dev Team task to submit a PR.
 - **PR Manager handles lifecycle.** Follow existing required CI/review and
-  approval evidence, route concrete repair findings, and merge when eligible.
+  exact-head evidence, enable GitHub auto-merge when the PR opens, and follow it
+  through merged-state readback.
   Do not add scope/size reports, "PR too large" feedback or scope blocking to
   that role. This does not waive any existing required check or review.
 - **Stacked PRs** are allowed only as a temporary queue. Once the base PR
@@ -181,17 +189,25 @@ What a PR must be:
   (`git rebase --onto origin/main <old-base-tip>`), before it merges. A squash
   merge rewrites the base commits, so a stacked branch that is not rebased
   will conflict or carry duplicate changes.
-  Dependent slices wait for prerequisites to merge in order; this queue never
-  bypasses approvals or CI.
+  PRs may be reviewed in parallel, but dependent slices wait for prerequisites
+  to merge in order; this queue never bypasses required checks or AI review.
+
+**Commits.** Use one logical step per commit with a Conventional Commit subject.
+Keep mechanical and behavioural steps in separate commits; put tests with or
+just before the code. Only the PR head must pass CI and `scripts/verify`, not
+every intermediate commit. When bisectable commits matter, optionally run
+`git rebase -x scripts/verify`. Fixup commits during review are fine. Merges stay
+squash: the PR is the atomic unit on main, and the PR title becomes the squash
+subject, so write it as a Conventional Commit subject.
 
 Fill in every section of the repository's PR template:
 
 | Section | Content |
 | --- | --- |
 | Existing behaviour | What the code does today, including behaviour that must be kept |
-| Intent | What changes and why; repository PR unit and requirement/spec/task link when present |
+| Intent | One-sentence goal first, then what changes and why; PR kind and requirement/spec/task link when present |
 | Compatibility | API/data/config compatibility, migrations, rollback |
-| Removed or weakened tests or policy | Each item with its reason; approval where §6 requires it, or `none` |
+| Removed or weakened tests or policy | Each item with its reason, or `none` |
 | Test evidence | `scripts/verify` result and the **tested SHA** (the PR head) |
 
 The `quality / aggregate` check rejects empty or placeholder sections.
@@ -202,23 +218,45 @@ The `quality / aggregate` check rejects empty or placeholder sections.
   the commit it names. **Every new push invalidates the old evidence.** Wait
   for the new required checks and a new review before you claim the work is
   done.
-- "Done" means the required checks are green on the PR head SHA. A finished
-  local run is not "done", and a sent message is not an accepted handoff.
+- Handing over a PR is an intermediate lifecycle event, not "done". A finished
+  local run is not "done", and a sent message alone is not an accepted
+  handoff or completion signal.
+- After PR handoff, the author may either:
+  - remain active to wait for the required checks on the current PR head and
+    repair failures; or
+  - stop after handoff. The protocol does not require continued waiting.
+- When an author remains active, it waits only for required checks and concrete
+  repair results; it never waits for human approvals. Required checks and AI review remain
+  mandatory; GitHub auto-merge performs the merge without human approval.
+- PR Manager handles lifecycle as defined in §4 and serves as the backstop when
+  the author is not waiting or is unavailable. PR Manager follows current-head
+  CI and AI review evidence, and routes concrete repair findings through
+  the original path. It does not write to the branch and gains no new gate.
+- During repair, the author remains the sole branch writer under §1; nobody
+  else is assigned to write concurrently, and unexpected writers still require
+  stopping and reporting. Every repair push must follow §3 verification before
+  pushing. Because each push invalidates prior checks, reviews and tested-SHA
+  evidence, any later completion claim requires fresh evidence for the new
+  PR head.
+- "Done" means the required checks are green on the exact PR head SHA plus any
+  required AI review evidence. No human approval is required; delivery also
+  records the auto-merge result on the exact head. PR handoff never
+  waives these gates.
 
-## 6. Important PRs need the Owner
+## 6. Auto-merge without human approval
 
-Changes under `CODEOWNERS` paths need Owner approval (for example
-`.github/**`, policy, schemas, gates, `AGENTS.md`, the constitution,
-dependency pins, credentials, privacy and data migrations). Ordinary test-code
-edits or deletions require a stated reason, CI and AI review, not separate
-Owner approval merely because tests changed. Changes to actual gate/policy
-semantics or permissions remain important even when placed in a test or Markdown
-file. Existing behaviour changes without an approved spec also need the Owner.
-Use trusted policy and effective CODEOWNERS protections, not an author's label,
-to route review. Until CODEOWNERS review is enforced, add `owner-review` for
-important PRs and wait; do not bypass existing protections.
+Every non-Draft PR uses GitHub auto-merge from the time it opens. Once required
+checks and required AI review pass on the exact head, GitHub merges it without
+Owner, code-owner or other approving reviews. This applies to all PR sources
+and all paths, including gates, CI, review rules, CODEOWNERS and rulesets.
+Do not add an approval label or wait for an Owner decision. CODEOWNERS is not
+required for review, approval or protection. Never disable auto-merge to hold a PR. Track its checks and merge result, and route concrete repair findings
+to the original writer.
 
-Enable auto-merge on every PR; CODEOWNERS required review gates important paths; never disable auto-merge to hold a PR.
+Test changes still need a stated reason, CI and AI review. Security and privacy
+red lines and CI trust boundaries remain blocking. Optional Owner decisions can
+clarify intent but cannot waive those red lines or required checks. Unverifiable
+Owner request/approval claims are non-blocking notes for every path.
 
 ## 7. Incidents become rules
 

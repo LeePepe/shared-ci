@@ -1,6 +1,30 @@
 # Changelog
 
-## Unreleased — planned v0.7.2
+## Unreleased — planned v0.7.3
+
+### Changed
+
+- Template bootstrap and shared-ci self-adoption select the published v0.7.2
+  provider at `ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc`, including workflow,
+  metadata and protocol routes plus complete reviewer protocol snapshots.
+- New template callers no longer generate CODEOWNERS; shared-ci removes its own
+  legacy file. Template guidance uses required checks and AI review for policy,
+  gate, CI, ruleset and schema changes.
+- Bootstrap regressions verify that generated callers have no CODEOWNERS and
+  pass the published provider's contract. Bundle verification now compares the
+  template snapshot directly with the selected provider's protocol authority,
+  allowing deliberate refreshes without copying a stale template snapshot.
+
+### Adoption and publication
+
+Publish a lightweight tag and GitHub Release at the final merged commit after
+required checks pass. Consumers pin that full SHA. Rollback restores the whole
+recorded compatible caller configuration, including files an older provider
+requires. This source release applies no live settings or ruleset changes.
+
+## [v0.7.2](https://github.com/LeePepe/shared-ci/releases/tag/v0.7.2) — 2026-10-20
+
+Published source: `ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc`.
 
 ### Changed
 
