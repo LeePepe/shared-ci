@@ -80,10 +80,15 @@ class BootstrapTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse((self.repo.root / path).exists())
                 self.assertNotIn(path, tracked)
-        result = run_bounded([str(self.provider / "scripts/context/audit")],
+        result = run_bounded(["python3", "-I", "-B",
+                              str(self.provider / "scripts/context/_context.py"), "audit"],
                              cwd=self.repo.root, env=self.repo.env, timeout=30)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertTrue(json.loads(result.stdout)["ok"])
+        status = run_bounded(["git", "-C", str(self.provider), "status", "--porcelain",
+                              "--untracked-files=all", "--ignored"],
+                             env=self.repo.env, timeout=20, check=True)
+        self.assertEqual("", status.stdout, "Contract audit must leave the pinned provider clean")
 
     def test_actual_kit_metadata_all_and_selected(self):
         self.assert_pass(self.verify("--all"))
