@@ -459,78 +459,6 @@ def _verify(report: _Report, root: pathlib.Path, files: dict) -> None:
         report.add("verify", workflows[0], "CI does not invoke scripts/verify")
 
 
-def _owner_pattern(pattern: str, path: str) -> bool:
-    if pattern.startswith("!") or any(char in pattern for char in "\\[]"):
-        raise ValueError("unsupported CODEOWNERS pattern")
-    anchored = pattern.startswith("/") or "/" in pattern.rstrip("/")
-    body, regex, index = pattern.strip("/"), "", 0
-    while index < len(body):
-        if body.startswith("**/", index) and (index == 0 or body[index - 1] == "/"):
-            regex += "(?:[^/]+/)*"
-            index += 3
-        elif body[index:] == "**" and (index == 0 or body[index - 1] == "/"):
-            regex += ".*"
-            index += 2
-        elif body[index] == "*":
-            regex += "[^/]*"
-            while index < len(body) and body[index] == "*":
-                index += 1
-        elif body[index] == "?":
-            regex += "[^/]"
-            index += 1
-        else:
-            regex += re.escape(body[index])
-            index += 1
-    regex = ("^" if anchored else "^(?:.*/)?") + regex + ("/.*$" if pattern.endswith("/") else "(?:/.*)?$")
-    return re.match(regex, path) is not None
-
-
-def _valid_owner(owner: str) -> bool:
-    # Syntactic admission only; existence, visibility and write access are live checks.
-    login = r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"
-    if owner.startswith("@"):
-        return (len(owner[1:].split("/", 1)[0]) <= 39
-                and re.fullmatch(r"@" + login + r"(?:/[A-Za-z0-9][A-Za-z0-9_-]*)?", owner) is not None)
-    atom = r"[A-Za-z0-9!$%&'*+/=?^_`{|}~-]+"
-    label = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-    return re.fullmatch(atom + r"(?:\." + atom + r")*@" + label + r"(?:\." + label + r")+", owner) is not None
-
-
-def _codeowners(report: _Report, root: pathlib.Path, files: dict, contract: dict, metadata: dict | None) -> None:
-    owners = [p for p in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS") if p in files]
-    if not owners:
-        report.add("ruleset", ".github/CODEOWNERS", "CODEOWNERS is missing (review gate for important paths)")
-        return
-    text = _tracked_text(root, owners[0], files)
-    if text is None:
-        report.add("ruleset", owners[0], "CODEOWNERS must be a readable, unconflicted tracked regular file")
-        return
-    patterns = {line.split()[0] for line in text.splitlines()
-                if line.strip() and not line.lstrip().startswith("#")}
-    required_paths = list(contract["codeowners_required"])
-    if metadata:
-        required_paths.append("/" + metadata["guide"])
-    for required in required_paths:
-        if required not in patterns:
-            report.add("ruleset", owners[0], f"CODEOWNERS does not cover {required}")
-    if metadata:
-        rules = [line.split("#", 1)[0].split() for line in text.splitlines()]
-        try:
-            for parts in rules:
-                for owner in parts[1:]:
-                    if not _valid_owner(owner):
-                        raise ValueError(f"invalid CODEOWNERS owner: {owner!r}")
-            for path in ("AGENTS.md", METADATA, metadata["guide"]):
-                last = []
-                for parts in rules:
-                    if parts and _owner_pattern(parts[0], path):
-                        last = parts[1:]
-                if not last:
-                    report.add("ruleset", owners[0], f"CODEOWNERS leaves protected document unowned: {path}")
-        except ValueError as error:
-            report.add("ruleset", owners[0], f"cannot verify protected document ownership: {error}")
-
-
 def _pr_template(report: _Report, root: pathlib.Path, files: dict, contract: dict) -> None:
     names = [p for p in files if p.lower() in (".github/pull_request_template.md",
                                                  "pull_request_template.md",
@@ -634,7 +562,6 @@ def audit(ctx: Any, root: pathlib.Path) -> list[Any]:
     _ci(report, files, refs)
     _review_rules(report, calls, metadata)
     _verify(report, root, files)
-    _codeowners(report, root, files, contract, metadata)
     _pr_template(report, root, files, contract)
     _dependencies(report, root, files, contract, agents, metadata)
     _identity(report, root, files, contract)

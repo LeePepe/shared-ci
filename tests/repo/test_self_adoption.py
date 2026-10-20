@@ -119,20 +119,17 @@ class SelfAdoptionTests(unittest.TestCase):
         self.repo.write(path, text.replace("rules-file: " + GUIDE, "rules-file: AGENTS.md"))
         self.assert_rejected("contract_ci", "review rules-file")
 
-    def test_later_ownerless_rule_cannot_remove_document_protection(self):
-        path = ".github/CODEOWNERS"
-        original = (self.repo.root / path).read_text(encoding="utf-8")
-        for target in ("AGENTS.md", METADATA, GUIDE):
-            with self.subTest(target=target):
-                self.repo.write(path, original + "/" + target + "\n")
-                self.assert_rejected("contract_ruleset", "unowned: " + target)
+    def test_native_audit_passes_without_codeowners(self):
+        self.repo.remove(".github/CODEOWNERS")
+        result = self.repo.cli("audit")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(json.loads(result.stdout)["ok"])
 
-    def test_guide_requires_explicit_ownership(self):
-        path = ".github/CODEOWNERS"
-        lines = (self.repo.root / path).read_text(encoding="utf-8").splitlines()
-        self.repo.write(path, "\n".join(line for line in lines
-                                      if not line.startswith("/" + GUIDE + " ")) + "\n")
-        self.assert_rejected("contract_ruleset", "CODEOWNERS does not cover /" + GUIDE)
+    def test_native_audit_ignores_legacy_codeowners(self):
+        self.repo.write(".github/CODEOWNERS", "/AGENTS.md\n")
+        result = self.repo.cli("audit")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(json.loads(result.stdout)["ok"])
 
     def test_existing_layer_and_support_routes_are_preserved(self):
         paths = ("scripts/context/_contract.py", "tests/repo/test_self_adoption.py",

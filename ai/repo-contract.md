@@ -19,7 +19,7 @@ and `kind: "contract_<item>"`.
 | 2 `agent_files` | `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.cursorrules` only say "read AGENTS.md first", plus 1–2 notes specific to that tool | guidance | audit checks that each file refers to AGENTS.md, has at most 12 non-empty lines, does not repeat the shared-ci pin, and does not repeat any required-check name listed in AGENTS.md | whether the notes contradict AGENTS.md |
 | 3 `ci` | `.github/workflows/ci.yml` calls `LeePepe/shared-ci/.github/workflows/quality.yml@<40-char SHA>` and passes this repository's commands | enforced | audit checks that ci.yml calls quality.yml, that every pin is a full SHA, and that all pins are the same SHA. workflow-lint also rejects tag and branch refs and self-hosted jobs without a fork guard | — |
 | 4 `verify` | `.githooks/pre-push` (or pre-commit) and CI call the same executable `scripts/verify`. With `changed-only: true` CI calls `scripts/verify --selected`, which runs the layers the `select` job chose, or every layer on a full run | enforced | audit checks that `scripts/verify` is tracked with mode 100755, that the hook exists, is executable and calls it, and that ci.yml calls it | whether `core.hooksPath` is set locally (it cannot be seen in the tree) |
-| 5 `ruleset` | The default-branch ruleset is code: [`templates/ruleset.json`](../templates/ruleset.json). It blocks deletion and non-fast-forward, requires a PR, requires `quality / aggregate` and `codex-review-target / codex-review` plus caller extras, defaults to zero approving reviews and no code-owner review (`--no-code-owner-review` remains a compatibility no-op), allows no bypass actors, and uses strict=false unless the caller opts in. CODEOWNERS covers the important paths | enforced | audit checks that CODEOWNERS exists and covers `/.github/` and `/AGENTS.md`. [`scripts/ruleset/plan.py`](../scripts/ruleset/plan.py) computes old → new from the API dumps and keeps every existing required check unless `--map OLD=NEW` says otherwise. [`scripts/ruleset/apply.sh`](../scripts/ruleset/apply.sh) is a dry run by default; with `--apply` it applies the change and reads it back | the ruleset step itself: dry run, then Owner approval, then `--apply`, then readback (it needs admin API access) |
+| 5 `ruleset` | The default-branch ruleset is code: [`templates/ruleset.json`](../templates/ruleset.json). It blocks deletion and non-fast-forward, requires a PR, requires `quality / aggregate` and `codex-review-target / codex-review` plus caller extras, defaults to zero approving reviews and no code-owner review (`--no-code-owner-review` remains a compatibility no-op), allows no bypass actors, and uses strict=false unless the caller opts in. CODEOWNERS is not required | enforced | No CODEOWNERS audit is performed. [`scripts/ruleset/plan.py`](../scripts/ruleset/plan.py) computes old → new from the API dumps and keeps every existing required check unless `--map OLD=NEW` says otherwise. [`scripts/ruleset/apply.sh`](../scripts/ruleset/apply.sh) is a dry run by default; with `--apply` it applies the change and reads it back | the ruleset step itself: dry run, then Owner approval, then `--apply`, then readback (it needs admin API access) |
 | 6 `pr_template` | `.github/pull_request_template.md` with the sections `Existing behaviour`, `Intent`, `Compatibility`, `Removed or weakened tests or policy`, `Test evidence` | guidance + enforced | audit checks that the template has every section. The `quality / aggregate` check fails a PR whose body is missing a section, leaves one empty or placeholder-only, or names a tested SHA other than the head | review routing under the agent protocol; ordinary test-code changes do not themselves require Owner approval |
 | 7 `dependencies` | Every shared library is declared in the `Dependencies` section of AGENTS.md with an exact version and a link to that version's `ai/` docs | guidance | audit checks each declared line for a `.../<version>/ai/` link, and compares it with the pins in `Package.resolved` and `package-lock.json` (a pin that is undeclared or has a different version is a finding) | other lockfile formats |
 | 8 `identity` | No personal account names, credential-profile paths or local home paths | red line | audit scans every tracked text file for the `forbidden_patterns` | account names in prose that the patterns do not cover |
@@ -87,16 +87,14 @@ heading attributes and renderer extensions are unsupported; use a standalone
 explicit anchor instead. Other file types cannot satisfy fragments. HTTPS
 pointers are not fetched or remotely fragment-validated.
 
-CODEOWNERS must retain the existing required patterns and an exact `/<guide>`
-pattern. The highest-priority tracked CODEOWNERS file is authoritative, even
-when empty. Effective last-match ownership of AGENTS, metadata and the guide is
-checked, so later ownerless overrides fail. Unsupported ownership patterns fail
-closed rather than claiming complete GitHub pattern support. Owner tokens must
-be supported `@user`, `@organization/team` or email forms; malformed tokens fail
-explicitly, even alongside a valid owner. Email support is ASCII dot-atom local
-parts and DNS-style domains; exotic forms are rejected rather than guessed.
-Syntactic admission does not prove identity existence, visibility or write access;
-live server protection still needs independent readback.
+CODEOWNERS is not a repository-contract requirement. Missing files and retained
+legacy files are ignored by the audit, including their patterns and owner tokens.
+The retired `codeowners_required` provider parameter in old `x-contract` data is
+ignored. It was never a caller metadata field: metadata v1 still requires exactly
+the four keys above and rejects additional keys, including that obsolete name.
+Required checks, AI review and effective server rules protect policy, gates, CI,
+rulesets, schemas and repository guidance. Their live enforcement still needs
+independent readback.
 
 ### Adoption boundary
 
@@ -104,7 +102,7 @@ This support does not migrate templates, bootstrap scripts, caller pins or this
 repository's own AGENTS automatically. Adopt only after the provider change is
 reviewed and available at a fixed SHA. A separate reviewed consumer migration
 must coordinate the workflow pin, metadata, guide/index, metadata-aware bootstrap,
-review `rules-file` and guide CODEOWNERS, preserving required checks. Old fixed
+review `rules-file`, preserving required checks. Old fixed
 providers do not acquire metadata support retroactively. A versioned protocol
 route may remain for compatibility, but its SHA must match metadata.
 
@@ -126,7 +124,7 @@ contract, not invent a new layer model or PR policy for each assignment.
 | Root `tech-context.md` | Layer inventory, dependency graph and reasoned support paths |
 | Each layer's `tech-context.md` | Responsibility, owned implementation/tests, interfaces, allowed dependencies and verification |
 | Development guide (normally `docs/development.md`) | PR kinds, permitted companion changes, development/verification entry points and review routing |
-| Scripts, caller CI and CODEOWNERS | Executable project checks and ownership routing |
+| Scripts and caller CI | Executable project checks and review routing |
 | `AGENTS.md` | Task-oriented pointers to those sources, not copies of their rules |
 
 ### Task plans and versioned guides
@@ -190,7 +188,7 @@ tech-context.
   - mechanical (rename/move/format/generated/codemod) from behavioural changes;
   - dependency/pin bumps from non-trivial adaptation; pin PRs retain Owner
     review and full CI;
-  - governance (AGENTS, policy, ruleset, CI wiring, CODEOWNERS paths) from feature
+  - governance (AGENTS, policy, gates, ruleset, CI wiring, schemas) from feature
     code;
   - test-only additions for existing behaviour may precede the change they
     protect. Required tests and implementation documentation accompany code.
@@ -258,6 +256,6 @@ map.
 ## Exceptions
 
 This contract has no self-service exceptions. The Owner must approve a
-deviation; record it in an existing CODEOWNERS-protected policy document and
-keep only its pointer under `Red lines` in AGENTS.md. Any change to this file,
+deviation; record it in an existing policy document subject to required checks
+and AI review. Keep only its pointer under `Red lines` in AGENTS.md. Any change to this file,
 the schema or the checker is an important PR.

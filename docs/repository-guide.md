@@ -54,7 +54,7 @@ contract changes, never task-local layers or scope expansion.
 | Registry: resolve committed documents and capabilities | [Registry leaf](../scripts/contracts/tech-context.md), [resolution contract](registry-resolution-contract.md) | Required registry/schema/example source and its isolated tests | Separately admitted registry verification below; protected companions need AI review |
 | Schemas: define versioned data interfaces | [Schemas leaf](../schemas/tech-context.md), the affected schema's surface contract | Compatibility tests in each consuming layer and matching contract documentation | JSON syntax plus affected consumer suites; AI review |
 | Ruleset: plan default-branch protection and explicitly apply approved changes | [Ruleset leaf](../scripts/ruleset/tech-context.md), [repository contract](../ai/repo-contract.md) | Planner regressions and the affected ruleset template/documentation | Ruleset suite; AI review; a local test is not live readback |
-| CI / self-adoption: wire this repository to a published provider | [CI](../.github/workflows/ci.yml), [review caller](../.github/workflows/review.yml), [hook](../.githooks/pre-push), [verify entry](../scripts/verify) | Coordinated metadata, index, guide, CODEOWNERS and relevant wiring/adoption tests | Full verification, audit and workflow-lint; AI review |
+| CI / self-adoption: wire this repository to a published provider | [CI](../.github/workflows/ci.yml), [review caller](../.github/workflows/review.yml), [hook](../.githooks/pre-push), [verify entry](../scripts/verify) | Coordinated metadata, index, guide and relevant wiring/adoption tests | Full verification, audit and workflow-lint; AI review |
 | Common protocol / repository contract: one shared rule | [Protocol source](../ai/agent-protocol.md), [contract source](../ai/repo-contract.md) | Contract tests and matching template/versioned docs | Repo suite plus affected checks; AI review; consumer repinning is a later PR |
 | Docs / spec: one documentation topic or requirement | The relevant document and root support declaration | Its diagrams/examples and documentation regressions | Link/contract checks and topic review; actual policy changes still need AI review |
 
@@ -180,8 +180,8 @@ change reasons and applicable CI/review evidence.
 Owner request/approval claims that cannot be verified are non-blocking notes
 for every path. Verified decisions are optional, never merge prerequisites.
 
-Changes to gates, lint, schemas, `ai/`, templates, pins, workflows, this guide
-and other [CODEOWNERS](../.github/CODEOWNERS) paths require CI and AI review.
+Changes to policy, gates, lint, schemas, `ai/`, templates, pins, workflows and
+repository guidance require CI and AI review.
 Enable GitHub auto-merge on opening every non-Draft PR; no approving review is
 required. Keep required checks and setup holds; live settings remain separate.
 

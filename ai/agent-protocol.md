@@ -155,9 +155,8 @@ Every non-Draft PR uses GitHub auto-merge from the time it opens. Once required
 checks and required AI review pass on the exact head, GitHub merges it without
 Owner, code-owner or other approving reviews. This applies to all PR sources
 and all paths, including gates, CI, review rules, CODEOWNERS and rulesets.
-Do not add an approval label or wait for an Owner decision. CODEOWNERS records
-ownership; it does not impose a merge prerequisite. Never disable auto-merge to
-hold a PR. Track its checks and merge result, and route concrete repair findings
+Do not add an approval label or wait for an Owner decision. CODEOWNERS is not
+required for review, approval or protection. Never disable auto-merge to hold a PR. Track its checks and merge result, and route concrete repair findings
 to the original writer.
 
 Test changes still need a stated reason, CI and AI review. Security and privacy
