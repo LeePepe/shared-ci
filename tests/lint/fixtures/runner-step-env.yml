@@ -1,0 +1,8 @@
+on: push
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - env:
+          X: ${{ runner.temp }}
+        run: echo "$X"

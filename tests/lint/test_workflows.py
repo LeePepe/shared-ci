@@ -134,6 +134,119 @@ class PullRequestTargetTests(unittest.TestCase):
         self.assertEqual(["prt_checks_out_pr_code"], kinds(text))
 
 
+class RunnerContextTests(unittest.TestCase):
+    def workflow(self, fields):
+        return "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n" + fields
+
+    def test_job_env_fixture_reports_location(self):
+        text = (REPO / "tests/lint/fixtures/runner-job-env.yml").read_text()
+        found = lint.lint_text("w.yml", text)
+        self.assertEqual(1, len(found))
+        self.assertEqual("runner_context_unavailable", found[0]["kind"])
+        self.assertEqual("w.yml#jobs.build.env.X", found[0]["path"])
+
+    def test_step_env_fixture_is_legal(self):
+        text = (REPO / "tests/lint/fixtures/runner-step-env.yml").read_text()
+        self.assertEqual([], kinds(text))
+
+    def test_other_unavailable_job_locations(self):
+        fields = [
+            "    name: ${{ runner.os }}\n",
+            "    if: ${{ runner.os == 'Linux' }}\n",
+            "    if: runner.os == 'Linux'\n",
+            "    concurrency: ${{ runner.name }}\n",
+            "    continue-on-error: ${{ runner.os == 'Linux' }}\n",
+            "    timeout-minutes: ${{ runner.os == 'Linux' && 30 || 10 }}\n",
+            "    strategy:\n      matrix:\n        os: ['${{ runner.os }}']\n",
+            "    defaults:\n      run:\n        working-directory: ${{ runner.temp }}\n",
+            "    container:\n      image: ${{ runner.os }}\n",
+            "    container:\n      credentials:\n        username: ${{ runner.name }}\n",
+            "    services:\n      db:\n        image: ${{ runner.os }}\n",
+            "    services:\n      db:\n        credentials:\n          username: ${{ runner.name }}\n",
+            "    environment:\n      name: ${{ runner.environment }}\n",
+            "    uses: ./.github/workflows/callee.yml\n    with:\n      temp: ${{ runner.temp }}\n",
+            "    uses: ./.github/workflows/callee.yml\n    secrets:\n      temp: ${{ runner.temp }}\n",
+            "    env:\n      steps: ${{ runner.temp }}\n",
+        ]
+        for field in fields:
+            with self.subTest(field=field):
+                self.assertEqual(["runner_context_unavailable"], kinds(self.workflow(field)))
+        text = self.workflow(f"    if: {GUARD}\n").replace(
+            "runs-on: ubuntu-latest", "runs-on: ${{ runner.os }}")
+        self.assertEqual(["runner_context_unavailable"], kinds(text))
+
+    def test_unavailable_workflow_locations(self):
+        for field in ("env:\n  X: ${{ runner.temp }}\n",
+                      "run-name: ${{ runner.name }}\n",
+                      "concurrency: ${{ runner.name }}\n"):
+            with self.subTest(field=field):
+                self.assertEqual(["runner_context_unavailable"], kinds(field + self.workflow("")))
+
+    def test_legal_job_locations(self):
+        fields = [
+            "    outputs:\n      temp: ${{ runner.temp }}\n",
+            "    environment:\n      name: preview\n      url: ${{ runner.temp }}\n",
+            "    container:\n      image: alpine\n      env:\n        X: ${{ runner.temp }}\n",
+            "    services:\n      db:\n        image: postgres\n        env:\n          X: ${{ runner.temp }}\n",
+        ]
+        for field in fields:
+            with self.subTest(field=field):
+                self.assertEqual([], kinds(self.workflow(field)))
+
+    def test_legal_step_locations(self):
+        fields = [
+            "        name: ${{ runner.name }}\n",
+            "        if: ${{ runner.os == 'Linux' }}\n",
+            "        env:\n          X: ${{ runner.temp }}\n",
+            "        run: echo '${{ runner.temp }}'\n",
+            "        with:\n          path: ${{ runner.temp }}\n",
+            "        working-directory: ${{ runner.temp }}\n",
+            "        continue-on-error: ${{ runner.os == 'Linux' }}\n",
+            "        timeout-minutes: ${{ runner.os == 'Linux' && 30 || 10 }}\n",
+        ]
+        for field in fields:
+            with self.subTest(field=field):
+                self.assertEqual([], kinds(self.workflow("    steps:\n      - id: check\n" + field)))
+
+    def test_expression_references_and_yaml_shapes(self):
+        values = [
+            "${{runner.temp}}",
+            "${{ runner['temp'] }}",
+            "${{ toJSON(runner) }}",
+            "${{ RUNNER.temp }}",
+            "prefix/${{ format('{0}', runner.temp) }}/suffix",
+            "${{ format('}} {0}', runner.temp) }}",
+            "${{ format('it''s {0}', runner.temp) }}",
+            "${{ vars.directory }}/${{ runner.temp }}",
+        ]
+        for value in values:
+            with self.subTest(value=value):
+                self.assertEqual(["runner_context_unavailable"],
+                                 kinds(self.workflow("    env:\n      X: " + value + "\n")))
+        for field in ("    env: {X: '${{ runner.temp }}'}\n",
+                      "    env:\n      X: >-\n        ${{ format('{0}',\n            runner.temp) }}\n"):
+            with self.subTest(field=field):
+                self.assertEqual(["runner_context_unavailable"], kinds(self.workflow(field)))
+
+    def test_literals_comments_and_other_context_properties_are_ignored(self):
+        values = [
+            "runner.temp",
+            "literal # ${{ runner.temp }}",
+            "${{ 'runner.temp' }}",
+            "${{ format('runner.temp: {0}', vars.directory) }}",
+            "${{ format('it''s runner.temp') }}",
+            "${{ '}} runner.temp' }}",
+            "${{ github.event.runner.temp }}",
+            "${{ vars.runner }}",
+            "${{ vars['runner'] }}",
+            "${{ inputs.runner_temp }}",
+            "${{ vars.directory }}/runner.temp",
+        ]
+        for value in values:
+            with self.subTest(value=value):
+                self.assertEqual([], kinds(self.workflow("    env:\n      X: " + value + "\n")))
+
+
 class CliTests(unittest.TestCase):
     def run_lint(self, files):
         with tempfile.TemporaryDirectory() as temp:
@@ -156,6 +269,15 @@ class CliTests(unittest.TestCase):
         result = self.run_lint({"bad.yml": "jobs: [unterminated\n"})
         self.assertEqual(1, result.returncode)
         self.assertIn("workflow_unparseable", result.stderr)
+
+    def test_runner_context_fixtures(self):
+        for name, expected_code in (("runner-job-env.yml", 1), ("runner-step-env.yml", 0)):
+            with self.subTest(name=name):
+                result = self.run_lint({name: (REPO / "tests/lint/fixtures" / name).read_text()})
+                self.assertEqual(expected_code, result.returncode, result.stderr)
+                self.assertEqual(expected_code == 0, json.loads(result.stdout)["ok"])
+                if expected_code:
+                    self.assertEqual("runner_context_unavailable", json.loads(result.stderr)["kind"])
 
     def test_no_workflows_fails_closed(self):
         self.assertEqual(1, self.run_lint({}).returncode)

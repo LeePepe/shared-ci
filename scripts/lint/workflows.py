@@ -5,6 +5,7 @@ Rules (finding kind -> meaning):
   shared_ci_ref_not_sha   `uses: LeePepe/shared-ci/...@ref` whose ref is not a full 40-char SHA
   self_hosted_unguarded   job that may run on self-hosted without the job-level fork guard
   prt_checks_out_pr_code  pull_request_target workflow checking out PR head code
+  runner_context_unavailable  runner context referenced at a workflow key that cannot use it
   workflow_unparseable    file outside the supported YAML subset (never silently skipped)
 
 Usage: workflows.py [--root DIR] [FILE...]   (default: .github/workflows/*.y*ml)
@@ -28,6 +29,11 @@ GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
 GUARD_FORMS = {GUARD, f"github.event.pull_request == null || {GUARD}"}
 SHARED_CI = re.compile(r"^leepepe/shared-ci(/|$)", re.IGNORECASE)
 USES_LINE = re.compile(r"""^\s*(?:-\s*)?uses:\s*["']?([^\s"'#]+)""")
+# Single-quoted expression strings may contain `}}` and escaped quotes (`''`).
+EXPRESSION = re.compile(r"\$\{\{((?:'[^']*'|[^'])*?)\}\}", re.DOTALL)
+EXPRESSION_TOKEN = re.compile(r"'[^']*'|[A-Za-z_][A-Za-z0-9_-]*|[^\s]")
+RUNNER_STEP_KEYS = {"continue-on-error", "env", "if", "name", "run", "timeout-minutes",
+                    "with", "working-directory"}
 
 
 def _load_frontmatter() -> Any:
@@ -146,6 +152,53 @@ def _pr_head_ref(value: Any) -> bool:
                           r"|refs/pull/", text))
 
 
+def _references_runner(value: str, implicit: bool = False) -> bool:
+    expressions = ([value] if implicit and "${{" not in value
+                   else [match.group(1) for match in EXPRESSION.finditer(value)])
+    for expression in expressions:
+        previous = ""
+        for token in EXPRESSION_TOKEN.findall(expression):
+            if token.lower() == "runner" and previous != ".":
+                return True
+            previous = token
+    return False
+
+
+def _runner_available(keys: tuple[Any, ...]) -> bool:
+    """Only runner availability from GitHub's workflow context table, not other contexts.
+
+    https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability
+    """
+    if len(keys) < 4 or keys[0] != "jobs":
+        return False
+    field = keys[2:]
+    if field[0] == "steps" and len(field) >= 3 and isinstance(field[1], int):
+        step_key = field[2]
+        return (step_key in RUNNER_STEP_KEYS
+                and len(field) == (4 if step_key in {"env", "with"} else 3))
+    return ((field[0] == "outputs" and len(field) == 2)
+            or field == ("environment", "url")
+            or (len(field) == 3 and field[:2] == ("container", "env"))
+            or (len(field) == 4 and field[0] == "services" and field[2] == "env"))
+
+
+def _runner_findings(path: str, value: Any, keys: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        return [item for key, child in value.items()
+                for item in _runner_findings(path, child, keys + (key,))]
+    if isinstance(value, list):
+        return [item for index, child in enumerate(value)
+                for item in _runner_findings(path, child, keys + (index,))]
+    # Job `if` also accepts an expression without ${{ }}.
+    implicit = len(keys) == 3 and keys[0] == "jobs" and keys[2] == "if"
+    if (isinstance(value, str) and not _runner_available(keys)
+            and _references_runner(value, implicit)):
+        location = ".".join(str(key) for key in keys)
+        return [finding(f"{path}#{location}", "runner_context_unavailable",
+                        f"runner context is not available at `{location}`")]
+    return []
+
+
 def lint_text(path: str, text: str) -> list[dict[str, Any]]:
     findings = _uses_findings(path, text)
     try:
@@ -154,6 +207,7 @@ def lint_text(path: str, text: str) -> list[dict[str, Any]]:
         return findings + [finding(path, "workflow_unparseable", str(error))]
     if not isinstance(data, dict) or not isinstance(data.get("jobs"), dict):
         return findings + [finding(path, "workflow_unparseable", "no jobs mapping")]
+    findings.extend(_runner_findings(path, data))
     target = "pull_request_target" in _triggers(data)
     for job_id, job in data["jobs"].items():
         if not isinstance(job, dict):
