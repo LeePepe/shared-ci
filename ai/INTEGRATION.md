@@ -26,8 +26,8 @@ Codex review accepts optional `owner-user-id` (numeric GitHub Owner ID), default
 empty/off and backward compatible. Configure it in the trusted caller; the Owner
 then posts a new, unedited comment whose first non-empty line starts with
 `Owner decision:` and re-runs the job. Decisions are PR-scoped and cover all later
-pushes without re-authorization per commit; final merge still requires code-owner
-approval and required checks on the exact head. See
+pushes without re-authorization per commit; changes and final merge require no human or code-owner
+approval. Required checks and AI review on the exact head remain mandatory. See
 [Owner decision comments](../docs/review-rules.md#owner-decision-comments) for
 admission limits and non-overridable red lines. Kimi does not consume it.
 

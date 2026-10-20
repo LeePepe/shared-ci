@@ -1,4 +1,4 @@
-# Important paths need Owner review (enforced once the ruleset requires code-owner review).
+# Path ownership for routing and context; no approving review is a merge prerequisite.
 # Replace @OWNER with the repository owner account or team.
 /.github/                         @OWNER
 /.githooks/                       @OWNER

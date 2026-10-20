@@ -1,0 +1,62 @@
+name: stuck-PR bot
+
+on:
+  workflow_call:
+    inputs:
+      failure-hours:
+        description: Hours since the earliest current failed required check completed on the exact head.
+        type: number
+        default: 2
+      open-hours:
+        description: Report a PR open longer than this many hours.
+        type: number
+        default: 24
+  workflow_dispatch:
+    inputs:
+      failure-hours:
+        description: Hours since the earliest current failed required check completed on the exact head.
+        type: number
+        default: 2
+      open-hours:
+        description: Report a PR open longer than this many hours.
+        type: number
+        default: 24
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  pull-requests: write
+  issues: write
+  checks: read
+  contents: read
+
+concurrency:
+  group: stuck-pr-bot-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out only the selected provider
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm selected provider revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::provider revision mismatch"; exit 1; }
+      - name: Report stuck PRs in the calling repository
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FAILURE_HOURS: ${{ inputs.failure-hours }}
+          OPEN_HOURS: ${{ inputs.open-hours }}
+        run: python3 -I -B .shared-ci/scripts/stuck_pr/bot.py

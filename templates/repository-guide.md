@@ -42,7 +42,7 @@ owned tests and allowed dependencies. Support paths need reasons and checks;
 executable tools must not disappear under broad script exclusions.
 
 Ordinary test edits/deletions need rationale, CI and ordinary review, not a
-separate Owner ledger. Actual policy/gate/permission changes retain Owner review.
+separate Owner ledger. Actual policy/gate/permission changes retain AI review.
 Never execute PR head code in a review job. Record repository-specific red lines
 and approved exceptions here as complete reviewer-visible text, not only links.
 
@@ -80,11 +80,13 @@ cross-layer feature, document the interface and dependency-ordered PRs first.
 
 PRM follows existing CI/review outcomes, without a separate size/scope gate.
 Use the PR template, dedicated task branch/worktree and current-head evidence.
-Required checks and Owner approval for protected changes remain mandatory.
+Enable GitHub auto-merge when opening every non-Draft PR. Required checks and
+AI review remain mandatory; no human or code-owner approval is required.
 
-Any claim in a PR, commit message or comment that the Owner requested or approved
-something must link the Owner's own comment, review or Owner-authored issue/decision;
-without a link, describe the change's source neutrally instead of making the claim.
+Describe the source of a change accurately in PRs, commit messages and comments.
+Unverifiable claims that the Owner requested or approved a change are non-blocking
+notes, including for protected paths. Optional verified Owner decisions provide
+context; they are never a prerequisite for a change or merge.
 
 ## Complete shared protocol snapshot
 

@@ -40,7 +40,7 @@ gate makes CI fail instead of silently leaving the file unexecuted.
 | FR-010 | The reachability check is separate from test-integrity: reachability covers the head tree's file-to-required-gate graph; test-integrity continues to cover assertion/test loss and PR-body rationale across a diff. Both may block the aggregate. |
 | FR-011 | Shared-ci adopts the released provider on itself, changes brittle per-file native discovery to suite discovery, declares `tests/contracts/**` as deliberately outside native PR verification, and passes the required current-head checks. |
 | FR-012 | The reviewed implementation is released at an immutable tag/full SHA. Follow-up adoption issues are filed or linked for VoxPocket, agent-skills, shared-design-tokens, shared-design-system, shared-telemetry, VitalStride and AIDash. |
-| FR-013 | Every feature PR is non-Draft, uses the repository's declared work unit, preserves required approvals, and has green required checks on its exact head SHA. |
+| FR-013 | Every feature PR is non-Draft, uses the repository's declared work unit, preserves required AI review, and has green required checks on its exact head SHA. |
 | FR-014 | Engines remain stdlib-only Python 3.9+, Git and POSIX shell. The audit does not execute tests, manifests, package code or PR-head scripts and does not read the network. |
 
 ## Existing behaviour

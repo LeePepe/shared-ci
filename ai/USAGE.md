@@ -21,8 +21,8 @@ each PR serves one goal, not one layer.
 AGENTS is the directory to those sources. The protocol applies to both Dev Team
 and other agents; it defines their different task entry paths without creating
 role-specific architecture rules. Ordinary test corrections need reasons,
-automated checks and AI review; gate/policy changes and pins retain required
-Owner review.
+automated checks and AI review; gate/policy changes and pins retain required checks and AI review. Every
+non-Draft PR enables GitHub auto-merge; no human or code-owner approval is required.
 
 ## Discovery and authority
 
