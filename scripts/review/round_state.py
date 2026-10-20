@@ -155,13 +155,12 @@ def prepare(work: pathlib.Path, marker: str) -> None:
             validate(old["verdict"])
             changes = {key: {"previous": old["inputs"][key], "current": value}
                        for key, value in inputs.items() if old["inputs"][key] != value}
-            if old["head"] == current["head"]:
-                if any(old["inputs"]["base"][key] != inputs["base"][key]
-                       for key in ("sha", "merge_base")):
-                    mode, old, changes = "fallback", None, {}
-                    reason = "Review base or merge-base changed; full review fallback."
-                else:
-                    mode = "inputs" if changes else "reuse"
+            if any(old["inputs"]["base"][key] != inputs["base"][key]
+                   for key in ("sha", "merge_base")):
+                mode, old, changes = "fallback", None, {}
+                reason = "Review base or merge-base changed; full review fallback."
+            elif old["head"] == current["head"]:
+                mode = "inputs" if changes else "reuse"
             else:
                 exists = subprocess.run(["git", "cat-file", "-e", old["head"] + "^{commit}"],
                                         capture_output=True).returncode == 0

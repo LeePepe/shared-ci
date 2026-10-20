@@ -76,6 +76,37 @@ class RoundScriptTests(unittest.TestCase):
         self.assertIn("full diff is context only", comment)
         self.assertEqual(self.base, self.repo.git("rev-parse", "HEAD").stdout.strip())
 
+    def test_descendant_head_base_change_falls_back_to_review_newly_exposed_code(self):
+        previous_base = self.head
+        self.repo.git("checkout", "-q", "--detach", self.head)
+        self.repo.write("src/core/model.py", "X = 2\n")
+        self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "old head")
+        previous_head = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.head = previous_head
+        self.repo.git("checkout", "-q", "--detach", previous_base)
+        result, previous = self.run_script("codex-review.sh", json.dumps(review.PASS), BASE_SHA=previous_base)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("src/app/main.py", (self.out / "prompt").read_text().split("\nDIFF:\n")[1])
+
+        self.repo.git("checkout", "-q", "--detach", previous_head)
+        self.repo.write("src/core/model.py", "X = 3\n")
+        self.repo.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "new head")
+        self.head = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.repo.git("checkout", "-q", "--detach", self.base)
+        self.repo.git("merge-base", "--is-ancestor", previous_head, self.head)
+        self.assertNotIn("src/app/main.py", self.repo.git("diff", previous_head + "..." + self.head).stdout)
+
+        result, comment = self.rerun(previous, changes(blocker(introduced=True)))
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("Review base or merge-base changed; full review fallback", comment)
+        prompt = (self.out / "prompt").read_text()
+        self.assertIn("Perform a full PR review", prompt)
+        self.assertNotIn("Re-review only the previous findings and the repair delta", prompt)
+        self.assertIn("+Y = 3", prompt.split("\nDIFF:\n")[1])
+        self.assertIn("changes requested", comment)
+        self.assertEqual(self.head, round_state.decode(comment)["head"])
+        self.assertEqual(self.base, self.repo.git("rev-parse", "HEAD").stdout.strip())
+
     def test_reset_to_ancestor_falls_back_to_full_review(self):
         reset_head = self.head
         self.repo.git("checkout", "-q", "--detach", reset_head)

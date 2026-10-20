@@ -150,7 +150,8 @@ The provider handles these cases:
 
 1. No previous sticky review: the initial full review and gate behavior stay
    unchanged.
-2. A new head with usable previous state: supply all previous findings,
+2. A new descendant head with usable previous state and unchanged base SHA and
+   merge-base: supply all previous findings,
    `previous-head...current-head` as the repair delta, and the complete PR diff
    as context only. Recheck previous findings and repair regressions without
    rescanning unchanged code. Changed review inputs are supplied too.
@@ -162,8 +163,10 @@ The provider handles these cases:
    complete diff as context only. Adding
    an admitted `Owner decision:` comment therefore forces reconsideration, even
    without a push. Removed or no-longer-admitted decisions also change the input.
-   A changed base SHA or merge-base instead forces a full review fallback, because
-   it can expose code absent from the previous PR diff.
+
+A changed base SHA or merge-base always forces a full review fallback, whether
+the head is unchanged or new, because it can expose code absent from the previous
+PR diff.
 
 Input snapshots compare complete title/body values, including text beyond the
 model display cap. State is bound to the repository, PR and a digest of Review
