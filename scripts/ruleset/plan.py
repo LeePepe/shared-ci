@@ -11,7 +11,8 @@ Desired state = templates/ruleset.json plus:
     (NEW empty = explicit removal); a map for a check that is not required fails;
   * --extra-check NAME adds caller checks;
   * --strict opts into strict (up-to-date branch) checks (default false);
-  * --no-code-owner-review keeps code-owner review off (transition period).
+  * approving reviews and code-owner review are not required by default;
+    --no-code-owner-review remains accepted for compatibility (a no-op).
 Output: plan JSON on stdout (action create|update|noop, ruleset_id, diff, payload).
 `--verify READBACK` compares a post-apply `rules/branches/main` dump with a plan.
 Exit 0 ok, 1 verification mismatch, 2 invalid input.
@@ -73,7 +74,7 @@ def _parse_maps(values: list[str]) -> dict[str, str]:
 
 
 def desired(template: dict[str, Any], current_checks: list[dict[str, Any]], *, extra: list[str],
-            maps: dict[str, str], strict: bool, code_owner: bool) -> dict[str, Any]:
+            maps: dict[str, str], strict: bool, code_owner: bool = False) -> dict[str, Any]:
     payload = {key: copy.deepcopy(template[key]) for key in PAYLOAD_KEYS if key in template}
     rules = _rules_by_type(payload["rules"])
     current_names = [check["context"] for check in current_checks]
@@ -125,7 +126,7 @@ def _rule_changes(old: dict[str, dict], new: dict[str, dict]) -> list[str]:
 
 def plan(template: dict[str, Any], current: list[dict[str, Any]], rulesets: list[dict[str, Any]],
          detail: dict[str, Any] | None, *, extra: list[str], maps: dict[str, str], strict: bool,
-         code_owner: bool) -> dict[str, Any]:
+         code_owner: bool = False) -> dict[str, Any]:
     if not isinstance(current, list) or not isinstance(rulesets, list):
         raise PlanError("--current and --rulesets must be JSON arrays")
     matching = [item for item in rulesets if isinstance(item, dict) and item.get("name") == template["name"]]
@@ -211,7 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--extra-check", action="append", default=[])
     parser.add_argument("--map", action="append", default=[])
     parser.add_argument("--strict", action="store_true")
-    parser.add_argument("--no-code-owner-review", action="store_true")
+    parser.add_argument("--no-code-owner-review", dest="code_owner", action="store_false", default=False,
+                        help="compatibility option; code-owner review is already disabled by default")
     parser.add_argument("--verify", metavar="READBACK", help="check a post-apply rules dump against --plan")
     parser.add_argument("--plan", help="plan JSON (with --verify)")
     parser.add_argument("--summary", action="store_true", help="print a text summary to stderr")
@@ -225,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if not problems else 1
         result = plan(_load(args.template), _load(args.current), _load(args.rulesets), _load(args.detail),
                       extra=args.extra_check, maps=_parse_maps(args.map), strict=args.strict,
-                      code_owner=not args.no_code_owner_review)
+                      code_owner=args.code_owner)
     except PlanError as error:
         print(f"ruleset-plan: {error}", file=sys.stderr)
         return 2
