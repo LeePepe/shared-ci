@@ -207,7 +207,7 @@ tech-context.
   may use stacked PRs under the protocol. Follow-ups become new PRs/tasks.
 - There is no universal line/file ceiling. Markdown, tests and support paths
   do not determine approval by extension; actual policy/gate/permission changes
-  remain protected under the [protocol](agent-protocol.md#6-important-prs-need-the-owner).
+  remain protected under the [protocol](agent-protocol.md#6-auto-merge-without-human-approval).
 
 ### Checks and review have distinct jobs
 
