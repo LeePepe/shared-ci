@@ -12,7 +12,7 @@ import unittest
 from fixture import ContractRepo, OTHER, REPO, environment, run_bounded
 
 
-PROVIDER = "88c09b3f68ceea82a4ca979c689e3dc50266ee10"
+PROVIDER = "ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc"
 GUIDE = "docs/repository-guide.md"
 METADATA = ".github/repo-contract.json"
 SPEC = importlib.util.spec_from_file_location(
@@ -120,13 +120,15 @@ class SelfAdoptionTests(unittest.TestCase):
         self.assert_rejected("contract_ci", "review rules-file")
 
     def test_native_audit_passes_without_codeowners(self):
-        self.repo.remove(".github/CODEOWNERS")
+        self.assertFalse((self.repo.root / ".github/CODEOWNERS").exists())
+        self.assertNotIn(".github/CODEOWNERS", self.repo.git("ls-files").stdout.splitlines())
         result = self.repo.cli("audit")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertTrue(json.loads(result.stdout)["ok"])
 
     def test_native_audit_ignores_legacy_codeowners(self):
         self.repo.write(".github/CODEOWNERS", "/AGENTS.md\n")
+        self.repo.add()
         result = self.repo.cli("audit")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertTrue(json.loads(result.stdout)["ok"])
