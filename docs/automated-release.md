@@ -16,11 +16,13 @@ quality; it neither builds a distribution for publication nor uploads one.
    [TestFlight template](../templates/release-testflight.yml). They are deliberately
    outside `.github/workflows`. Record the exact delivered provider SHA in the
    consumer's versioned guide and preserve that binding on later updates.
-3. Replace the workflow-name placeholder with the repository's post-merge check
-   workflow. Implement the two deliberately failing `prepare` and `publish`
-   steps using reviewed repo-owned commands, under the interfaces below. The
-   read-only `prepare` adapter runs both before queue admission and after queue
-   wait: wire the same repo-owned implementation into both places. Keep
+3. For SDK releases, replace the workflow-name placeholder with the repository's
+   post-merge check workflow. For TF, choose a caller-specific UTC stagger for
+   the sample 12-hour schedule and retain manual dispatch as fallback. Implement
+   the deliberately failing `prepare` and `publish` steps using reviewed
+   repo-owned commands, under the interfaces below. The read-only `prepare`
+   adapter runs both before queue admission and after queue wait: wire the same
+   repo-owned implementation into both places. Keep
    data in quoted environment variables; do not interpolate event text into
    shell source or evaluate a command supplied by a PR or artifact.
 4. Keep SDK/TF commands, platforms and channels repository-specific. Start from
@@ -40,18 +42,30 @@ accurate-head review and existing activation holds still apply.
 
 ## Candidate and cumulative content
 
-The templates admit only a successful same-repository default-branch push
-`workflow_run`, before checkout. They checkout its exact `head_sha`, never the
-pull-request head, and use no persisted checkout credential. This originating
-run is a wakeup signal, **not proof that every necessary check has passed**.
+The SDK template admits only a successful same-repository default-branch push
+`workflow_run`, before checkout, and checks out its exact `head_sha`.
+
+The TF template admits only `schedule` or `workflow_dispatch` on the repository's
+default-branch ref, before checkout. Its sample cron (`17 0,12 * * *`, UTC) runs
+every 12 hours; select a distinct UTC stagger per caller before enablement.
+GitHub can delay scheduled starts. Manual dispatch provides fallback and a
+boolean `force` input, defaulting to false; there is no arbitrary SHA/ref input.
+The candidate is the event's exact `github.sha`, validated as a full 40-hex SHA,
+and its admitted output binds checkout and downstream jobs. An old queued event
+may fail the current-default-tip guard; it never switches to a moving branch.
+
+Both templates reject PR/fork sources, never check out a pull-request head and
+use no persisted checkout credential. An originating run or schedule is a
+wakeup signal, **not proof that every necessary check has passed**.
 
 The repo-owned `prepare` step must retrieve trustworthy check evidence for
 `CANDIDATE`, including all necessary workflow/check identities and their latest
 applicable attempts. Reject missing, pending, failed, cancelled, skipped,
 ambiguous or wrong-SHA evidence; an unrelated green check name is insufficient.
-Do not trust a PR-supplied artifact or an author's claimed status. Select the
-wakeup workflow so required checks normally finish before preparation; otherwise
-report the unresolved result without adding a retry mechanism.
+Do not trust a PR-supplied artifact or an author's claimed status. For SDK,
+select the wakeup workflow so required checks normally finish before preparation.
+For TF, query the same complete check evidence after either source wakes it.
+Report unresolved results without adding a retry mechanism.
 
 Produce these step outputs only from those actual checks and the repository's
 release inventory (these are local Actions wiring, not a new persistent schema):
@@ -61,7 +75,7 @@ release inventory (these are local Actions wiring, not a new persistent schema):
 | `checked-sha` | Exact candidate whose complete necessary checks were verified |
 | `required-checks` | `success` only after that verification |
 | `baseline` | Full SHA of the last successfully verified release for this unit/channel |
-| `publishable` | `true` or `false` from all unreleased changes between baseline and candidate |
+| `publishable` | Ordinary `true` or `false` decision from all unreleased changes between baseline and candidate, before any TF force override |
 
 For initial publication, explicitly establish the repository's baseline and
 version procedure; an absent baseline fails rather than silently becoming HEAD
@@ -77,9 +91,9 @@ The unsynchronized `admit` job runs `candidate`, `prepare` and `eligible` before
 any publication concurrency. `eligible` validates exact checkout, current
 fetched default-branch tip, successful candidate-bound checks and an ancestor
 baseline. Only successful admission with `release=true` allows the dependent
-`release` job into its concurrency group. Rejected events and no-content results
-never consume a publication queue slot. False means no publication, not a
-successful-release receipt. The template does not discover checks or classify
+`release` job into its concurrency group. Rejected events and ordinary no-content
+results without TF force never consume a publication queue slot. False means no
+publication, not a successful-release receipt. The template does not discover checks or classify
 content by itself.
 
 Publication uses **job-level `queue: max` and `cancel-in-progress: false`**.
@@ -95,7 +109,9 @@ After acquiring that slot, `release` checks out the admitted exact candidate and
 runs `prepare` and `eligible` **again**. Refresh trusted remote state and read
 checks, last successful release baseline and cumulative content anew; do not
 copy those observations from `admit` outputs. This rejects a stale B and prevents
-republication after an earlier queued run already published the same content.
+ordinary republication after an earlier queued run already published the same
+content. An admitted manual TF force can explicitly repeat publication as
+described below.
 Immediately before an external write, the repo-owned publisher rechecks
 candidate/checks, baseline and version/build uniqueness to cover subsequent
 changes. In-flight uploads remain non-cancelling.
@@ -127,6 +143,18 @@ Consumer upgrade PRs are outside this release workflow, while separately require
 architecture-upgrade consumption and rollback evidence remain required.
 
 ## Internal TestFlight adapter
+
+Only an admitted default-branch `workflow_dispatch` with `force=true` produces
+the bounded `FORCE=true` value; schedule always produces false. Both `prepare`
+and `eligible` receive that same admitted value before and after queue wait.
+Keep `prepare`'s `publishable` output an ordinary cumulative-content decision;
+`eligible` applies force only after validating that decision and every safety
+guard. Force may bypass no-new-content (including baseline equal to candidate),
+but never trusted-source admission, candidate format/current tip, complete
+candidate-bound checks or a valid ancestor baseline. It does not bypass
+platform/internal-group identity, build uniqueness or exact result confirmation.
+All read-only preparation and pre-write checks remain mandatory under force;
+no SDK source, eligibility or repeat-publication policy changes.
 
 The TF `publish` step owns signing/build/upload and reads Apple state using the
 repository's existing authorized interface. Set `expected-app`,
@@ -166,7 +194,8 @@ No new error schema/store, automatic retry, repair dispatch, notification,
 rollback/resend, AIDash collector or UI is supplied by this source slice.
 
 Local template tests execute the actual shell snippets with synthetic inputs,
-Git histories and a deliberately removed-check negative control. A small queue
+Git histories and deliberately removed-guard negative controls, including TF
+schedule/manual admission and the bounded force override. A small queue
 model applies the documented single/max semantics to actual template settings:
 running A, pending C, rejected B and an earlier-admitted B that queues late.
 Its single-slot control loses C; the configured max queue retains C, whose real

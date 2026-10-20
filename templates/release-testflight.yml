@@ -2,9 +2,15 @@
 # from the same delivered shared-ci commit before adapting this file.
 name: release-testflight
 on:
-  workflow_run:
-    workflows: [REPLACE_WITH_RELEASE_CHECK_WORKFLOW]
-    types: [completed]
+  schedule:
+    # Every 12 hours; choose a caller-specific UTC stagger before enabling.
+    - cron: '17 0,12 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Repeat TestFlight publication even without new release content
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -13,40 +19,46 @@ jobs:
     timeout-minutes: 15
     outputs:
       candidate: ${{ steps.candidate.outputs.candidate }}
+      force: ${{ steps.candidate.outputs.force }}
       release: ${{ steps.eligible.outputs.release }}
-    env:
-      CANDIDATE: ${{ github.event.workflow_run.head_sha }}
     steps:
       - id: candidate
-        name: Admit the completed default-branch push
+        name: Admit the scheduled or manual default-branch candidate
         shell: bash
         env:
+          CANDIDATE: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
-          RUN_EVENT: ${{ github.event.workflow_run.event }}
-          RUN_RESULT: ${{ github.event.workflow_run.conclusion }}
-          RUN_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
           REPOSITORY: ${{ github.repository }}
-          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_FORCE: ${{ inputs.force }}
         run: |
           if [[ ! "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] ||
-             [ "$EVENT_NAME" != workflow_run ] || [ "$RUN_EVENT" != push ] ||
-             [ "$RUN_RESULT" != success ] || [ -z "$REPOSITORY" ] ||
-             [ "$RUN_REPOSITORY" != "$REPOSITORY" ] || [ -z "$DEFAULT_BRANCH" ] ||
-             [ "$RUN_BRANCH" != "$DEFAULT_BRANCH" ]; then
-            echo '::error::Release candidate is not a successful same-repository default-branch push.'
+             { [ "$EVENT_NAME" != schedule ] && [ "$EVENT_NAME" != workflow_dispatch ]; } ||
+             [ -z "$REPOSITORY" ] || [ "$EVENT_REPOSITORY" != "$REPOSITORY" ] ||
+             [ -z "$DEFAULT_BRANCH" ] || [ "$EVENT_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo '::error::Release candidate is not a same-repository scheduled or manual default-branch SHA.'
             exit 1
           fi
+          force=false
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$INPUT_FORCE" = true ]; then
+            force=true
+          fi
           printf 'candidate=%s\n' "$CANDIDATE" >> "$GITHUB_OUTPUT"
+          printf 'force=%s\n' "$force" >> "$GITHUB_OUTPUT"
       - name: Checkout admitted candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ env.CANDIDATE }}
+          ref: ${{ steps.candidate.outputs.candidate }}
           fetch-depth: 0
           persist-credentials: false
       - id: prepare
         name: Resolve TestFlight checks and cumulative release content
         shell: bash
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.candidate }}
+          FORCE: ${{ steps.candidate.outputs.force }}
         run: |
           echo '::error::TestFlight release adapter not configured; read the versioned automated-release guide.'
           exit 1
@@ -54,6 +66,8 @@ jobs:
         name: Bind checks and cumulative baseline to the current candidate
         shell: bash
         env:
+          CANDIDATE: ${{ steps.candidate.outputs.candidate }}
+          FORCE: ${{ steps.candidate.outputs.force }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CHECKED_SHA: ${{ steps.prepare.outputs.checked-sha }}
           REQUIRED_CHECKS: ${{ steps.prepare.outputs.required-checks }}
@@ -67,12 +81,18 @@ jobs:
             [ "$(git rev-parse HEAD)" = "$CANDIDATE" ] &&
             [ "$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")" = "$CANDIDATE" ] || fail 'Candidate checkout is not the current default-branch tip.'
           git merge-base --is-ancestor "$BASELINE" "$CANDIDATE" || fail 'Release baseline is not an ancestor of the candidate.'
+          case "$FORCE" in
+            true|false) ;;
+            *) fail 'Admitted manual force decision is missing or invalid.' ;;
+          esac
           case "$PUBLISHABLE" in
-            true) [ "$BASELINE" != "$CANDIDATE" ] || fail 'No unreleased candidate range.' ;;
+            true) [ "$BASELINE" != "$CANDIDATE" ] || [ "$FORCE" = true ] || fail 'No unreleased candidate range.' ;;
             false) ;;
             *) fail 'Cumulative release-content decision is missing or invalid.' ;;
           esac
-          printf 'release=%s\n' "$PUBLISHABLE" >> "$GITHUB_OUTPUT"
+          release="$PUBLISHABLE"
+          [ "$FORCE" != true ] || release=true
+          printf 'release=%s\n' "$release" >> "$GITHUB_OUTPUT"
   release:
     needs: admit
     if: needs.admit.outputs.release == 'true'
@@ -84,6 +104,7 @@ jobs:
     timeout-minutes: 60
     env:
       CANDIDATE: ${{ needs.admit.outputs.candidate }}
+      FORCE: ${{ needs.admit.outputs.force }}
     steps:
       - name: Checkout admitted candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -114,12 +135,18 @@ jobs:
             [ "$(git rev-parse HEAD)" = "$CANDIDATE" ] &&
             [ "$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")" = "$CANDIDATE" ] || fail 'Candidate checkout is not the current default-branch tip.'
           git merge-base --is-ancestor "$BASELINE" "$CANDIDATE" || fail 'Release baseline is not an ancestor of the candidate.'
+          case "$FORCE" in
+            true|false) ;;
+            *) fail 'Admitted manual force decision is missing or invalid.' ;;
+          esac
           case "$PUBLISHABLE" in
-            true) [ "$BASELINE" != "$CANDIDATE" ] || fail 'No unreleased candidate range.' ;;
+            true) [ "$BASELINE" != "$CANDIDATE" ] || [ "$FORCE" = true ] || fail 'No unreleased candidate range.' ;;
             false) ;;
             *) fail 'Cumulative release-content decision is missing or invalid.' ;;
           esac
-          printf 'release=%s\n' "$PUBLISHABLE" >> "$GITHUB_OUTPUT"
+          release="$PUBLISHABLE"
+          [ "$FORCE" != true ] || release=true
+          printf 'release=%s\n' "$release" >> "$GITHUB_OUTPUT"
       - id: publish
         name: Build upload and query the internal TestFlight build
         if: steps.eligible.outputs.release == 'true'
