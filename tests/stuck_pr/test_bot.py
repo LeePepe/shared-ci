@@ -156,6 +156,13 @@ class ReconciliationTests(unittest.TestCase):
         text = bot.report(pr(contexts=[check(name=str(i) + "[" * 300) for i in range(300)]), NOW, 2, 24)
         self.assertLess(len(text), 65536); self.assertIn("more failed required checks", text)
 
+    def test_summary_keeps_hundreds_of_reports_within_issue_body_limit(self):
+        api = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, 501)})
+        bot.run(api, NOW)
+        bodies = [payload["body"] for _, path, payload in api.writes if path == "issues"]
+        self.assertTrue(any("- #500" in body for body in bodies))
+        self.assertTrue(all(len(body) < 65536 for body in bodies))
+
     def test_latest_attempt_app_and_optional_status_contexts(self):
         contexts = [check(attempt=1, app=1), check(attempt=2, app=1, conclusion="SUCCESS"), check(attempt=1, app=2)]
         self.assertEqual(["quality / aggregate"], bot.failures(contexts)[0])
@@ -218,7 +225,7 @@ class ReconciliationTests(unittest.TestCase):
         bot.run(api, NOW)
         self.assertEqual("open", api.writes[-1][2]["state"])
         self.assertFalse(any(path.endswith("/comments") for _, path, _ in api.writes))
-        self.assertIn("repeat_failure=unknown", api.writes[-1][2]["body"])
+        self.assertIn("repeat=unknown", api.writes[-1][2]["body"])
 
     def test_human_marker_and_summary_cannot_suppress_or_select(self):
         marker = f"<!-- stuck-pr-bot:v1 head={HEAD} -->"
@@ -261,7 +268,7 @@ class ReconciliationTests(unittest.TestCase):
         api.writes.clear(); api.prs[1]["contexts"] = [check(completed=1)]
         bot.run(api, NOW + dt.timedelta(hours=2))
         body = api.writes[-1][2]["body"]
-        self.assertIn('"repeat_failure": true', body)
+        self.assertIn('"repeat_failure":true', body)
         state = body.split(bot.STATE, 1)[1].split("\n-->", 1)[0]
         history = json.loads(state)
         self.assertEqual({"seen_failed", "last_required_state", "latest_failed_attempt_ids", "recovery_seen_at", "recurrent"},
@@ -272,14 +279,14 @@ class ReconciliationTests(unittest.TestCase):
         api = FakeAPI(); bot.run(api, NOW)
         api.writes.clear(); api.prs[1]["contexts"] = [check(attempt=2, completed=1)]
         bot.run(api, NOW + dt.timedelta(hours=1))
-        self.assertIn('"repeat_failure": true', api.writes[-1][2]["body"])
+        self.assertIn('"repeat_failure":true', api.writes[-1][2]["body"])
 
     def test_assignee_failure_is_visible(self):
         class AssignmentFailure(FakeAPI):
             def rest(self, method, suffix, body=None):
                 if suffix == "issues": raise ValueError("assignment failed")
                 return super().rest(method, suffix, body)
-        with self.assertRaises(ValueError): bot.run(AssignmentFailure(), NOW, summary_assignee="LeePepe")
+        with self.assertRaises(ValueError): bot.run(AssignmentFailure(), NOW, summary_assignee="example-user")
 
     def test_missing_failed_completion_fails_without_writes(self):
         bad = check(); bad["completedAt"] = None

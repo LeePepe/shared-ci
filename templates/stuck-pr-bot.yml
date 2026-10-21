@@ -23,8 +23,8 @@ jobs:
       draft-days: 7
       auto-merge-grace-minutes: 30
       thread-hours: 24
-      mention-allowlist: LeePepe
-      summary-assignee: LeePepe
+      mention-allowlist: ''
+      summary-assignee: ''
       # Pick a unique pair of minutes for each consumer; the example is 7,37.
       exclude-prs: ''
       auto-merge-exempt-prs: ''

@@ -83,7 +83,7 @@ def quoted(value):
 
 def state_json(value):
     """Serialize state without allowing untrusted text to close its HTML comment."""
-    return json.dumps(value, sort_keys=True).replace("-->", r"--\u003e")
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).replace("-->", r"--\u003e")
 
 
 def failures(contexts):
@@ -259,6 +259,14 @@ def owned(item, marker):
 
 
 def read_state(summary):
+    if isinstance(summary, list):
+        merged = {"schema": 2, "last_run_at": None, "entries": [], "history": {}}
+        for item in summary:
+            state = read_state(item)
+            merged["entries"].extend(state["entries"])
+            merged["history"].update(state["history"])
+            merged["last_run_at"] = max(filter(None, (merged["last_run_at"], state.get("last_run_at"))), default=None)
+        return merged
     body = summary.get("body", "")
     if STATE not in body:
         return {"schema": 2, "last_run_at": None, "entries": [], "history": {}}
@@ -311,7 +319,7 @@ def run(api, now, **kwargs):
         if entry: entries.append(entry)
     summaries = [item for item in api.pages("issues?state=all&creator=" + BOT) if "pull_request" not in item and owned(item, SUMMARY) and item["title"] == TITLE]
     summary = min(summaries, key=lambda item: item["number"]) if summaries else None
-    previous = read_state(summary) if summary else {"history": {}}
+    previous = read_state(summaries) if summaries else {"history": {}}
     history = state_history(previous, observed)
     history = {key: value for key, value in history.items() if key in observed}
     for entry in entries:
@@ -337,19 +345,41 @@ def run(api, now, **kwargs):
     entries = refreshed
     actionable = [entry for entry in entries if entry["classification"] == "actionable"]
     state_fields = ("number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure")
-    public_entries = [{key: entry.get(key) for key in state_fields} for entry in sorted(entries, key=lambda e: e["number"])]
-    payload = {"schema": 2, "last_run_at": stamp, "entries": public_entries, "history": history}
-    lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n"]
-    def visible(value): return quoted(value)
-    lines += [f"- #{e['number']}: {visible(e['classification'])}; {', '.join(visible(reason) for reason in e['reasons'])}; age {e['age_hours']}h; auto-merge={'on' if e['auto_merge'] else 'off'}; mergeable={visible(e['mergeable'])}; review={visible(e['review_decision'])}; Draft={e['draft']}; unresolved={e['unresolved_threads']}; GTT={'present' if e['gtt_present'] else 'absent'}; stale={'yes' if e['stale'] else 'no'}; exception={'yes' if e['exception'] else 'no'}; repeat_failure={'unknown' if e['repeat_failure'] == 'unknown' else ('yes' if e['repeat_failure'] else 'no')}" for e in sorted(entries, key=lambda e: e["number"])]
-    body = "\n".join(lines) + "\n"
-    if len(body) >= 65536: raise ValueError("Summary body exceeds GitHub limit")
+    def render(selected):
+        public_entries = [{key: entry.get(key) for key in state_fields} for entry in sorted(selected, key=lambda e: e["number"])]
+        selected_keys = {f"{entry['number']}:{entry['head']}" for entry in selected}
+        history_payload = history if not selected else {key: value for key, value in history.items() if key in selected_keys}
+        payload = {"schema": 2, "last_run_at": stamp, "entries": public_entries, "history": history_payload}
+        lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n"]
+        def visible(value): return quoted(value)
+        lines += [f"- #{e['number']}: {visible(e['classification'])}; {', '.join(visible(reason) for reason in e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if e['repeat_failure'] == 'unknown' else ('yes' if e['repeat_failure'] else 'no')}" for e in sorted(selected, key=lambda e: e["number"])]
+        return "\n".join(lines) + "\n"
+    bodies = [render(entries)]
+    if entries and len(bodies[0]) >= 65536:
+        chunks, current = [], []
+        for entry in sorted(entries, key=lambda e: e["number"]):
+            candidate = render(current + [entry])
+            if current and len(candidate) >= 65536:
+                chunks.append(render(current)); current = [entry]
+            elif not current and len(candidate) >= 65536:
+                raise ValueError("Summary entry exceeds GitHub limit")
+            else:
+                current.append(entry)
+        if current: chunks.append(render(current))
+        bodies = chunks
+    body = bodies[0]
     if entries:
-        if summary is None: api.rest("POST", "issues", {"title": TITLE, "body": body, **({"assignees": [options["summary_assignee"]]} if options["summary_assignee"] else {})})
-        elif summary["state"] != "open" or summary.get("body") != body:
+        if summary is None:
+            for chunk in bodies:
+                api.rest("POST", "issues", {"title": TITLE, "body": chunk, **({"assignees": [options["summary_assignee"]]} if options["summary_assignee"] else {})})
+        elif len(bodies) == 1 and (summary["state"] != "open" or summary.get("body") != body):
             update = {"state": "open", "body": body}
             if options["summary_assignee"]: update["assignees"] = [options["summary_assignee"]]
             api.rest("PATCH", f"issues/{summary['number']}", update)
+        elif len(bodies) > 1:
+            api.rest("PATCH", f"issues/{summary['number']}", {"state": "open", "body": bodies[0]})
+            for chunk in bodies[1:]:
+                api.rest("POST", "issues", {"title": TITLE, "body": chunk, **({"assignees": [options["summary_assignee"]]} if options["summary_assignee"] else {})})
     elif summary is not None and summary["state"] == "open": api.rest("PATCH", f"issues/{summary['number']}", {"state": "closed", "body": body + "\nNo open stuck PRs.\n"})
     for number, comment in pending_comments:
         api.rest("POST", f"issues/{number}/comments", {"body": comment})

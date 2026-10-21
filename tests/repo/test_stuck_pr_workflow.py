@@ -53,6 +53,6 @@ class StuckWorkflowTests(unittest.TestCase):
         job = caller["jobs"]["report"]
         self.assertEqual("LeePepe/shared-ci/.github/workflows/stuck-pr-bot.yml@" + "1" * 40, job["uses"])
         self.assertEqual({"failure-hours": 2, "open-hours": 24, "stale-days": 14, "draft-days": 7,
-                          "auto-merge-grace-minutes": 30, "thread-hours": 24, "mention-allowlist": "LeePepe",
-                          "summary-assignee": "LeePepe", "exclude-prs": "", "auto-merge-exempt-prs": ""}, job["with"])
+                          "auto-merge-grace-minutes": 30, "thread-hours": 24, "mention-allowlist": "",
+                          "summary-assignee": "", "exclude-prs": "", "auto-merge-exempt-prs": ""}, job["with"])
         self.assertNotIn("secrets", job)
