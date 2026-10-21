@@ -219,6 +219,8 @@ class ReconciliationTests(unittest.TestCase):
         self.assertTrue(state.get("truncated"))
         self.assertGreater(state.get("omitted", 0), 0)
         self.assertLess(len(state["entries"]), 500)
+        self.assertEqual(500, sum(path.endswith("/comments") for _, path, _ in api.writes))
+        self.assertEqual(500 - len(state["entries"]), state["omitted"])
         self.assertTrue(all(set(entry) == {"number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure"} for entry in state["entries"]))
 
     def test_summary_rows_keep_all_signal_labels_visible(self):
@@ -248,6 +250,12 @@ class ReconciliationTests(unittest.TestCase):
             bot.run(api, NOW)
         self.assertEqual([], api.writes)
 
+    def test_truncated_metadata_must_be_consistent(self):
+        for extra in ({"truncated": True}, {"omitted": 1}, {"truncated": True, "omitted": 0},
+                      {"truncated": False, "omitted": 1}, {"truncated": "yes", "omitted": 1}):
+            state = {"schema": 2, "last_run_at": None, "entries": [], "history": {}, **extra}
+            with self.assertRaises(ValueError): bot.read_state(state_item(state))
+
     def test_single_summary_interruption_has_zero_partial_writes(self):
         class FailOnce(FakeAPI):
             def rest(self, method, suffix, body=None):
@@ -257,6 +265,46 @@ class ReconciliationTests(unittest.TestCase):
         api = FailOnce(prs={1: pr(contexts=[check()])})
         with self.assertRaises(ValueError): bot.run(api, NOW)
         self.assertEqual([], api.writes)
+
+    def test_single_summary_patch_failure_retries_without_duplicate_comment(self):
+        api = FakeAPI()
+        bot.run(api, NOW)
+        api.writes.clear()
+        original = api.rest
+        failed = [False]
+        def fail_patch(method, suffix, body=None):
+            if method == "PATCH" and suffix == "issues/99" and not failed[0]:
+                failed[0] = True
+                raise ValueError("summary PATCH failed")
+            return original(method, suffix, body)
+        api.rest = fail_patch
+        with self.assertRaises(ValueError): bot.run(api, NOW + dt.timedelta(hours=1))
+        api.rest = original
+        api.writes.clear()
+        bot.run(api, NOW + dt.timedelta(hours=1))
+        self.assertEqual(0, sum(path.endswith("/comments") for _, path, _ in api.writes))
+
+    def test_omitted_head_reloaded_is_unknown_and_does_not_suppress_first_comment(self):
+        state = {"schema": 2, "last_run_at": NOW.isoformat(), "entries": [], "history": {},
+                 "truncated": True, "omitted": 1}
+        api = FakeAPI(prs={1: pr(contexts=[check()])}, issues=[state_item(state)])
+        bot.run(api, NOW)
+        body = next(payload["body"] for _, path, payload in api.writes if path == "issues/99")
+        self.assertIn('"repeat_failure":"unknown"', body)
+        self.assertEqual(1, sum(path.endswith("/comments") for _, path, _ in api.writes))
+
+    def test_failure_recovery_failure_during_refresh_uses_final_snapshot(self):
+        api = FakeAPI()
+        bot.run(api, NOW)
+        api.writes.clear()
+        api.refresh[1] = pr(contexts=[])
+        bot.run(api, NOW + dt.timedelta(hours=1))
+        state = bot.read_state(api.issues[0])
+        self.assertEqual("success", state["history"]["1:" + HEAD]["last_required_state"])
+        api.writes.clear()
+        api.refresh[1] = pr(contexts=[check(attempt=1, completed=1)])
+        bot.run(api, NOW + dt.timedelta(hours=2))
+        self.assertIn('"repeat_failure":true', api.writes[-1][2]["body"])
 
     def test_truncated_rows_have_unknown_recurrence_and_old_shards_are_not_merged(self):
         first = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, 501)})
@@ -283,6 +331,7 @@ class ReconciliationTests(unittest.TestCase):
     def test_latest_attempt_app_and_optional_status_contexts(self):
         contexts = [check(attempt=1, app=1), check(attempt=2, app=1, conclusion="SUCCESS"), check(attempt=1, app=2)]
         self.assertEqual(["quality / aggregate"], bot.failures(contexts)[0])
+        self.assertEqual(["1"], bot.failure_attempts(contexts))
         pending = check(); pending["status"] = "IN_PROGRESS"
         for value in ("SUCCESS", "NEUTRAL", "SKIPPED", None):
             self.assertIsNone(bot.report(pr(contexts=[check(conclusion=value)]), NOW, 2, 24))

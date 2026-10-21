@@ -109,9 +109,18 @@ def failures(contexts):
 
 
 def failure_attempts(contexts):
-    return sorted(str(item.get("databaseId")) for item in contexts
-                  if "name" in item and item.get("isRequired") and
-                  item.get("status") == "COMPLETED" and item.get("conclusion") in FAILED)
+    latest = {}
+    for item in contexts:
+        if "name" not in item:
+            continue
+        app = (item.get("checkSuite") or {}).get("app") or {}
+        key = (item.get("name"), app.get("databaseId"))
+        rank = item.get("databaseId", 0)
+        if key not in latest or rank > latest[key][0]:
+            latest[key] = (rank, item)
+    return sorted(str(item.get("databaseId")) for _, item in latest.values()
+                  if item.get("isRequired") and item.get("status") == "COMPLETED"
+                  and item.get("conclusion") in FAILED)
 
 
 def _thread_info(pr, now, thread_hours):
@@ -291,10 +300,17 @@ def read_state(summary):
         raise ValueError("Corrupt stuck-pr history")
     if state.get("last_run_at"):
         instant(state["last_run_at"])
-    if "truncated" in state and not isinstance(state["truncated"], bool):
+    has_truncated, has_omitted = "truncated" in state, "omitted" in state
+    if has_truncated != has_omitted:
+        raise ValueError("Inconsistent stuck-pr truncation metadata")
+    truncated = state.get("truncated", False)
+    omitted = state.get("omitted", 0)
+    if not isinstance(truncated, bool):
         raise ValueError("Corrupt stuck-pr truncation flag")
-    if "omitted" in state and (not isinstance(state["omitted"], int) or isinstance(state["omitted"], bool) or state["omitted"] < 0):
+    if not isinstance(omitted, int) or isinstance(omitted, bool) or omitted < 0:
         raise ValueError("Corrupt stuck-pr omitted count")
+    if truncated != (omitted > 0):
+        raise ValueError("Inconsistent stuck-pr truncation metadata")
     return state
 
 
@@ -319,44 +335,55 @@ def state_history(previous, observed):
 def run(api, now, **kwargs):
     options = default_options(kwargs.get("failure_hours", 2), kwargs.get("open_hours", 24))
     options.update({"stale_days": threshold(kwargs.get("stale_days", 14)), "draft_days": threshold(kwargs.get("draft_days", 7)), "auto_merge_grace_minutes": threshold(kwargs.get("auto_merge_grace_minutes", 30)), "thread_hours": threshold(kwargs.get("thread_hours", 24)), "mention_allowlist": allowlist(kwargs.get("mention_allowlist", "")), "summary_assignee": login(kwargs.get("summary_assignee", "")), "exclude_prs": positive_int_list(kwargs.get("exclude_prs", "")), "auto_merge_exempt_prs": positive_int_list(kwargs.get("auto_merge_exempt_prs", ""))})
-    entries, observed = [], {}
+    scanned = []
     stamp = now.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for item in api.pages("pulls?state=open"):
         number = item["number"]
         if number in options["exclude_prs"]: continue
         pr = api.snapshot(number); pr["number"] = number
-        observed[f"{number}:{pr['headRefOid']}"] = {"failed": bool(failures(pr.get("contexts", []))[0]),
-                                                     "latest_failed_attempt_ids": failure_attempts(pr.get("contexts", [])),
-                                                     "observed_at": stamp}
-        entry = classify(pr, now, options)
-        if entry: entries.append(entry)
+        scanned.append((number, pr))
     summaries = [item for item in api.pages("issues?state=all&creator=" + BOT) if "pull_request" not in item and owned(item, SUMMARY) and item["title"] == TITLE]
     summaries.sort(key=lambda item: (item.get("created_at", ""), item.get("number", 0)))
     summary = summaries[0] if summaries else None
     previous = read_state(summary) if summary else {"history": {}}
+    # Re-read every non-excluded PR before deriving either classification or
+    # recurrence. A head change during this reconciliation is fail-closed.
+    final_prs, observed = [], {}
+    for number, initial in scanned:
+        pr = api.snapshot(number); pr["number"] = number
+        if pr.get("headRefOid") != initial.get("headRefOid"):
+            continue
+        final_prs.append(pr)
+        if pr.get("state") != "OPEN":
+            continue
+        key = f"{number}:{pr['headRefOid']}"
+        observed[key] = {"failed": bool(failures(pr.get("contexts", []))[0]),
+                         "latest_failed_attempt_ids": failure_attempts(pr.get("contexts", [])),
+                         "observed_at": stamp}
     history = state_history(previous, observed)
     history = {key: value for key, value in history.items() if key in observed}
-    for entry in entries:
-        current_history = history.get(f"{entry['number']}:{entry['head']}", {})
-        entry["repeat_failure"] = bool(current_history.get("recurrent"))
-    refreshed, pending_comments = [], []
-    for entry in entries:
-        pr = api.snapshot(entry["number"]); pr["number"] = entry["number"]
-        if pr["headRefOid"] != entry["head"]:
-            continue
+    entries, pending_comments = [], []
+    unknown_keys = set()
+    if previous.get("truncated"):
+        unknown_keys = set(observed) - set(previous.get("history", {}))
+    for pr in final_prs:
         current = classify(pr, now, options)
-        if current:
-            current["repeat_failure"] = entry["repeat_failure"]
-            refreshed.append(current)
-            if current["classification"] == "actionable":
-                body = report(pr, now, options["failure_hours"], options["open_hours"], options["mention_allowlist"], options)
-                marker = f"<!-- stuck-pr-bot:v1 head={current['head']} -->"
-                comments = list(api.pages(f"issues/{current['number']}/comments"))
-                if not any(owned(comment, marker) for comment in comments):
-                    pending_comments.append((current["number"], body))
-                elif f"{current['number']}:{current['head']}" not in previous.get("history", {}):
-                    current["repeat_failure"] = "unknown"
-    entries = refreshed
+        if not current:
+            continue
+        key = f"{current['number']}:{current['head']}"
+        current["repeat_failure"] = "unknown" if key in unknown_keys else bool(history.get(key, {}).get("recurrent"))
+        entries.append(current)
+        if current["classification"] == "actionable":
+            body = report(pr, now, options["failure_hours"], options["open_hours"], options["mention_allowlist"], options)
+            marker = f"<!-- stuck-pr-bot:v1 head={current['head']} -->"
+            comments = list(api.pages(f"issues/{current['number']}/comments"))
+            has_marker = any(owned(comment, marker) for comment in comments)
+            if not has_marker:
+                pending_comments.append((current["number"], body))
+            elif key not in previous.get("history", {}):
+                # A legacy report proves neither recurrence nor a complete
+                # state history; keep the recurrence claim explicitly unknown.
+                current["repeat_failure"] = "unknown"
     actionable = [entry for entry in entries if entry["classification"] == "actionable"]
     state_fields = ("number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure")
     def render(selected, state_entries=None, state_history=None, omitted=0, closed=False):
@@ -401,45 +428,39 @@ def run(api, now, **kwargs):
         if closed:
             lines.append("No open stuck PRs.")
         return "\n".join(lines) + "\n"
-    # The visible list is complete. Only the machine state is budgeted, with
-    # actionable/current rows taking priority over history-only records.
-    entries = sorted(entries, key=lambda e: (e["classification"] != "actionable", e["number"], e["head"]))
-    entry_payloads = [{key: entry.get(key) for key in state_fields} for entry in entries]
-    entry_key = lambda e: f"{e['number']}:{e['head']}"
-    history_keys = sorted(history, key=lambda key: (int(key.split(":", 1)[0]), key))
-    selected_entries, selected_history = [], {}
-    omitted = 0
-    for entry in entry_payloads:
-        if len(render([], [entry], {}).encode("utf-8")) >= 65536:
-            raise ValueError("Single state record exceeds GitHub limit")
-    for key in history_keys:
-        if len(render([], [], {key: history[key]}).encode("utf-8")) >= 65536:
-            raise ValueError("Single state record exceeds GitHub limit")
-    for entry in entry_payloads:
-        candidate = selected_entries + [entry]
-        candidate_keys = {entry_key(e): e for e in candidate}
-        candidate_history = {key: history[key] for key in sorted(candidate_keys) if key in history}
-        test = render(entries, candidate, candidate_history, len(entry_payloads) - len(candidate))
-        if len(test.encode("utf-8")) >= 65536:
-            omitted = len(entry_payloads) - len(selected_entries)
-            break
-        selected_entries = candidate
-        selected_history = candidate_history
-    else:
-        for key in history_keys:
-            if key in selected_history: continue
-            candidate_history = dict(selected_history); candidate_history[key] = history[key]
-            test = render(entries, selected_entries, {k: candidate_history[k] for k in sorted(candidate_history)}, 0)
-            if len(test.encode("utf-8")) >= 65536:
-                omitted = len(history_keys) - len(selected_history)
-                break
-            selected_history = candidate_history
-    if omitted:
-        # omitted counts all records not represented in machine state; rows
-        # are still complete and are deliberately rendered with repeat=unknown.
-        represented = {e["number"] for e in selected_entries}
-        omitted = len(entry_payloads) - len(represented) + max(0, len(history) - len(selected_history))
-    body = render(entries, selected_entries, {k: selected_history[k] for k in sorted(selected_history)}, omitted, closed=not entries)
+    # The visible list is complete. Machine state is selected as complete
+    # (entry, history) packages in three deterministic priority layers:
+    # actionable, known-failed history, then all remaining current heads.
+    entries = sorted(entries, key=lambda e: e["number"])
+    entry_by_key = {f"{e['number']}:{e['head']}": e for e in entries}
+    package_keys = set(entry_by_key) | set(history)
+    def package_number(key): return (int(key.split(":", 1)[0]), key)
+    def package_priority(key):
+        entry = entry_by_key.get(key)
+        if entry and entry["classification"] == "actionable": return 0
+        if key in history and history[key].get("seen_failed"): return 1
+        return 2
+    package_keys = sorted(package_keys, key=lambda key: (package_priority(key), package_number(key)))
+    entry_payload = lambda key: {field: entry_by_key[key].get(field) for field in state_fields}
+    def package_body(keys):
+        chosen_entries = sorted((entry_payload(key) for key in keys if key in entry_by_key), key=lambda e: e["number"])
+        chosen_history = {key: history[key] for key in sorted(keys) if key in history}
+        omitted_count = len(package_keys) - len(keys)
+        return render(entries, chosen_entries, chosen_history, omitted_count, closed=not entries)
+    # A single package must fit with the fixed body shell and a possible
+    # truncation notice; it may not be silently discarded as "omitted".
+    for key in package_keys:
+        if len(package_body([key]).encode("utf-8")) >= 65536:
+            raise ValueError("Single state package exceeds GitHub limit")
+    selected_keys = []
+    for key in package_keys:
+        candidate = selected_keys + [key]
+        if len(package_body(candidate).encode("utf-8")) < 65536:
+            selected_keys = candidate
+    body = package_body(selected_keys)
+    while len(body.encode("utf-8")) >= 65536 and selected_keys:
+        selected_keys.pop()
+        body = package_body(selected_keys)
     if len(body.encode("utf-8")) >= 65536:
         raise ValueError("Summary body exceeds GitHub limit")
     # Validate every pending comment before the first write.
