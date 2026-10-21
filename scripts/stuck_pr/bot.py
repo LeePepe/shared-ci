@@ -334,7 +334,7 @@ def run(api, now, **kwargs):
         if current:
             current["repeat_failure"] = entry["repeat_failure"]
             refreshed.append(current)
-            if current["classification"] == "actionable" and not current["repeat_failure"]:
+            if current["classification"] == "actionable":
                 body = report(pr, now, options["failure_hours"], options["open_hours"], options["mention_allowlist"], options)
                 marker = f"<!-- stuck-pr-bot:v1 head={current['head']} -->"
                 comments = list(api.pages(f"issues/{current['number']}/comments"))

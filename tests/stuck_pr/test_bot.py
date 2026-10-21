@@ -74,6 +74,33 @@ class ClassificationTests(unittest.TestCase):
         bad = pr(); bad["commits"]["nodes"][0]["commit"]["oid"] = "b" * 40
         with self.assertRaises(ValueError): bot.report(bad, NOW, 2, 24)
 
+    def test_earliest_current_required_failure_controls_threshold(self):
+        contexts = [check(name="new failure", completed=.5), check(name="old failure", completed=3),
+                    check(name="optional", required=False, completed=10)]
+        names, completed = bot.failures(contexts)
+        self.assertEqual(["new failure", "old failure"], names)
+        self.assertEqual(NOW - dt.timedelta(hours=3), completed)
+        self.assertIsNotNone(bot.report(pr(contexts=contexts), NOW, 2, 24))
+        self.assertIsNone(bot.report(pr(contexts=contexts[:1] + contexts[2:]), NOW, 2, 24))
+
+    def test_latest_legacy_status_context_controls_failure_clock(self):
+        old = {"context": "legacy", "state": "FAILURE", "createdAt": ago(4), "isRequired": True}
+        new = dict(old, state="SUCCESS", createdAt=ago(1))
+        self.assertEqual((["legacy"], NOW - dt.timedelta(hours=4)), bot.failures([old]))
+        self.assertEqual(([], None), bot.failures([new, old]))
+
+    def test_new_head_restarts_failure_clock(self):
+        old = pr(head=HEAD, contexts=[check(completed=3)])
+        new = pr(head="b" * 40, contexts=[check(completed=.5)])
+        self.assertIsNotNone(bot.report(old, NOW, 2, 24))
+        self.assertIsNone(bot.report(new, NOW, 2, 24))
+
+    def test_recent_activity_does_not_reset_failure_clock(self):
+        data = pr(updatedAt=NOW.isoformat(), quiet=0, contexts=[check(completed=3)])
+        text = bot.report(data, NOW, 2, 24)
+        self.assertIsNotNone(text)
+        self.assertIn("3.0h", text)
+
     def test_actionable_signals_and_age_is_context_only(self):
         options = bot.default_options()
         self.assertEqual("summary-only", bot.classify(pr(age=25), NOW, options)["classification"])
@@ -144,6 +171,20 @@ class ReconciliationTests(unittest.TestCase):
         body = next(payload["body"] for method, path, payload in api.writes if path == "issues")
         self.assertIn("stuck-pr-bot:state:v2", body); self.assertIn("last_run_at: 2026-10-20T12:00:00Z", body)
         api.writes.clear(); bot.run(api, NOW)
+        self.assertEqual([], api.writes)
+
+    def test_first_actionable_report_is_not_suppressed_by_unpublished_recurrence(self):
+        api = FakeAPI(prs={1: pr(age=25, contexts=[check(attempt=1, completed=1)])})
+        bot.run(api, NOW)
+        self.assertEqual(0, sum(path.endswith("/comments") for _, path, _ in api.writes))
+        api.writes.clear()
+        api.prs[1]["contexts"] = [check(attempt=2, completed=2)]
+        bot.run(api, NOW)
+        self.assertEqual(1, sum(path.endswith("/comments") for _, path, _ in api.writes))
+        self.assertIn('"repeat_failure":true', next(payload["body"] for _, path, payload in api.writes
+                                                   if path.startswith("issues/") and not path.endswith("/comments")))
+        api.writes.clear()
+        bot.run(api, NOW)
         self.assertEqual([], api.writes)
 
     def test_summary_only_keeps_issue_open_without_pr_comment(self):
