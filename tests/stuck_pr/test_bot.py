@@ -163,6 +163,30 @@ class ReconciliationTests(unittest.TestCase):
         self.assertTrue(any("- #500" in body for body in bodies))
         self.assertTrue(all(len(body) < 65536 for body in bodies))
 
+    def test_partitioned_summaries_are_reused_then_surplus_parts_closed(self):
+        api = FakeAPI(prs={i: pr(contexts=[check(name=str(i) + "[" * 180)]) for i in range(1, 501)})
+        bot.run(api, NOW)
+        created = [write for write in api.writes if write[0] == "POST" and write[1] == "issues"]
+        self.assertGreater(len(created), 1)
+        part_count = len(api.issues)
+
+        api.writes.clear()
+        api.prs = {1: api.prs[1]}
+        bot.run(api, NOW + dt.timedelta(hours=1))
+        self.assertFalse(any(method == "POST" and path == "issues" for method, path, _ in api.writes))
+        self.assertEqual(part_count, sum(method == "PATCH" and path.startswith("issues/") for method, path, _ in api.writes))
+        updates = [payload for method, path, payload in api.writes if method == "PATCH" and path.startswith("issues/")]
+        self.assertEqual("open", updates[0]["state"])
+        for update in updates[1:]:
+            self.assertEqual("closed", update["state"])
+            self.assertIn('"entries":[]', update["body"])
+
+        api.writes.clear()
+        api.prs = {}
+        bot.run(api, NOW + dt.timedelta(hours=2))
+        self.assertFalse(any(method == "POST" for method, _, _ in api.writes))
+        self.assertTrue(all(payload["state"] == "closed" for method, _, payload in api.writes if method == "PATCH"))
+
     def test_latest_attempt_app_and_optional_status_contexts(self):
         contexts = [check(attempt=1, app=1), check(attempt=2, app=1, conclusion="SUCCESS"), check(attempt=1, app=2)]
         self.assertEqual(["quality / aggregate"], bot.failures(contexts)[0])

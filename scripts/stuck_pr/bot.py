@@ -318,7 +318,7 @@ def run(api, now, **kwargs):
         entry = classify(pr, now, options)
         if entry: entries.append(entry)
     summaries = [item for item in api.pages("issues?state=all&creator=" + BOT) if "pull_request" not in item and owned(item, SUMMARY) and item["title"] == TITLE]
-    summary = min(summaries, key=lambda item: item["number"]) if summaries else None
+    summaries.sort(key=lambda item: (item.get("created_at", ""), item.get("number", 0)))
     previous = read_state(summaries) if summaries else {"history": {}}
     history = state_history(previous, observed)
     history = {key: value for key, value in history.items() if key in observed}
@@ -345,42 +345,71 @@ def run(api, now, **kwargs):
     entries = refreshed
     actionable = [entry for entry in entries if entry["classification"] == "actionable"]
     state_fields = ("number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure")
-    def render(selected):
-        public_entries = [{key: entry.get(key) for key in state_fields} for entry in sorted(selected, key=lambda e: e["number"])]
-        selected_keys = {f"{entry['number']}:{entry['head']}" for entry in selected}
-        history_payload = history if not selected else {key: value for key, value in history.items() if key in selected_keys}
+    def render(selected, selected_history=None, closed=False):
+        selected = sorted(selected, key=lambda e: e["number"])
+        public_entries = [{key: entry.get(key) for key in state_fields} for entry in selected]
+        selected_keys = ({f"{entry['number']}:{entry['head']}" for entry in selected}
+                         if selected_history is None else set(selected_history))
+        history_payload = {key: history[key] for key in sorted(selected_keys) if key in history}
         payload = {"schema": 2, "last_run_at": stamp, "entries": public_entries, "history": history_payload}
         lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n"]
         def visible(value): return quoted(value)
         lines += [f"- #{e['number']}: {visible(e['classification'])}; {', '.join(visible(reason) for reason in e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if e['repeat_failure'] == 'unknown' else ('yes' if e['repeat_failure'] else 'no')}" for e in sorted(selected, key=lambda e: e["number"])]
+        if closed:
+            lines.append("No open stuck PRs.")
         return "\n".join(lines) + "\n"
-    bodies = [render(entries)]
-    if entries and len(bodies[0]) >= 65536:
-        chunks, current = [], []
-        for entry in sorted(entries, key=lambda e: e["number"]):
-            candidate = render(current + [entry])
-            if current and len(candidate) >= 65536:
-                chunks.append(render(current)); current = [entry]
-            elif not current and len(candidate) >= 65536:
-                raise ValueError("Summary entry exceeds GitHub limit")
-            else:
-                current.append(entry)
-        if current: chunks.append(render(current))
-        bodies = chunks
-    body = bodies[0]
-    if entries:
-        if summary is None:
-            for chunk in bodies:
-                api.rest("POST", "issues", {"title": TITLE, "body": chunk, **({"assignees": [options["summary_assignee"]]} if options["summary_assignee"] else {})})
-        elif len(bodies) == 1 and (summary["state"] != "open" or summary.get("body") != body):
-            update = {"state": "open", "body": body}
-            if options["summary_assignee"]: update["assignees"] = [options["summary_assignee"]]
-            api.rest("PATCH", f"issues/{summary['number']}", update)
-        elif len(bodies) > 1:
-            api.rest("PATCH", f"issues/{summary['number']}", {"state": "open", "body": bodies[0]})
-            for chunk in bodies[1:]:
-                api.rest("POST", "issues", {"title": TITLE, "body": chunk, **({"assignees": [options["summary_assignee"]]} if options["summary_assignee"] else {})})
-    elif summary is not None and summary["state"] == "open": api.rest("PATCH", f"issues/{summary['number']}", {"state": "closed", "body": body + "\nNo open stuck PRs.\n"})
+    # Partition by PR number, keeping each entry and its matching history together.
+    # History-only records are included so a recovery is not lost when a PR stops
+    # being visible.  All bodies are rendered and checked before any write.
+    record_keys = sorted(set(history) | {f"{entry['number']}:{entry['head']}" for entry in entries},
+                         key=lambda key: (int(key.split(":", 1)[0]), key))
+    entries_by_key = {f"{entry['number']}:{entry['head']}": entry for entry in entries}
+    chunks, current_keys = [], []
+    for key in record_keys:
+        candidate_keys = current_keys + [key]
+        candidate_entries = [entries_by_key[item] for item in candidate_keys if item in entries_by_key]
+        candidate = render(candidate_entries, candidate_keys, closed=not entries)
+        split = False
+        if current_keys and len(candidate.encode("utf-8")) >= 65536:
+            chunks.append(current_keys)
+            current_keys = [key]
+            split = True
+            candidate_entries = [entries_by_key[key]] if key in entries_by_key else []
+            candidate = render(candidate_entries, current_keys, closed=not entries)
+        if not current_keys and len(candidate.encode("utf-8")) >= 65536:
+            raise ValueError("Summary entry exceeds GitHub limit")
+        if not split:
+            current_keys = candidate_keys
+    if current_keys:
+        chunks.append(current_keys)
+    if not record_keys and entries:
+        chunks = [[]]
+    if len(chunks) > 20:
+        raise ValueError("Summary requires more than 20 parts")
+    bodies = []
+    for keys in chunks:
+        selected = [entries_by_key[key] for key in keys if key in entries_by_key]
+        body = render(selected, keys, closed=not entries)
+        if len(body.encode("utf-8")) >= 65536:
+            raise ValueError("Summary entry exceeds GitHub limit")
+        bodies.append(body)
+
+    # Existing parts are ordered by creation/number. Reconcile every part:
+    # reuse and update active slots, create only missing slots, then clear and
+    # close surplus slots. No old state remains readable in a surplus issue.
+    assignee = {"assignees": [options["summary_assignee"]]} if options["summary_assignee"] else {}
+    for index, body in enumerate(bodies):
+        if index < len(summaries):
+            issue = summaries[index]
+            desired_state = "open" if entries else "closed"
+            update = {"state": desired_state, "body": body, **assignee}
+            if issue.get("state") != desired_state or issue.get("body") != body or assignee:
+                api.rest("PATCH", f"issues/{issue['number']}", update)
+        elif entries:
+            api.rest("POST", "issues", {"title": TITLE, "body": body, **assignee})
+    for issue in summaries[len(bodies):]:
+        empty = render([], [], closed=True)
+        api.rest("PATCH", f"issues/{issue['number']}", {"state": "closed", "body": empty, **assignee})
     for number, comment in pending_comments:
         api.rest("POST", f"issues/{number}/comments", {"body": comment})
     print(f"[stuck-pr-bot] scanned open PRs; {len(entries)} summary entries; {len(actionable)} actionable")
