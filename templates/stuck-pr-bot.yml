@@ -1,6 +1,9 @@
 name: stuck-PR bot
 
 on:
+  # Example consumer schedule (use a unique pair of minutes per repository):
+  # schedule:
+  #   - cron: '7,37 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -22,6 +25,6 @@ jobs:
       thread-hours: 24
       mention-allowlist: LeePepe
       summary-assignee: LeePepe
-      # Pick a unique pair of minutes for each consumer, such as 7,37.
+      # Pick a unique pair of minutes for each consumer; the example is 7,37.
       exclude-prs: ''
       auto-merge-exempt-prs: ''

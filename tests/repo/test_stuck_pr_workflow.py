@@ -35,15 +35,24 @@ class StuckWorkflowTests(unittest.TestCase):
         self.assertIn('"${#WORKFLOW_SHA}" -eq 40', confirm["run"])
         self.assertIn('exit 1', confirm["run"])
         self.assertEqual("python3 -I -B .shared-ci/scripts/stuck_pr/bot.py", report["run"])
-        self.assertEqual("${{ inputs.exclude-prs }}", report["env"]["EXCLUDE_PRS"])
+        expected_env = {"FAILURE_HOURS": "${{ inputs.failure-hours }}", "OPEN_HOURS": "${{ inputs.open-hours }}",
+                        "STALE_DAYS": "${{ inputs.stale-days }}", "DRAFT_DAYS": "${{ inputs.draft-days }}",
+                        "AUTO_MERGE_GRACE_MINUTES": "${{ inputs.auto-merge-grace-minutes }}", "THREAD_HOURS": "${{ inputs.thread-hours }}",
+                        "MENTION_ALLOWLIST": "${{ inputs.mention-allowlist }}", "SUMMARY_ASSIGNEE": "${{ inputs.summary-assignee }}",
+                        "EXCLUDE_PRS": "${{ inputs.exclude-prs }}", "AUTO_MERGE_EXEMPT_PRS": "${{ inputs.auto-merge-exempt-prs }}",
+                        "GITHUB_TOKEN": "${{ github.token }}"}
+        self.assertEqual(expected_env, report["env"])
 
     def test_caller_owns_manual_trigger_and_uses_full_sha_placeholder(self):
         text = (REPO / "templates/stuck-pr-bot.yml").read_text()
         caller = yaml.parse(text.replace("<40-char-sha>", "1" * 40))
         self.assertEqual({"workflow_dispatch"}, set(caller["on"]))
+        self.assertIn("cron: '7,37 * * * *'", text)
+        self.assertIn("unique pair of minutes", text)
         self.assertEqual(PERMISSIONS, caller["permissions"])
         job = caller["jobs"]["report"]
         self.assertEqual("LeePepe/shared-ci/.github/workflows/stuck-pr-bot.yml@" + "1" * 40, job["uses"])
-        self.assertEqual(2, job["with"]["failure-hours"])
-        self.assertEqual(24, job["with"]["open-hours"])
+        self.assertEqual({"failure-hours": 2, "open-hours": 24, "stale-days": 14, "draft-days": 7,
+                          "auto-merge-grace-minutes": 30, "thread-hours": 24, "mention-allowlist": "LeePepe",
+                          "summary-assignee": "LeePepe", "exclude-prs": "", "auto-merge-exempt-prs": ""}, job["with"])
         self.assertNotIn("secrets", job)

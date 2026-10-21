@@ -81,6 +81,11 @@ def quoted(value):
     return re.sub(r"([\\`*_{}\[\]()<>!|])", r"\\\1", value)
 
 
+def state_json(value):
+    """Serialize state without allowing untrusted text to close its HTML comment."""
+    return json.dumps(value, sort_keys=True).replace("-->", r"--\u003e")
+
+
 def failures(contexts):
     latest = {}
     for item in contexts:
@@ -214,21 +219,34 @@ class API:
     def snapshot(self, number):
         owner, repo = self.repository.split("/")
         cursor, thread_cursor, contexts, threads = None, None, [], []
+        context_done, thread_done, seen_cursors, seen_thread_cursors = False, False, set(), set()
+        expected_head = None
         while True:
             data = self.request("POST", "graphql", {"query": QUERY, "variables": {"owner": owner, "repo": repo, "number": number, "cursor": cursor, "thread_cursor": thread_cursor}})
             if data.get("errors"): raise ValueError("GitHub query failed")
             pr = data["data"]["repository"]["pullRequest"]
             if pr is None: raise ValueError("PR unavailable")
+            if expected_head is None: expected_head = pr.get("headRefOid")
+            if pr.get("headRefOid") != expected_head: raise ValueError("Head changed during pagination")
             commit = pr["commits"]["nodes"][-1]["commit"]
             if commit["oid"] != pr["headRefOid"]: raise ValueError("Head and check commit differ")
             rollup = commit["statusCheckRollup"]
-            if rollup:
+            if not context_done and rollup:
                 contexts.extend(rollup["contexts"]["nodes"])
                 info = rollup["contexts"]["pageInfo"]
-                if info["hasNextPage"]: cursor = info["endCursor"]; continue
-            threads.extend(pr.get("reviewThreads", {}).get("nodes", []))
-            tinfo = pr.get("reviewThreads", {}).get("pageInfo", {})
-            if tinfo.get("hasNextPage"): thread_cursor = tinfo.get("endCursor"); continue
+                if info["hasNextPage"]:
+                    next_cursor = info.get("endCursor")
+                    if not next_cursor or next_cursor in seen_cursors: raise ValueError("Invalid context pagination cursor")
+                    seen_cursors.add(next_cursor); cursor = next_cursor; continue
+                context_done = True; cursor = None
+            if not thread_done:
+                threads.extend(pr.get("reviewThreads", {}).get("nodes", []))
+                tinfo = pr.get("reviewThreads", {}).get("pageInfo", {})
+                if tinfo.get("hasNextPage"):
+                    next_cursor = tinfo.get("endCursor")
+                    if not next_cursor or next_cursor in seen_thread_cursors: raise ValueError("Invalid thread pagination cursor")
+                    seen_thread_cursors.add(next_cursor); thread_cursor = next_cursor; continue
+                thread_done = True
             pr["contexts"], pr["threads"] = contexts, threads
             pr["reviewRequests"] = [node.get("requestedReviewer") for node in pr.get("reviewRequests", {}).get("nodes", []) if node.get("requestedReviewer")]
             pr["labels_owner_review"] = any(node.get("name") == "owner-review" for node in pr.get("labels", {}).get("nodes", []))
@@ -263,13 +281,17 @@ def state_history(previous, observed):
     history = dict(previous.get("history", {}))
     for key, current in observed.items():
         old = history.get(key, {})
-        old_attempts = set(old.get("failure_attempts", []))
-        current_attempts = set(current.get("failure_attempts", []))
-        recovered = bool(old.get("recovered")) or (bool(old.get("failed")) and not current["failed"])
-        repeat = bool(current["failed"]) and (bool(old.get("recovered")) or
-                                                (bool(old.get("failed")) and old_attempts != current_attempts))
-        history[key] = {"failed": bool(current["failed"]), "recovered": recovered,
-                        "failure_attempts": sorted(current_attempts), "repeat_failure": repeat}
+        old_attempts = set(old.get("latest_failed_attempt_ids", []))
+        current_attempts = set(current.get("latest_failed_attempt_ids", []))
+        failed = bool(current["failed"])
+        recovered_at = old.get("recovery_seen_at")
+        if old.get("last_required_state") == "failed" and not failed:
+            recovered_at = current.get("observed_at")
+        repeat = failed and (bool(recovered_at) or (bool(old.get("seen_failed")) and old_attempts != current_attempts))
+        history[key] = {"seen_failed": bool(old.get("seen_failed")) or failed,
+                        "last_required_state": "failed" if failed else "success",
+                        "latest_failed_attempt_ids": sorted(current_attempts),
+                        "recovery_seen_at": recovered_at, "recurrent": bool(old.get("recurrent")) or repeat}
     return history
 
 
@@ -277,12 +299,14 @@ def run(api, now, **kwargs):
     options = default_options(kwargs.get("failure_hours", 2), kwargs.get("open_hours", 24))
     options.update({"stale_days": threshold(kwargs.get("stale_days", 14)), "draft_days": threshold(kwargs.get("draft_days", 7)), "auto_merge_grace_minutes": threshold(kwargs.get("auto_merge_grace_minutes", 30)), "thread_hours": threshold(kwargs.get("thread_hours", 24)), "mention_allowlist": allowlist(kwargs.get("mention_allowlist", "")), "summary_assignee": login(kwargs.get("summary_assignee", "")), "exclude_prs": positive_int_list(kwargs.get("exclude_prs", "")), "auto_merge_exempt_prs": positive_int_list(kwargs.get("auto_merge_exempt_prs", ""))})
     entries, observed = [], {}
+    stamp = now.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for item in api.pages("pulls?state=open"):
         number = item["number"]
         if number in options["exclude_prs"]: continue
         pr = api.snapshot(number); pr["number"] = number
         observed[f"{number}:{pr['headRefOid']}"] = {"failed": bool(failures(pr.get("contexts", []))[0]),
-                                                     "failure_attempts": failure_attempts(pr.get("contexts", []))}
+                                                     "latest_failed_attempt_ids": failure_attempts(pr.get("contexts", [])),
+                                                     "observed_at": stamp}
         entry = classify(pr, now, options)
         if entry: entries.append(entry)
     summaries = [item for item in api.pages("issues?state=all&creator=" + BOT) if "pull_request" not in item and owned(item, SUMMARY) and item["title"] == TITLE]
@@ -292,8 +316,7 @@ def run(api, now, **kwargs):
     history = {key: value for key, value in history.items() if key in observed}
     for entry in entries:
         current_history = history.get(f"{entry['number']}:{entry['head']}", {})
-        entry["repeat_failure"] = bool(current_history.get("repeat_failure"))
-    actionable = [entry for entry in entries if entry["classification"] == "actionable"]
+        entry["repeat_failure"] = bool(current_history.get("recurrent"))
     refreshed, pending_comments = [], []
     for entry in entries:
         pr = api.snapshot(entry["number"]); pr["number"] = entry["number"]
@@ -309,12 +332,16 @@ def run(api, now, **kwargs):
                 comments = list(api.pages(f"issues/{current['number']}/comments"))
                 if not any(owned(comment, marker) for comment in comments):
                     pending_comments.append((current["number"], body))
+                elif f"{current['number']}:{current['head']}" not in previous.get("history", {}):
+                    current["repeat_failure"] = "unknown"
     entries = refreshed
     actionable = [entry for entry in entries if entry["classification"] == "actionable"]
-    stamp = now.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    payload = {"schema": 2, "last_run_at": stamp, "entries": sorted(entries, key=lambda e: e["number"]), "history": history}
-    lines = [SUMMARY, STATE + json.dumps(payload, sort_keys=True) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n"]
-    lines += [f"- #{e['number']}: {e['classification']}; {', '.join(e['reasons'])}; age {e['age_hours']}h; auto-merge={'on' if e['auto_merge'] else 'off'}; mergeable={e['mergeable']}; review={e['review_decision']}; Draft={e['draft']}; unresolved={e['unresolved_threads']}; GTT={'present' if e['gtt_present'] else 'absent'}; stale={'yes' if e['stale'] else 'no'}; repeat_failure={'yes' if e['repeat_failure'] else 'no'}" for e in sorted(entries, key=lambda e: e["number"])]
+    state_fields = ("number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure")
+    public_entries = [{key: entry.get(key) for key in state_fields} for entry in sorted(entries, key=lambda e: e["number"])]
+    payload = {"schema": 2, "last_run_at": stamp, "entries": public_entries, "history": history}
+    lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n"]
+    def visible(value): return quoted(value)
+    lines += [f"- #{e['number']}: {visible(e['classification'])}; {', '.join(visible(reason) for reason in e['reasons'])}; age {e['age_hours']}h; auto-merge={'on' if e['auto_merge'] else 'off'}; mergeable={visible(e['mergeable'])}; review={visible(e['review_decision'])}; Draft={e['draft']}; unresolved={e['unresolved_threads']}; GTT={'present' if e['gtt_present'] else 'absent'}; stale={'yes' if e['stale'] else 'no'}; exception={'yes' if e['exception'] else 'no'}; repeat_failure={'unknown' if e['repeat_failure'] == 'unknown' else ('yes' if e['repeat_failure'] else 'no')}" for e in sorted(entries, key=lambda e: e["number"])]
     body = "\n".join(lines) + "\n"
     if len(body) >= 65536: raise ValueError("Summary body exceeds GitHub limit")
     if entries:

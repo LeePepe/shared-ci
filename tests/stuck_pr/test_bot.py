@@ -2,6 +2,7 @@
 import copy
 import datetime as dt
 import importlib.util
+import json
 import pathlib
 import unittest
 
@@ -47,7 +48,10 @@ class FakeAPI:
 
     def snapshot(self, number):
         self.reads.append(("snapshot", number))
-        if number in self.refresh: return copy.deepcopy(self.refresh.pop(number))
+        if number in self.refresh:
+            current = copy.deepcopy(self.prs[number])
+            self.prs[number] = self.refresh.pop(number)
+            return current
         return copy.deepcopy(self.prs[number])
 
     def rest(self, method, suffix, body=None):
@@ -113,6 +117,21 @@ class ClassificationTests(unittest.TestCase):
 
 
 class ReconciliationTests(unittest.TestCase):
+    def test_summary_state_and_visible_rows_neutralize_untrusted_text(self):
+        evil = "bad --> @all [link](https://example.invalid)"
+        api = FakeAPI(prs={1: pr(contexts=[check(name=evil)])})
+        bot.run(api, NOW)
+        body = next(payload["body"] for _, path, payload in api.writes if path == "issues")
+        state = body.split(bot.STATE, 1)[1].split("\n-->", 1)[0]
+        self.assertNotIn("-->", state)
+        self.assertNotIn("@all", body)
+        self.assertNotIn(evil, body)
+
+    def test_closed_and_merged_prs_never_enter_summary_or_comments(self):
+        api = FakeAPI(prs={1: pr(state="CLOSED", contexts=[check()]), 2: pr(state="MERGED", contexts=[check()])})
+        bot.run(api, NOW)
+        self.assertEqual([], api.writes)
+
     def test_allowlisted_author_is_mentioned(self):
         api = FakeAPI()
         bot.run(api, NOW, mention_allowlist="alice")
@@ -159,9 +178,11 @@ class ReconciliationTests(unittest.TestCase):
 
     def test_exempt_auto_merge_and_behind_signals(self):
         options = bot.default_options(); options["auto_merge_exempt_prs"] = {7}
-        data = pr(age=2, autoMergeRequest={}, mergeStateStatus="BEHIND"); data["number"] = 7
+        data = pr(age=2, autoMergeRequest={}, mergeStateStatus="BEHIND", contexts=[check()]); data["number"] = 7
         result = bot.classify(data, NOW, options)
-        self.assertIsNone(result)
+        self.assertEqual("actionable", result["classification"])
+        self.assertTrue(result["exception"])
+        self.assertIn("required checks failed", result["reasons"][0])
 
     def test_unknown_and_missing_thread_time_are_summary_visible(self):
         options = bot.default_options()
@@ -186,10 +207,10 @@ class ReconciliationTests(unittest.TestCase):
 
 
     def test_head_race_reconciles_without_stale_comment_or_entry(self):
-        api = FakeAPI()
-        api.refresh[1] = pr(contexts=[], head=HEAD)
-        bot.run(api, NOW)
-        self.assertEqual([], api.writes)
+        for refreshed in (pr(head="b" * 40), pr(state="MERGED"), pr(draft=True), pr(contexts=[])):
+            api = FakeAPI(); api.refresh[1] = refreshed
+            bot.run(api, NOW)
+            self.assertEqual([], api.writes)
 
     def test_closed_summary_reopens_and_legacy_v1_marker_dedupes(self):
         marker = f"<!-- stuck-pr-bot:v1 head={HEAD} -->"
@@ -197,6 +218,14 @@ class ReconciliationTests(unittest.TestCase):
         bot.run(api, NOW)
         self.assertEqual("open", api.writes[-1][2]["state"])
         self.assertFalse(any(path.endswith("/comments") for _, path, _ in api.writes))
+        self.assertIn("repeat_failure=unknown", api.writes[-1][2]["body"])
+
+    def test_human_marker_and_summary_cannot_suppress_or_select(self):
+        marker = f"<!-- stuck-pr-bot:v1 head={HEAD} -->"
+        api = FakeAPI(issues=[item(bot.SUMMARY, login="someone")], comments={1: [item(marker, login="someone")]})
+        bot.run(api, NOW)
+        self.assertEqual(["POST", "POST"], [method for method, _, _ in api.writes])
+        self.assertTrue(any(path.endswith("/comments") for _, path, _ in api.writes))
 
     def test_zero_entries_closes_and_observation_only_stays_open(self):
         api = FakeAPI(prs={1: pr(contexts=[])})
@@ -215,6 +244,14 @@ class ReconciliationTests(unittest.TestCase):
         with self.assertRaises(ValueError): bot.run(api, NOW)
         self.assertEqual([], api.writes)
 
+    def test_invalid_configuration_fails_before_any_read_or_write(self):
+        for key, value in (("failure_hours", "nan"), ("open_hours", 0), ("exclude_prs", "2,bad"),
+                           ("auto_merge_exempt_prs", "-1"), ("mention_allowlist", "bad login"),
+                           ("summary_assignee", "bad login")):
+            api = FakeAPI()
+            with self.assertRaises(ValueError): bot.run(api, NOW, **{key: value})
+            self.assertEqual([], api.reads + api.writes, key)
+
     def test_fail_success_fail_tracks_repeat_and_suppresses_second_comment(self):
         api = FakeAPI()
         bot.run(api, NOW)
@@ -225,6 +262,10 @@ class ReconciliationTests(unittest.TestCase):
         bot.run(api, NOW + dt.timedelta(hours=2))
         body = api.writes[-1][2]["body"]
         self.assertIn('"repeat_failure": true', body)
+        state = body.split(bot.STATE, 1)[1].split("\n-->", 1)[0]
+        history = json.loads(state)
+        self.assertEqual({"seen_failed", "last_required_state", "latest_failed_attempt_ids", "recovery_seen_at", "recurrent"},
+                         set(history["history"]["1:" + HEAD]))
         self.assertEqual(0, sum(path.endswith("/comments") for _, path, _ in api.writes))
 
     def test_new_failed_attempt_is_repeat_failure(self):
@@ -261,13 +302,31 @@ class PaginationTests(unittest.TestCase):
             requests.append(body)
             first = body["variables"]["cursor"] is None
             data = pr(); data.update({"reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False}}, "labels": {"nodes": []}, "reviewRequests": {"nodes": []}})
+            thread_page = body["variables"]["thread_cursor"] is not None
+            data["reviewThreads"] = {"nodes": [{"isResolved": False, "isOutdated": False, "comments": {"nodes": [{"createdAt": ago(25)}]}}] if thread_page else [],
+                                      "pageInfo": {"hasNextPage": not thread_page, "endCursor": "thread-next"}}
             data["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = {"contexts": {"nodes": [check(required=False)] if first else [check(name="required")], "pageInfo": {"hasNextPage": first, "endCursor": "next"}}}
             return {"data": {"repository": {"pullRequest": data}}}
         api.request = request
         data = api.snapshot(7)
         self.assertEqual(["required"], bot.failures(data["contexts"])[0])
         self.assertEqual("next", requests[1]["variables"]["cursor"])
+        self.assertEqual("thread-next", requests[2]["variables"]["thread_cursor"])
+        self.assertEqual(1, len(data["threads"]))
         self.assertIn("isRequired(pullRequestNumber:$number)", requests[0]["query"])
+
+    def test_graphql_pagination_head_change_or_stalled_cursor_fails_closed(self):
+        for mode in ("head", "cursor"):
+            api = bot.API("org/repo", "fixture"); calls = []
+            def request(method, path, body):
+                calls.append(body)
+                data = pr(head=("b" * 40 if mode == "head" and len(calls) > 1 else HEAD))
+                cursor = "next" if mode == "cursor" else "next"
+                data["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = {"contexts": {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": cursor}}}
+                data["reviewThreads"] = {"nodes": [], "pageInfo": {"hasNextPage": False}}
+                return {"data": {"repository": {"pullRequest": data}}}
+            api.request = request
+            with self.assertRaises(ValueError): api.snapshot(7)
 
     def test_graphql_error_fails_closed(self):
         api = bot.API("org/repo", "fixture")
