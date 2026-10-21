@@ -231,12 +231,16 @@ class ReconciliationTests(unittest.TestCase):
     def test_read_state_rejects_duplicate_entry_and_history_across_shards(self):
         entry = {"number": 1, "head": HEAD}
         base = {"schema": 2, "last_run_at": None, "entries": [entry], "history": {}}
+        self.assertEqual(1, len(bot.read_state([state_item(base, 10), state_item(base, 11)])["entries"]))
+        conflict = copy.deepcopy(base); conflict["entries"][0]["classification"] = "different"
         with self.assertRaises(ValueError):
-            bot.read_state([state_item(base, 10), state_item(base, 11)])
+            bot.read_state([state_item(base, 10), state_item(conflict, 11)])
         history = {"1:" + HEAD: {"seen_failed": True}}
         first = {"schema": 2, "last_run_at": None, "entries": [], "history": history}
+        self.assertEqual(1, len(bot.read_state([state_item(first, 10), state_item(first, 11)])["history"]))
+        history_conflict = copy.deepcopy(first); history_conflict["history"]["1:" + HEAD] = {"seen_failed": False}
         with self.assertRaises(ValueError):
-            bot.read_state([state_item(first, 10), state_item(first, 11)])
+            bot.read_state([state_item(first, 10), state_item(history_conflict, 11)])
 
     def test_single_oversized_history_record_fails_before_writes(self):
         history = {"1:" + HEAD: {"seen_failed": True, "last_required_state": "failed",
@@ -312,6 +316,37 @@ class ReconciliationTests(unittest.TestCase):
         api.writes.clear()
         bot.run(api, NOW + dt.timedelta(hours=2))
         self.assertEqual([], api.writes)
+
+    def test_repartition_patch_failure_recovers_on_retry_without_duplicate_comments(self):
+        class FailLaterShard(FakeAPI):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.fail_number = None
+                self.fail_once = False
+
+            def rest(self, method, suffix, body=None):
+                if (self.fail_once and method == "PATCH" and suffix == f"issues/{self.fail_number}"):
+                    self.fail_once = False
+                    raise ValueError("simulated later shard PATCH failure")
+                return super().rest(method, suffix, body)
+
+        api = FailLaterShard(prs={i: pr(contexts=[check(name=str(i) + "[" * 180)]) for i in range(1, 501)})
+        bot.run(api, NOW)
+        api.writes.clear()
+        api.prs = {1: api.prs[1]}
+        api.fail_number = api.issues[1]["number"]
+        api.fail_once = True
+        with self.assertRaises(ValueError):
+            bot.run(api, NOW + dt.timedelta(hours=1))
+        # The already-updated destination and untouched source shards remain
+        # readable; the retry is allowed to finish reconciliation.
+        bot.read_state(api.issues)
+        api.writes.clear()
+        bot.run(api, NOW + dt.timedelta(hours=1))
+        state = bot.read_state(api.issues)
+        self.assertEqual(1, len(state["entries"]))
+        self.assertEqual(1, len(state["history"]))
+        self.assertEqual(0, sum(path.endswith("/comments") for _, path, _ in api.writes))
 
     def test_latest_attempt_app_and_optional_status_contexts(self):
         contexts = [check(attempt=1, app=1), check(attempt=2, app=1, conclusion="SUCCESS"), check(attempt=1, app=2)]

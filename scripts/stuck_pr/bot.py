@@ -261,21 +261,23 @@ def owned(item, marker):
 def read_state(summary):
     if isinstance(summary, list):
         merged = {"schema": 2, "last_run_at": None, "entries": [], "history": {}}
-        entry_keys, history_keys = set(), set()
+        entry_by_key, history_by_key = {}, {}
         for item in summary:
             state = read_state(item)
             for entry in state["entries"]:
                 key = (entry["number"], entry["head"])
-                if key in entry_keys:
+                previous = entry_by_key.get(key)
+                if previous is not None and previous != entry:
                     raise ValueError("Conflicting duplicate stuck-pr entry")
-                entry_keys.add(key)
-            duplicate_history = history_keys.intersection(state["history"])
-            if duplicate_history:
-                raise ValueError("Conflicting duplicate stuck-pr history")
-            history_keys.update(state["history"])
-            merged["entries"].extend(state["entries"])
-            merged["history"].update(state["history"])
+                entry_by_key[key] = entry
+            for key, value in state["history"].items():
+                previous = history_by_key.get(key)
+                if previous is not None and previous != value:
+                    raise ValueError("Conflicting duplicate stuck-pr history")
+                history_by_key[key] = value
             merged["last_run_at"] = max(filter(None, (merged["last_run_at"], state.get("last_run_at"))), default=None)
+        merged["entries"] = list(entry_by_key.values())
+        merged["history"] = history_by_key
         return merged
     if not isinstance(summary, dict):
         raise ValueError("Corrupt stuck-pr state")
@@ -369,12 +371,13 @@ def run(api, now, **kwargs):
     entries = refreshed
     actionable = [entry for entry in entries if entry["classification"] == "actionable"]
     state_fields = ("number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure")
-    def render(selected, selected_history=None, closed=False):
+    def render(selected, selected_history=None, closed=False, history_source=None):
         selected = sorted(selected, key=lambda e: e["number"])
         public_entries = [{key: entry.get(key) for key in state_fields} for entry in selected]
         selected_keys = ({f"{entry['number']}:{entry['head']}" for entry in selected}
                          if selected_history is None else set(selected_history))
-        history_payload = {key: history[key] for key in sorted(selected_keys) if key in history}
+        source = history if history_source is None else history_source
+        history_payload = {key: source[key] for key in sorted(selected_keys) if key in source}
         payload = {"schema": 2, "last_run_at": stamp, "entries": public_entries, "history": history_payload}
         lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n"]
         def visible(value): return quoted(value)
@@ -425,14 +428,78 @@ def run(api, now, **kwargs):
     if not entries and summaries and len(bodies) > len(summaries):
         raise ValueError("Existing summary parts cannot hold all history")
 
-    # Existing parts are ordered by creation/number. Reconcile every part:
-    # reuse and update active slots, create only missing slots, then clear and
-    # close surplus slots. No old state remains readable in a surplus issue.
+    # Publish in recoverable phases. First normalize every existing shard in
+    # place while retaining its old records. Then install destination bodies
+    # that add moved records before bodies that remove them. An interruption
+    # between those phases leaves only identical duplicate records, which the
+    # reader can safely deduplicate. Surplus cleanup is last.
     assignee = {"assignees": [options["summary_assignee"]]} if options["summary_assignee"] else {}
-    for index, body in enumerate(bodies):
+    summary_states = [read_state(issue) for issue in summaries]
+    desired_entry_keys = set(entries_by_key)
+    desired_keysets = [set(keys) for keys in chunks]
+    old_keysets = []
+    old_entries_by_issue, old_history_by_issue = [], []
+    for issue, state in zip(summaries, summary_states):
+        old_entries = {f"{entry['number']}:{entry['head']}": entry for entry in state["entries"]}
+        old_keys = set(old_entries) | set(state["history"])
+        old_keysets.append(old_keys)
+        old_entries_by_issue.append(old_entries)
+        old_history_by_issue.append(state["history"])
+
+    old_locations = {}
+    for index, keys in enumerate(old_keysets):
+        for key in keys:
+            old_locations.setdefault(key, set()).add(index)
+    desired_locations = {}
+    for index, keys in enumerate(desired_keysets):
+        for key in keys:
+            desired_locations.setdefault(key, set()).add(index)
+    moved_keys = {key for key in desired_locations
+                  if old_locations.get(key, set()) and old_locations[key] != desired_locations[key]}
+    partition_changed = bool(moved_keys)
+    if partition_changed:
+        canonical_bodies = []
+        for old_entries, old_history, old_keys in zip(old_entries_by_issue, old_history_by_issue, old_keysets):
+            # Entries that are no longer current remain represented by their
+            # history key; retaining their old entry payload would make a
+            # near-limit shard needlessly larger during recovery.
+            canonical_entries = [old_entries[key] for key in sorted(old_entries)
+                                 if key in desired_entry_keys and key not in moved_keys]
+            canonical_history = {key: history[key] if key in moved_keys and key in history else old_history[key]
+                                 for key in old_keys}
+            canonical = render(canonical_entries, sorted(old_keys), closed=not entries,
+                               history_source=canonical_history)
+            if len(canonical.encode("utf-8")) >= 65536:
+                # History is the durable recovery record. If retaining old
+                # entry rows would overflow a source shard, drop those rows
+                # in phase one and recreate them in the destination phase.
+                # Moved keys are omitted as a last-resort source shrink; the
+                # next retry reconstructs them from the current observation.
+                retained_keys = sorted(old_keys - moved_keys)
+                retained_entries = [old_entries[key] for key in retained_keys
+                                    if key in old_entries and key in desired_entry_keys]
+                retained_history = {key: canonical_history[key] for key in retained_keys}
+                canonical = render(retained_entries, retained_keys, closed=not entries,
+                                   history_source=retained_history)
+            if len(canonical.encode("utf-8")) >= 65536:
+                raise ValueError("Existing summary shard exceeds GitHub limit during recovery")
+            canonical_bodies.append(canonical)
+        for issue, body in zip(summaries, canonical_bodies):
+            if issue.get("body") != body or assignee:
+                api.rest("PATCH", f"issues/{issue['number']}", {"body": body, **assignee})
+
+    def destination_order(index):
+        old = old_keysets[index] if index < len(old_keysets) else set()
+        desired = desired_keysets[index]
+        # Pure additions are copies; perform them before any destination that
+        # removes a key. Stable order keeps issue creation/order semantics.
+        return (bool(old - desired), index)
+
+    desired_state = "open" if entries else "closed"
+    for index in sorted(range(len(bodies)), key=destination_order):
+        body = bodies[index]
         if index < len(summaries):
             issue = summaries[index]
-            desired_state = "open" if entries else "closed"
             update = {"state": desired_state, "body": body, **assignee}
             if issue.get("state") != desired_state or issue.get("body") != body or assignee:
                 api.rest("PATCH", f"issues/{issue['number']}", update)
