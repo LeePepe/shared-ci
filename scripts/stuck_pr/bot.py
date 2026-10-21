@@ -261,12 +261,24 @@ def owned(item, marker):
 def read_state(summary):
     if isinstance(summary, list):
         merged = {"schema": 2, "last_run_at": None, "entries": [], "history": {}}
+        entry_keys, history_keys = set(), set()
         for item in summary:
             state = read_state(item)
+            for entry in state["entries"]:
+                key = (entry["number"], entry["head"])
+                if key in entry_keys:
+                    raise ValueError("Conflicting duplicate stuck-pr entry")
+                entry_keys.add(key)
+            duplicate_history = history_keys.intersection(state["history"])
+            if duplicate_history:
+                raise ValueError("Conflicting duplicate stuck-pr history")
+            history_keys.update(state["history"])
             merged["entries"].extend(state["entries"])
             merged["history"].update(state["history"])
             merged["last_run_at"] = max(filter(None, (merged["last_run_at"], state.get("last_run_at"))), default=None)
         return merged
+    if not isinstance(summary, dict):
+        raise ValueError("Corrupt stuck-pr state")
     body = summary.get("body", "")
     if STATE not in body:
         return {"schema": 2, "last_run_at": None, "entries": [], "history": {}}
@@ -280,6 +292,18 @@ def read_state(summary):
         raise ValueError("Corrupt stuck-pr-bot state") from error
     if state.get("schema") != 2 or not isinstance(state.get("entries"), list) or not isinstance(state.get("history"), dict):
         raise ValueError("Corrupt stuck-pr-bot state")
+    entry_keys = set()
+    for entry in state["entries"]:
+        if not isinstance(entry, dict) or "number" not in entry or "head" not in entry:
+            raise ValueError("Corrupt stuck-pr entry")
+        if not isinstance(entry["number"], int) or isinstance(entry["number"], bool) or not isinstance(entry["head"], str):
+            raise ValueError("Corrupt stuck-pr entry")
+        key = (entry["number"], entry["head"])
+        if key in entry_keys:
+            raise ValueError("Conflicting duplicate stuck-pr entry")
+        entry_keys.add(key)
+    if any(not isinstance(key, str) for key in state["history"]):
+        raise ValueError("Corrupt stuck-pr history")
     if state.get("last_run_at"):
         instant(state["last_run_at"])
     return state
@@ -354,7 +378,9 @@ def run(api, now, **kwargs):
         payload = {"schema": 2, "last_run_at": stamp, "entries": public_entries, "history": history_payload}
         lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n"]
         def visible(value): return quoted(value)
-        lines += [f"- #{e['number']}: {visible(e['classification'])}; {', '.join(visible(reason) for reason in e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if e['repeat_failure'] == 'unknown' else ('yes' if e['repeat_failure'] else 'no')}" for e in sorted(selected, key=lambda e: e["number"])]
+        def label(value, fallback="unknown"):
+            return visible(fallback if value is None else value)
+        lines += [f"- #{e['number']}: {visible(e['classification'])}; {', '.join(visible(reason) for reason in e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if e['repeat_failure'] == 'unknown' else ('yes' if e['repeat_failure'] else 'no')}; signals=auto-merge={'on' if e['auto_merge'] else 'off'}, mergeable={label(e['mergeable'])}, review={label(e['review_decision'])}, Draft={'yes' if e['draft'] else 'no'}, unresolved={e['unresolved_threads']}, GTT={'present' if e['gtt_present'] else 'absent'}, stale={'yes' if e['stale'] else 'no'}, exception={'yes' if e['exception'] else 'no'}" for e in sorted(selected, key=lambda e: e["number"])]
         if closed:
             lines.append("No open stuck PRs.")
         return "\n".join(lines) + "\n"
@@ -394,6 +420,11 @@ def run(api, now, **kwargs):
             raise ValueError("Summary entry exceeds GitHub limit")
         bodies.append(body)
 
+    # History-only parts cannot be created without an entry-bearing scan.  Do
+    # not publish a partial reconciliation that would silently lose history.
+    if not entries and summaries and len(bodies) > len(summaries):
+        raise ValueError("Existing summary parts cannot hold all history")
+
     # Existing parts are ordered by creation/number. Reconcile every part:
     # reuse and update active slots, create only missing slots, then clear and
     # close surplus slots. No old state remains readable in a surplus issue.
@@ -409,7 +440,8 @@ def run(api, now, **kwargs):
             api.rest("POST", "issues", {"title": TITLE, "body": body, **assignee})
     for issue in summaries[len(bodies):]:
         empty = render([], [], closed=True)
-        api.rest("PATCH", f"issues/{issue['number']}", {"state": "closed", "body": empty, **assignee})
+        if issue.get("state") != "closed" or issue.get("body") != empty:
+            api.rest("PATCH", f"issues/{issue['number']}", {"state": "closed", "body": empty, **assignee})
     for number, comment in pending_comments:
         api.rest("POST", f"issues/{number}/comments", {"body": comment})
     print(f"[stuck-pr-bot] scanned open PRs; {len(entries)} summary entries; {len(actionable)} actionable")

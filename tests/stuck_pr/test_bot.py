@@ -29,15 +29,22 @@ def pr(*, age=4, contexts=None, head=HEAD, draft=False, state="OPEN", **extra):
     data.update(extra); return data
 
 
-def item(body, number=99, state="open", login=bot.BOT):
+def item(body, number=99, state="open", login=bot.BOT, created_at=None):
     return {"body": body, "number": number, "state": state, "title": bot.TITLE,
+            **({"created_at": created_at} if created_at else {}),
             "user": {"type": "Bot", "login": login}}
+
+
+def state_item(state, number=99, status="open"):
+    body = bot.SUMMARY + "\n" + bot.STATE + bot.state_json(state) + "\n-->\n"
+    return item(body, number=number, state=status)
 
 
 class FakeAPI:
     def __init__(self, prs=None, issues=None, comments=None):
         self.prs = {1: pr(contexts=[check()])} if prs is None else prs
         self.issues = [] if issues is None else issues; self.comments = {} if comments is None else comments
+        self.next_issue = max((issue["number"] for issue in self.issues), default=98) + 1
         self.writes, self.reads, self.refresh = [], [], {}
 
     def pages(self, suffix):
@@ -58,7 +65,10 @@ class FakeAPI:
         self.writes.append((method, suffix, body))
         if suffix.endswith("/comments"):
             self.comments.setdefault(int(suffix.split("/")[1]), []).append(item(body["body"]))
-        elif suffix == "issues": self.issues.append(item(body["body"]))
+        elif suffix == "issues":
+            number = self.next_issue; self.next_issue += 1
+            created_at = (dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc) + dt.timedelta(seconds=number)).isoformat().replace("+00:00", "Z")
+            self.issues.append(item(body["body"], number=number, created_at=created_at))
         elif suffix.startswith("issues/"):
             number = int(suffix.split("/")[1])
             for issue in self.issues:
@@ -202,7 +212,72 @@ class ReconciliationTests(unittest.TestCase):
         bot.run(api, NOW)
         bodies = [payload["body"] for _, path, payload in api.writes if path == "issues"]
         self.assertTrue(any("- #500" in body for body in bodies))
-        self.assertTrue(all(len(body) < 65536 for body in bodies))
+        self.assertTrue(all(len(body.encode("utf-8")) < 65536 for body in bodies))
+        state = bot.read_state(api.issues)
+        self.assertEqual(500, len(state["entries"]))
+        self.assertEqual(500, len(state["history"]))
+        self.assertTrue(all(set(entry) == {"number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure"} for entry in state["entries"]))
+
+    def test_summary_rows_keep_all_signal_labels_visible(self):
+        api = FakeAPI(prs={1: pr(age=24 * 15, autoMergeRequest=None, mergeable="CONFLICTING",
+                                 mergeStateStatus="DIRTY", reviewDecision="CHANGES_REQUESTED",
+                                 draft=True, gtt_present=True)})
+        bot.run(api, NOW)
+        body = next(payload["body"] for _, path, payload in api.writes if path == "issues")
+        for label in ("auto-merge=off", "mergeable=CONFLICTING", r"review=CHANGES\_REQUESTED",
+                      "Draft=yes", "unresolved=0", "GTT=present", "stale=yes", "exception=no"):
+            self.assertIn(label, body)
+
+    def test_read_state_rejects_duplicate_entry_and_history_across_shards(self):
+        entry = {"number": 1, "head": HEAD}
+        base = {"schema": 2, "last_run_at": None, "entries": [entry], "history": {}}
+        with self.assertRaises(ValueError):
+            bot.read_state([state_item(base, 10), state_item(base, 11)])
+        history = {"1:" + HEAD: {"seen_failed": True}}
+        first = {"schema": 2, "last_run_at": None, "entries": [], "history": history}
+        with self.assertRaises(ValueError):
+            bot.read_state([state_item(first, 10), state_item(first, 11)])
+
+    def test_single_oversized_history_record_fails_before_writes(self):
+        history = {"1:" + HEAD: {"seen_failed": True, "last_required_state": "failed",
+                                   "latest_failed_attempt_ids": ["1"],
+                                   "recovery_seen_at": "x" * 70000, "recurrent": True}}
+        state = {"schema": 2, "last_run_at": None, "entries": [], "history": history}
+        api = FakeAPI(prs={1: pr(contexts=[check()])}, issues=[state_item(state)])
+        with self.assertRaises(ValueError):
+            bot.run(api, NOW)
+        self.assertEqual([], api.writes)
+
+    def test_more_than_twenty_shards_fails_before_writes(self):
+        history = {}
+        prs = {}
+        for number in range(1, 22):
+            head = format(number, "040x")
+            key = f"{number}:{head}"
+            history[key] = {"seen_failed": True, "last_required_state": "failed",
+                            "latest_failed_attempt_ids": [str(number)],
+                            "recovery_seen_at": "x" * 33000, "recurrent": True}
+            prs[number] = pr(head=head, contexts=[check(attempt=number)])
+        state = {"schema": 2, "last_run_at": None, "entries": [], "history": history}
+        api = FakeAPI(prs=prs, issues=[state_item(state)])
+        with self.assertRaises(ValueError):
+            bot.run(api, NOW)
+        self.assertEqual([], api.writes)
+
+    def test_cross_shard_failure_recovery_failure_preserves_recurrence(self):
+        api = FakeAPI(prs={i: pr(contexts=[check(attempt=1, name=str(i) + "[" * 180)]) for i in range(1, 501)})
+        bot.run(api, NOW)
+        api.writes.clear()
+        for value in api.prs.values(): value["contexts"] = []
+        bot.run(api, NOW + dt.timedelta(hours=1))
+        api.writes.clear()
+        for number, value in api.prs.items(): value["contexts"] = [check(attempt=2, name=str(number) + "[" * 180)]
+        bot.run(api, NOW + dt.timedelta(hours=2))
+        state = bot.read_state(api.issues)
+        self.assertEqual(500, len(state["entries"]))
+        self.assertEqual(500, len(state["history"]))
+        self.assertTrue(all(entry["repeat_failure"] for entry in state["entries"]))
+        self.assertTrue(all(record["recurrent"] for record in state["history"].values()))
 
     def test_partitioned_summaries_are_reused_then_surplus_parts_closed(self):
         api = FakeAPI(prs={i: pr(contexts=[check(name=str(i) + "[" * 180)]) for i in range(1, 501)})
@@ -210,6 +285,10 @@ class ReconciliationTests(unittest.TestCase):
         created = [write for write in api.writes if write[0] == "POST" and write[1] == "issues"]
         self.assertGreater(len(created), 1)
         part_count = len(api.issues)
+
+        api.writes.clear()
+        bot.run(api, NOW)
+        self.assertEqual([], api.writes)
 
         api.writes.clear()
         api.prs = {1: api.prs[1]}
@@ -221,12 +300,18 @@ class ReconciliationTests(unittest.TestCase):
         for update in updates[1:]:
             self.assertEqual("closed", update["state"])
             self.assertIn('"entries":[]', update["body"])
+        state = bot.read_state(api.issues)
+        self.assertEqual(1, len(state["entries"]))
+        self.assertEqual(1, len(state["history"]))
 
         api.writes.clear()
         api.prs = {}
         bot.run(api, NOW + dt.timedelta(hours=2))
         self.assertFalse(any(method == "POST" for method, _, _ in api.writes))
         self.assertTrue(all(payload["state"] == "closed" for method, _, payload in api.writes if method == "PATCH"))
+        api.writes.clear()
+        bot.run(api, NOW + dt.timedelta(hours=2))
+        self.assertEqual([], api.writes)
 
     def test_latest_attempt_app_and_optional_status_contexts(self):
         contexts = [check(attempt=1, app=1), check(attempt=2, app=1, conclusion="SUCCESS"), check(attempt=1, app=2)]
