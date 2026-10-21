@@ -1,8 +1,6 @@
 name: stuck-PR bot
 
 on:
-  schedule:
-    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -18,3 +16,12 @@ jobs:
     with:
       failure-hours: 2
       open-hours: 24
+      stale-days: 14
+      draft-days: 7
+      auto-merge-grace-minutes: 30
+      thread-hours: 24
+      mention-allowlist: LeePepe
+      summary-assignee: LeePepe
+      # Pick a unique pair of minutes for each consumer, such as 7,37.
+      exclude-prs: ''
+      auto-merge-exempt-prs: ''

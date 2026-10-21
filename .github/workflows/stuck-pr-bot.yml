@@ -3,26 +3,28 @@ name: stuck-PR bot
 on:
   workflow_call:
     inputs:
-      failure-hours:
-        description: Hours since the earliest current failed required check completed on the exact head.
-        type: number
-        default: 2
-      open-hours:
-        description: Report a PR open longer than this many hours.
-        type: number
-        default: 24
+      failure-hours: {type: number, default: 2}
+      open-hours: {type: number, default: 24}
+      stale-days: {type: number, default: 14}
+      draft-days: {type: number, default: 7}
+      auto-merge-grace-minutes: {type: number, default: 30}
+      thread-hours: {type: number, default: 24}
+      mention-allowlist: {type: string, default: ''}
+      summary-assignee: {type: string, default: ''}
+      exclude-prs: {type: string, default: ''}
+      auto-merge-exempt-prs: {type: string, default: ''}
   workflow_dispatch:
     inputs:
-      failure-hours:
-        description: Hours since the earliest current failed required check completed on the exact head.
-        type: number
-        default: 2
-      open-hours:
-        description: Report a PR open longer than this many hours.
-        type: number
-        default: 24
-  schedule:
-    - cron: '17 * * * *'
+      failure-hours: {type: number, default: 2}
+      open-hours: {type: number, default: 24}
+      stale-days: {type: number, default: 14}
+      draft-days: {type: number, default: 7}
+      auto-merge-grace-minutes: {type: number, default: 30}
+      thread-hours: {type: number, default: 24}
+      mention-allowlist: {type: string, default: ''}
+      summary-assignee: {type: string, default: ''}
+      exclude-prs: {type: string, default: ''}
+      auto-merge-exempt-prs: {type: string, default: ''}
 
 permissions:
   pull-requests: write
@@ -59,4 +61,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           FAILURE_HOURS: ${{ inputs.failure-hours }}
           OPEN_HOURS: ${{ inputs.open-hours }}
+          STALE_DAYS: ${{ inputs.stale-days }}
+          DRAFT_DAYS: ${{ inputs.draft-days }}
+          AUTO_MERGE_GRACE_MINUTES: ${{ inputs.auto-merge-grace-minutes }}
+          THREAD_HOURS: ${{ inputs.thread-hours }}
+          MENTION_ALLOWLIST: ${{ inputs.mention-allowlist }}
+          SUMMARY_ASSIGNEE: ${{ inputs.summary-assignee }}
+          EXCLUDE_PRS: ${{ inputs.exclude-prs }}
+          AUTO_MERGE_EXEMPT_PRS: ${{ inputs.auto-merge-exempt-prs }}
         run: python3 -I -B .shared-ci/scripts/stuck_pr/bot.py

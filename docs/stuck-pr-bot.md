@@ -1,81 +1,42 @@
 # Stuck-PR bot
 
-The [reusable workflow](../.github/workflows/stuck-pr-bot.yml) reports non-Draft
-open PRs in the **calling repository**. It runs hourly at minute 17 and supports
-manual dispatch. Consumers copy the [caller template](../templates/stuck-pr-bot.yml),
-replace its placeholder with the delivered full provider SHA and coordinate that
-pin with their other shared-ci references. Keep the hourly schedule and manual
-trigger in the caller; reusable workflows do not install caller schedules.
+The reusable workflow reports PR signals in the calling repository. It supports
+`workflow_call` and `workflow_dispatch`; the reusable provider deliberately has
+no schedule. Consumers own a unique, staggered schedule in their caller (for
+example `7,37 * * * *`) and pin the provider by its full SHA.
 
-| Input | Default | Meaning |
-| --- | --- | --- |
-| `failure-hours` | `2` | Minimum hours since the earliest current failed required check completed on the exact head |
-| `open-hours` | `24` | Report a PR open longer than this many hours, independently of check state |
+Inputs are finite positive numbers unless noted: `failure-hours` (2),
+`open-hours` (24), `stale-days` (14), `draft-days` (7),
+`auto-merge-grace-minutes` (30), and `thread-hours` (24). String inputs are
+`mention-allowlist` (empty), `summary-assignee` (empty), `exclude-prs` (empty),
+and `auto-merge-exempt-prs` (empty). PR lists are comma-separated positive
+integers. An excluded PR is removed before detail queries, comments, summary,
+and persisted state. An exempt PR is exempt only from missing-auto-merge and
+behind-branch reasons.
 
-Both inputs must be finite positive numbers; fractional hours are supported.
-Invalid inputs fail before API access or writes. Scheduled provider runs use the
-same defaults. No secret inputs or inherited secrets are needed. Only the
-calling repository's `GITHUB_TOKEN` is used, with exactly `pull-requests: write`,
-`issues: write`, `checks: read` and `contents: read`. The token reads PRs and
-checks and writes only issue/PR comments and the bot's summary issue. The bot
-never modifies code, PR metadata or labels, repairs, reruns checks, approves,
-changes auto-merge or merges. Required checks remain unchanged.
+The bot classifies required check failures, merge conflicts, requested changes,
+behind branches without auto-merge, and missing auto-merge after its grace
+period as actionable. Drafts always remain summary-only; stale PRs, old Drafts,
+pure waiting older than `open-hours`, old unresolved non-outdated threads,
+manual review requests, and the `owner-review` signal are summary-only. Age
+adds context and never independently causes a PR comment. Unknown merge state
+is not treated as a conflict.
 
-The runner checks out only the reusable workflow's own provider at
-`job.workflow_sha`, with persisted credentials disabled. It never checks out or
-executes PR code. Repository concurrency serializes overlapping report runs.
+Only the PR author is eligible for a mention, and only when their login is in
+`mention-allowlist`; all untrusted text is quoted and neutralized. GTT markers
+are reduced to `present` or `absent` and identifiers are never copied into
+public reports. The bot does not change labels, repair, rerun, approve, alter
+auto-merge, or merge.
 
-## Detection and evidence
+The summary issue is bot-owned and titled `[stuck-PR bot] open stuck PRs`.
+Every successful full scan writes `last_run_at` in UTC and a versioned
+`stuck-pr-bot:state:v2` JSON comment containing current entries and history.
+Actionable entries receive one v1 head-marked PR comment; repeat failures update
+the summary only. Summary-only entries keep the issue open without PR comments.
+An empty result closes an existing bot-owned summary. API or reconciliation
+failure fails the run and never publishes a partial result.
 
-The GraphQL query reads the PR's exact head commit and all status-rollup pages.
-GitHub's `isRequired(pullRequestNumber: ...)` identifies required checks without
-an admin ruleset/protection read. For check runs, the latest attempt per name and
-app wins; legacy status contexts use their latest creation time. Failed,
-timed-out, cancelled, action-required, startup-failed or stale required checks
-count as failure. Optional failures, pending checks, success, skipped and neutral
-checks do not trigger the failure condition. Age can independently trigger a
-report even if checks are healthy or absent.
-
-The failure clock starts at the earliest completion time among the current
-failed required checks on the exact head. Check runs use `completedAt`; legacy
-commit statuses use the failed status event's `createdAt`. A report is due when
-that timestamp is at least `failure-hours` old. Comments and other PR activity
-never reset the clock. The report includes this timestamp and elapsed hours;
-it does not claim an exact push time or use PR activity/commit author dates.
-Missing completion evidence for a current failed required check fails the run.
-
-A new head is evaluated using its own checks and completion times. A rerun's
-latest attempt replaces the previous attempt; recovered checks no longer count.
-Already reported heads receive no duplicate comment. The 24-hour age condition
-remains independent of check completion and all other activity.
-
-Before publishing, the bot refreshes head, draft/open state and checks. A changed
-head, newly Draft/closed/merged PR or recovered PR gets no stale report. A head
-change during pagination fails the run. API errors fail rather than count as
-healthy observations; the read phase finishes before any writes. The next
-scheduled run can observe a stable state. Check names are escaped as data and
-mentions are neutralized.
-
-## Reports and recovery
-
-Each PR report includes the head, failed required checks, elapsed hours and
-“Bot 不会修”. A hidden head marker in a `github-actions[bot]` comment makes it
-idempotent: the same head is commented on once, even across reruns or recovery
-and recurrence. Another author cannot suppress a report by copying its marker.
-Comment and issue lists are fully paginated.
-Exceptionally large failed-check lists are bounded to fit GitHub's comment body
-limit, with an explicit remaining count and direction to the PR's checks tab.
-
-The bot creates or updates its own issue titled
-`[stuck-PR bot] open stuck PRs`, listing every PR detected as stuck during the
-run as a compact PR-number list; check and wait details remain in PR comments.
-It updates only issues with its own author and summary marker, reuses a
-closed summary on recurrence, and closes it when no stuck PR remains. A healthy
-repository with no existing summary gets no write. API failures are surfaced as
-a failed Actions run; an interrupted publication is reconciled by the next run.
-
-Local behavior/API-fixture tests run through `scripts/verify`. They cover report
-decisions (including recent comments after old failures), completion thresholds,
-pagination, deduplication, latest check attempts, new heads, race avoidance,
-summary creation/update/closure/reopening and write boundaries. They do not
-establish real caller enablement or the separate live stuck-PR acceptance.
+The workflow checks out only the selected provider revision and never checks
+out or executes PR code. It uses only the calling repository token with
+`pull-requests: write`, `issues: write`, `checks: read`, and `contents: read`.
+Offline behavior and workflow-contract tests run through `scripts/verify`.

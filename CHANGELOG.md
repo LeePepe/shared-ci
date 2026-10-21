@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased — planned v0.7.3
+## Unreleased — planned v0.8.0
+
+### Changed
+
+- Stuck-PR reporting now classifies actionable signals, records versioned
+  summary state, supports exclusions and allowlisted mentions, and leaves
+  scheduling to callers rather than the reusable provider.
+
+## [v0.7.3](https://github.com/LeePepe/shared-ci/releases/tag/v0.7.3) — 2026-10-20
 
 ### Changed
 
