@@ -259,26 +259,9 @@ def owned(item, marker):
 
 
 def read_state(summary):
+    """Read exactly one summary issue; old shards are deliberately not merged."""
     if isinstance(summary, list):
-        merged = {"schema": 2, "last_run_at": None, "entries": [], "history": {}}
-        entry_by_key, history_by_key = {}, {}
-        for item in summary:
-            state = read_state(item)
-            for entry in state["entries"]:
-                key = (entry["number"], entry["head"])
-                previous = entry_by_key.get(key)
-                if previous is not None and previous != entry:
-                    raise ValueError("Conflicting duplicate stuck-pr entry")
-                entry_by_key[key] = entry
-            for key, value in state["history"].items():
-                previous = history_by_key.get(key)
-                if previous is not None and previous != value:
-                    raise ValueError("Conflicting duplicate stuck-pr history")
-                history_by_key[key] = value
-            merged["last_run_at"] = max(filter(None, (merged["last_run_at"], state.get("last_run_at"))), default=None)
-        merged["entries"] = list(entry_by_key.values())
-        merged["history"] = history_by_key
-        return merged
+        raise ValueError("Multiple stuck-pr summaries are not supported")
     if not isinstance(summary, dict):
         raise ValueError("Corrupt stuck-pr state")
     body = summary.get("body", "")
@@ -308,6 +291,10 @@ def read_state(summary):
         raise ValueError("Corrupt stuck-pr history")
     if state.get("last_run_at"):
         instant(state["last_run_at"])
+    if "truncated" in state and not isinstance(state["truncated"], bool):
+        raise ValueError("Corrupt stuck-pr truncation flag")
+    if "omitted" in state and (not isinstance(state["omitted"], int) or isinstance(state["omitted"], bool) or state["omitted"] < 0):
+        raise ValueError("Corrupt stuck-pr omitted count")
     return state
 
 
@@ -345,7 +332,8 @@ def run(api, now, **kwargs):
         if entry: entries.append(entry)
     summaries = [item for item in api.pages("issues?state=all&creator=" + BOT) if "pull_request" not in item and owned(item, SUMMARY) and item["title"] == TITLE]
     summaries.sort(key=lambda item: (item.get("created_at", ""), item.get("number", 0)))
-    previous = read_state(summaries) if summaries else {"history": {}}
+    summary = summaries[0] if summaries else None
+    previous = read_state(summary) if summary else {"history": {}}
     history = state_history(previous, observed)
     history = {key: value for key, value in history.items() if key in observed}
     for entry in entries:
@@ -371,144 +359,100 @@ def run(api, now, **kwargs):
     entries = refreshed
     actionable = [entry for entry in entries if entry["classification"] == "actionable"]
     state_fields = ("number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure")
-    def render(selected, selected_history=None, closed=False, history_source=None):
+    def render(selected, state_entries=None, state_history=None, omitted=0, closed=False):
         selected = sorted(selected, key=lambda e: e["number"])
-        public_entries = [{key: entry.get(key) for key in state_fields} for entry in selected]
-        selected_keys = ({f"{entry['number']}:{entry['head']}" for entry in selected}
-                         if selected_history is None else set(selected_history))
-        source = history if history_source is None else history_source
-        history_payload = {key: source[key] for key in sorted(selected_keys) if key in source}
-        payload = {"schema": 2, "last_run_at": stamp, "entries": public_entries, "history": history_payload}
-        lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n"]
+        state_entries = state_entries or []
+        state_history = state_history or {}
+        payload = {"schema": 2, "last_run_at": stamp, "entries": state_entries, "history": state_history}
+        if omitted:
+            payload["truncated"], payload["omitted"] = True, omitted
+        lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n", "Legend: am=auto-merge, m=mergeable, rv=review, d=Draft, u=unresolved, g=GTT, st=stale, ex=auto-merge-exempt.\n"]
         def visible(value): return quoted(value)
         def label(value, fallback="unknown"):
             return visible(fallback if value is None else value)
-        lines += [f"- #{e['number']}: {visible(e['classification'])}; {', '.join(visible(reason) for reason in e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if e['repeat_failure'] == 'unknown' else ('yes' if e['repeat_failure'] else 'no')}; signals=auto-merge={'on' if e['auto_merge'] else 'off'}, mergeable={label(e['mergeable'])}, review={label(e['review_decision'])}, Draft={'yes' if e['draft'] else 'no'}, unresolved={e['unresolved_threads']}, GTT={'present' if e['gtt_present'] else 'absent'}, stale={'yes' if e['stale'] else 'no'}, exception={'yes' if e['exception'] else 'no'}" for e in sorted(selected, key=lambda e: e["number"])]
+        state_keys = {entry["number"] for entry in state_entries}
+        rows = []
+        reason_codes = {
+            "required checks failed": "checks",
+            "auto-merge is not enabled": "auto-merge",
+            "merge conflict": "conflict",
+            "changes requested": "review",
+            "branch is behind main": "behind",
+            "stale": "stale",
+            "Draft open too long": "draft-age",
+            "open for": "open-age",
+            "unresolved discussion": "threads",
+            "manual review requested": "review-request",
+            "owner-review label remains": "owner-review",
+            "merge state unknown": "unknown-merge",
+        }
+        def compact_reasons(values):
+            compact = []
+            for reason in values:
+                code = next((value for prefix, value in reason_codes.items() if reason.startswith(prefix)), quoted(reason))
+                if code not in compact: compact.append(code)
+            return ",".join(compact) or "none"
+        for e in sorted(selected, key=lambda e: e["number"]):
+            repeat = e["repeat_failure"] if e["number"] in state_keys else "unknown"
+            rows.append(f"- #{e['number']}: {visible(e['classification'])}; why={compact_reasons(e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if repeat == 'unknown' else ('yes' if repeat else 'no')}; am={'on' if e['auto_merge'] else 'off'}, m={label(e['mergeable'])}, rv={label(e['review_decision'])}, d={'yes' if e['draft'] else 'no'}, u={e['unresolved_threads']}, g={'present' if e['gtt_present'] else 'absent'}, st={'yes' if e['stale'] else 'no'}, ex={'yes' if e['exception'] else 'no'}")
+        lines += rows
+        if omitted:
+            lines.append(f"State coverage is truncated: {omitted} PR state record(s) omitted; recurrence for omitted entries is unknown and machine state is a lower bound.")
         if closed:
             lines.append("No open stuck PRs.")
         return "\n".join(lines) + "\n"
-    # Partition by PR number, keeping each entry and its matching history together.
-    # History-only records are included so a recovery is not lost when a PR stops
-    # being visible.  All bodies are rendered and checked before any write.
-    record_keys = sorted(set(history) | {f"{entry['number']}:{entry['head']}" for entry in entries},
-                         key=lambda key: (int(key.split(":", 1)[0]), key))
-    entries_by_key = {f"{entry['number']}:{entry['head']}": entry for entry in entries}
-    chunks, current_keys = [], []
-    for key in record_keys:
-        candidate_keys = current_keys + [key]
-        candidate_entries = [entries_by_key[item] for item in candidate_keys if item in entries_by_key]
-        candidate = render(candidate_entries, candidate_keys, closed=not entries)
-        split = False
-        if current_keys and len(candidate.encode("utf-8")) >= 65536:
-            chunks.append(current_keys)
-            current_keys = [key]
-            split = True
-            candidate_entries = [entries_by_key[key]] if key in entries_by_key else []
-            candidate = render(candidate_entries, current_keys, closed=not entries)
-        if not current_keys and len(candidate.encode("utf-8")) >= 65536:
-            raise ValueError("Summary entry exceeds GitHub limit")
-        if not split:
-            current_keys = candidate_keys
-    if current_keys:
-        chunks.append(current_keys)
-    if not record_keys and entries:
-        chunks = [[]]
-    if len(chunks) > 20:
-        raise ValueError("Summary requires more than 20 parts")
-    bodies = []
-    for keys in chunks:
-        selected = [entries_by_key[key] for key in keys if key in entries_by_key]
-        body = render(selected, keys, closed=not entries)
-        if len(body.encode("utf-8")) >= 65536:
-            raise ValueError("Summary entry exceeds GitHub limit")
-        bodies.append(body)
-
-    # History-only parts cannot be created without an entry-bearing scan.  Do
-    # not publish a partial reconciliation that would silently lose history.
-    if not entries and summaries and len(bodies) > len(summaries):
-        raise ValueError("Existing summary parts cannot hold all history")
-
-    # Publish in recoverable phases. First normalize every existing shard in
-    # place while retaining its old records. Then install destination bodies
-    # that add moved records before bodies that remove them. An interruption
-    # between those phases leaves only identical duplicate records, which the
-    # reader can safely deduplicate. Surplus cleanup is last.
+    # The visible list is complete. Only the machine state is budgeted, with
+    # actionable/current rows taking priority over history-only records.
+    entries = sorted(entries, key=lambda e: (e["classification"] != "actionable", e["number"], e["head"]))
+    entry_payloads = [{key: entry.get(key) for key in state_fields} for entry in entries]
+    entry_key = lambda e: f"{e['number']}:{e['head']}"
+    history_keys = sorted(history, key=lambda key: (int(key.split(":", 1)[0]), key))
+    selected_entries, selected_history = [], {}
+    omitted = 0
+    for entry in entry_payloads:
+        if len(render([], [entry], {}).encode("utf-8")) >= 65536:
+            raise ValueError("Single state record exceeds GitHub limit")
+    for key in history_keys:
+        if len(render([], [], {key: history[key]}).encode("utf-8")) >= 65536:
+            raise ValueError("Single state record exceeds GitHub limit")
+    for entry in entry_payloads:
+        candidate = selected_entries + [entry]
+        candidate_keys = {entry_key(e): e for e in candidate}
+        candidate_history = {key: history[key] for key in sorted(candidate_keys) if key in history}
+        test = render(entries, candidate, candidate_history, len(entry_payloads) - len(candidate))
+        if len(test.encode("utf-8")) >= 65536:
+            omitted = len(entry_payloads) - len(selected_entries)
+            break
+        selected_entries = candidate
+        selected_history = candidate_history
+    else:
+        for key in history_keys:
+            if key in selected_history: continue
+            candidate_history = dict(selected_history); candidate_history[key] = history[key]
+            test = render(entries, selected_entries, {k: candidate_history[k] for k in sorted(candidate_history)}, 0)
+            if len(test.encode("utf-8")) >= 65536:
+                omitted = len(history_keys) - len(selected_history)
+                break
+            selected_history = candidate_history
+    if omitted:
+        # omitted counts all records not represented in machine state; rows
+        # are still complete and are deliberately rendered with repeat=unknown.
+        represented = {e["number"] for e in selected_entries}
+        omitted = len(entry_payloads) - len(represented) + max(0, len(history) - len(selected_history))
+    body = render(entries, selected_entries, {k: selected_history[k] for k in sorted(selected_history)}, omitted, closed=not entries)
+    if len(body.encode("utf-8")) >= 65536:
+        raise ValueError("Summary body exceeds GitHub limit")
+    # Validate every pending comment before the first write.
+    if any(len(comment.encode("utf-8")) >= 65536 for _, comment in pending_comments):
+        raise ValueError("Comment exceeds GitHub limit")
     assignee = {"assignees": [options["summary_assignee"]]} if options["summary_assignee"] else {}
-    summary_states = [read_state(issue) for issue in summaries]
-    desired_entry_keys = set(entries_by_key)
-    desired_keysets = [set(keys) for keys in chunks]
-    old_keysets = []
-    old_entries_by_issue, old_history_by_issue = [], []
-    for issue, state in zip(summaries, summary_states):
-        old_entries = {f"{entry['number']}:{entry['head']}": entry for entry in state["entries"]}
-        old_keys = set(old_entries) | set(state["history"])
-        old_keysets.append(old_keys)
-        old_entries_by_issue.append(old_entries)
-        old_history_by_issue.append(state["history"])
-
-    old_locations = {}
-    for index, keys in enumerate(old_keysets):
-        for key in keys:
-            old_locations.setdefault(key, set()).add(index)
-    desired_locations = {}
-    for index, keys in enumerate(desired_keysets):
-        for key in keys:
-            desired_locations.setdefault(key, set()).add(index)
-    moved_keys = {key for key in desired_locations
-                  if old_locations.get(key, set()) and old_locations[key] != desired_locations[key]}
-    partition_changed = bool(moved_keys)
-    if partition_changed:
-        canonical_bodies = []
-        for old_entries, old_history, old_keys in zip(old_entries_by_issue, old_history_by_issue, old_keysets):
-            # Entries that are no longer current remain represented by their
-            # history key; retaining their old entry payload would make a
-            # near-limit shard needlessly larger during recovery.
-            canonical_entries = [old_entries[key] for key in sorted(old_entries)
-                                 if key in desired_entry_keys and key not in moved_keys]
-            canonical_history = {key: history[key] if key in moved_keys and key in history else old_history[key]
-                                 for key in old_keys}
-            canonical = render(canonical_entries, sorted(old_keys), closed=not entries,
-                               history_source=canonical_history)
-            if len(canonical.encode("utf-8")) >= 65536:
-                # History is the durable recovery record. If retaining old
-                # entry rows would overflow a source shard, drop those rows
-                # in phase one and recreate them in the destination phase.
-                # Moved keys are omitted as a last-resort source shrink; the
-                # next retry reconstructs them from the current observation.
-                retained_keys = sorted(old_keys - moved_keys)
-                retained_entries = [old_entries[key] for key in retained_keys
-                                    if key in old_entries and key in desired_entry_keys]
-                retained_history = {key: canonical_history[key] for key in retained_keys}
-                canonical = render(retained_entries, retained_keys, closed=not entries,
-                                   history_source=retained_history)
-            if len(canonical.encode("utf-8")) >= 65536:
-                raise ValueError("Existing summary shard exceeds GitHub limit during recovery")
-            canonical_bodies.append(canonical)
-        for issue, body in zip(summaries, canonical_bodies):
-            if issue.get("body") != body or assignee:
-                api.rest("PATCH", f"issues/{issue['number']}", {"body": body, **assignee})
-
-    def destination_order(index):
-        old = old_keysets[index] if index < len(old_keysets) else set()
-        desired = desired_keysets[index]
-        # Pure additions are copies; perform them before any destination that
-        # removes a key. Stable order keeps issue creation/order semantics.
-        return (bool(old - desired), index)
-
     desired_state = "open" if entries else "closed"
-    for index in sorted(range(len(bodies)), key=destination_order):
-        body = bodies[index]
-        if index < len(summaries):
-            issue = summaries[index]
-            update = {"state": desired_state, "body": body, **assignee}
-            if issue.get("state") != desired_state or issue.get("body") != body or assignee:
-                api.rest("PATCH", f"issues/{issue['number']}", update)
-        elif entries:
-            api.rest("POST", "issues", {"title": TITLE, "body": body, **assignee})
-    for issue in summaries[len(bodies):]:
-        empty = render([], [], closed=True)
-        if issue.get("state") != "closed" or issue.get("body") != empty:
-            api.rest("PATCH", f"issues/{issue['number']}", {"state": "closed", "body": empty, **assignee})
+    if summary:
+        update = {"state": desired_state, "body": body, **assignee}
+        if summary.get("state") != desired_state or summary.get("body") != body or assignee:
+            api.rest("PATCH", f"issues/{summary['number']}", update)
+    elif entries:
+        api.rest("POST", "issues", {"title": TITLE, "body": body, **assignee})
     for number, comment in pending_comments:
         api.rest("POST", f"issues/{number}/comments", {"body": comment})
     print(f"[stuck-pr-bot] scanned open PRs; {len(entries)} summary entries; {len(actionable)} actionable")

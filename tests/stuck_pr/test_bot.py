@@ -211,11 +211,14 @@ class ReconciliationTests(unittest.TestCase):
         api = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, 501)})
         bot.run(api, NOW)
         bodies = [payload["body"] for _, path, payload in api.writes if path == "issues"]
-        self.assertTrue(any("- #500" in body for body in bodies))
-        self.assertTrue(all(len(body.encode("utf-8")) < 65536 for body in bodies))
-        state = bot.read_state(api.issues)
-        self.assertEqual(500, len(state["entries"]))
-        self.assertEqual(500, len(state["history"]))
+        self.assertEqual(1, len(bodies))
+        self.assertIn("- #500", bodies[0])
+        self.assertEqual(500, bodies[0].count("\n- #"))
+        self.assertLess(len(bodies[0].encode("utf-8")), 65536)
+        state = bot.read_state(api.issues[0])
+        self.assertTrue(state.get("truncated"))
+        self.assertGreater(state.get("omitted", 0), 0)
+        self.assertLess(len(state["entries"]), 500)
         self.assertTrue(all(set(entry) == {"number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure"} for entry in state["entries"]))
 
     def test_summary_rows_keep_all_signal_labels_visible(self):
@@ -224,23 +227,16 @@ class ReconciliationTests(unittest.TestCase):
                                  draft=True, gtt_present=True)})
         bot.run(api, NOW)
         body = next(payload["body"] for _, path, payload in api.writes if path == "issues")
-        for label in ("auto-merge=off", "mergeable=CONFLICTING", r"review=CHANGES\_REQUESTED",
-                      "Draft=yes", "unresolved=0", "GTT=present", "stale=yes", "exception=no"):
+        self.assertIn("Legend: am=auto-merge, m=mergeable, rv=review, d=Draft, u=unresolved, g=GTT, st=stale, ex=auto-merge-exempt.", body)
+        for label in ("am=off", "m=CONFLICTING", r"rv=CHANGES\_REQUESTED",
+                      "d=yes", "u=0", "g=present", "st=yes", "ex=no"):
             self.assertIn(label, body)
 
-    def test_read_state_rejects_duplicate_entry_and_history_across_shards(self):
+    def test_read_state_rejects_multi_summary_state(self):
         entry = {"number": 1, "head": HEAD}
         base = {"schema": 2, "last_run_at": None, "entries": [entry], "history": {}}
-        self.assertEqual(1, len(bot.read_state([state_item(base, 10), state_item(base, 11)])["entries"]))
-        conflict = copy.deepcopy(base); conflict["entries"][0]["classification"] = "different"
         with self.assertRaises(ValueError):
-            bot.read_state([state_item(base, 10), state_item(conflict, 11)])
-        history = {"1:" + HEAD: {"seen_failed": True}}
-        first = {"schema": 2, "last_run_at": None, "entries": [], "history": history}
-        self.assertEqual(1, len(bot.read_state([state_item(first, 10), state_item(first, 11)])["history"]))
-        history_conflict = copy.deepcopy(first); history_conflict["history"]["1:" + HEAD] = {"seen_failed": False}
-        with self.assertRaises(ValueError):
-            bot.read_state([state_item(first, 10), state_item(history_conflict, 11)])
+            bot.read_state([state_item(base, 10), state_item(base, 11)])
 
     def test_single_oversized_history_record_fails_before_writes(self):
         history = {"1:" + HEAD: {"seen_failed": True, "last_required_state": "failed",
@@ -252,101 +248,37 @@ class ReconciliationTests(unittest.TestCase):
             bot.run(api, NOW)
         self.assertEqual([], api.writes)
 
-    def test_more_than_twenty_shards_fails_before_writes(self):
-        history = {}
-        prs = {}
-        for number in range(1, 22):
-            head = format(number, "040x")
-            key = f"{number}:{head}"
-            history[key] = {"seen_failed": True, "last_required_state": "failed",
-                            "latest_failed_attempt_ids": [str(number)],
-                            "recovery_seen_at": "x" * 33000, "recurrent": True}
-            prs[number] = pr(head=head, contexts=[check(attempt=number)])
-        state = {"schema": 2, "last_run_at": None, "entries": [], "history": history}
-        api = FakeAPI(prs=prs, issues=[state_item(state)])
-        with self.assertRaises(ValueError):
-            bot.run(api, NOW)
-        self.assertEqual([], api.writes)
-
-    def test_cross_shard_failure_recovery_failure_preserves_recurrence(self):
-        api = FakeAPI(prs={i: pr(contexts=[check(attempt=1, name=str(i) + "[" * 180)]) for i in range(1, 501)})
-        bot.run(api, NOW)
-        api.writes.clear()
-        for value in api.prs.values(): value["contexts"] = []
-        bot.run(api, NOW + dt.timedelta(hours=1))
-        api.writes.clear()
-        for number, value in api.prs.items(): value["contexts"] = [check(attempt=2, name=str(number) + "[" * 180)]
-        bot.run(api, NOW + dt.timedelta(hours=2))
-        state = bot.read_state(api.issues)
-        self.assertEqual(500, len(state["entries"]))
-        self.assertEqual(500, len(state["history"]))
-        self.assertTrue(all(entry["repeat_failure"] for entry in state["entries"]))
-        self.assertTrue(all(record["recurrent"] for record in state["history"].values()))
-
-    def test_partitioned_summaries_are_reused_then_surplus_parts_closed(self):
-        api = FakeAPI(prs={i: pr(contexts=[check(name=str(i) + "[" * 180)]) for i in range(1, 501)})
-        bot.run(api, NOW)
-        created = [write for write in api.writes if write[0] == "POST" and write[1] == "issues"]
-        self.assertGreater(len(created), 1)
-        part_count = len(api.issues)
-
-        api.writes.clear()
-        bot.run(api, NOW)
-        self.assertEqual([], api.writes)
-
-        api.writes.clear()
-        api.prs = {1: api.prs[1]}
-        bot.run(api, NOW + dt.timedelta(hours=1))
-        self.assertFalse(any(method == "POST" and path == "issues" for method, path, _ in api.writes))
-        self.assertEqual(part_count, sum(method == "PATCH" and path.startswith("issues/") for method, path, _ in api.writes))
-        updates = [payload for method, path, payload in api.writes if method == "PATCH" and path.startswith("issues/")]
-        self.assertEqual("open", updates[0]["state"])
-        for update in updates[1:]:
-            self.assertEqual("closed", update["state"])
-            self.assertIn('"entries":[]', update["body"])
-        state = bot.read_state(api.issues)
-        self.assertEqual(1, len(state["entries"]))
-        self.assertEqual(1, len(state["history"]))
-
-        api.writes.clear()
-        api.prs = {}
-        bot.run(api, NOW + dt.timedelta(hours=2))
-        self.assertFalse(any(method == "POST" for method, _, _ in api.writes))
-        self.assertTrue(all(payload["state"] == "closed" for method, _, payload in api.writes if method == "PATCH"))
-        api.writes.clear()
-        bot.run(api, NOW + dt.timedelta(hours=2))
-        self.assertEqual([], api.writes)
-
-    def test_repartition_patch_failure_recovers_on_retry_without_duplicate_comments(self):
-        class FailLaterShard(FakeAPI):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.fail_number = None
-                self.fail_once = False
-
+    def test_single_summary_interruption_has_zero_partial_writes(self):
+        class FailOnce(FakeAPI):
             def rest(self, method, suffix, body=None):
-                if (self.fail_once and method == "PATCH" and suffix == f"issues/{self.fail_number}"):
-                    self.fail_once = False
-                    raise ValueError("simulated later shard PATCH failure")
+                if method == "POST" and suffix == "issues":
+                    raise ValueError("simulated summary write failure")
                 return super().rest(method, suffix, body)
+        api = FailOnce(prs={1: pr(contexts=[check()])})
+        with self.assertRaises(ValueError): bot.run(api, NOW)
+        self.assertEqual([], api.writes)
 
-        api = FailLaterShard(prs={i: pr(contexts=[check(name=str(i) + "[" * 180)]) for i in range(1, 501)})
+    def test_truncated_rows_have_unknown_recurrence_and_old_shards_are_not_merged(self):
+        first = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, 501)})
+        bot.run(first, NOW)
+        first.writes.clear()
+        bot.run(first, NOW)
+        body = first.issues[0]["body"]
+        self.assertIn('"truncated":true', body)
+        self.assertIn("repeat=unknown", body)
+        self.assertEqual(1, len(first.issues))
+
+        old_shard = state_item({"schema": 2, "last_run_at": None,
+                                "entries": [{"number": 999, "head": "b" * 40}], "history": {}},
+                               number=1000)
+        old_shard["created_at"] = "2026-10-21T00:00:00Z"
+        canonical = state_item({"schema": 2, "last_run_at": None, "entries": [], "history": {}},
+                               number=1001)
+        canonical["created_at"] = "2026-10-20T00:00:00Z"
+        api = FakeAPI(prs={1: pr(contexts=[check()])}, issues=[old_shard, canonical])
         bot.run(api, NOW)
-        api.writes.clear()
-        api.prs = {1: api.prs[1]}
-        api.fail_number = api.issues[1]["number"]
-        api.fail_once = True
-        with self.assertRaises(ValueError):
-            bot.run(api, NOW + dt.timedelta(hours=1))
-        # The already-updated destination and untouched source shards remain
-        # readable; the retry is allowed to finish reconciliation.
-        bot.read_state(api.issues)
-        api.writes.clear()
-        bot.run(api, NOW + dt.timedelta(hours=1))
-        state = bot.read_state(api.issues)
-        self.assertEqual(1, len(state["entries"]))
-        self.assertEqual(1, len(state["history"]))
-        self.assertEqual(0, sum(path.endswith("/comments") for _, path, _ in api.writes))
+        self.assertEqual(1, sum(path == "issues/1001" for _, path, _ in api.writes))
+        self.assertFalse(any(path == "issues/1000" for _, path, _ in api.writes))
 
     def test_latest_attempt_app_and_optional_status_contexts(self):
         contexts = [check(attempt=1, app=1), check(attempt=2, app=1, conclusion="SUCCESS"), check(attempt=1, app=2)]
