@@ -228,6 +228,41 @@ class ReconciliationTests(unittest.TestCase):
         with self.assertRaises(ValueError): bot.run(api, NOW)
         self.assertEqual([], api.writes)
 
+    def test_101_reports_leave_existing_closed_summary_unchanged(self):
+        old_state = {"schema": 2, "last_run_at": "2026-10-19T12:00:00Z", "entries": [], "history": {}}
+        old_issue = state_item(old_state, status="closed")
+        old_issue["assignees"] = [{"login": "old-owner"}]
+        before = copy.deepcopy(old_issue)
+        api = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, bot.MAX_SUMMARY_PRS + 2)}, issues=[old_issue])
+        with self.assertRaises(ValueError): bot.run(api, NOW, summary_assignee="new-owner")
+        self.assertEqual([], api.writes)
+        self.assertEqual(before, api.issues[0])
+
+    def test_rest_duplicates_and_non_entries_do_not_consume_summary_cap(self):
+        prs = {i: pr(contexts=[check()]) for i in range(1, 101)}
+        prs.update({i: pr(age=1, contexts=[]) for i in range(101, 111)})
+        prs.update({i: pr(age=1, contexts=[]) for i in range(111, 116)})
+        prs.update({i: pr(state="CLOSED", contexts=[check()]) for i in range(116, 121)})
+
+        class DriftingOpenList(FakeAPI):
+            def pages(self, suffix):
+                if suffix == "pulls?state=open":
+                    rows = [{"number": i, "draft": self.prs[i]["isDraft"]} for i in range(1, 121)]
+                    rows.append({"number": 1, "draft": self.prs[1]["isDraft"]})
+                    return iter(rows)
+                return super().pages(suffix)
+
+        api = DriftingOpenList(prs=prs)
+        excluded = ",".join(str(i) for i in range(101, 111))
+        bot.run(api, NOW, exclude_prs=excluded)
+        body = next(payload["body"] for _, path, payload in api.writes if path == "issues")
+        state = bot.read_state(api.issues[0])
+        self.assertEqual(100, len(state["entries"]))
+        self.assertEqual(100, body.count("\n- #"))
+        self.assertNotIn("#111", body)
+        self.assertNotIn("#116", body)
+        self.assertEqual(100, sum(path.endswith("/comments") for _, path, _ in api.writes))
+
     def test_complete_state_byte_limit_fails_before_any_write(self):
         api = FakeAPI(prs={i: pr(mergeable="é" * 1000, contexts=[check()]) for i in range(1, bot.MAX_SUMMARY_PRS + 1)})
         with self.assertRaises(ValueError): bot.run(api, NOW)
@@ -274,6 +309,24 @@ class ReconciliationTests(unittest.TestCase):
         published = api.issues[0]["body"]
         self.assertNotIn('"truncated"', published)
         self.assertNotIn('"omitted"', published)
+        self.assertIn("repeat=unknown", published)
+        api.writes.clear()
+        bot.run(api, NOW + dt.timedelta(hours=1))
+        self.assertIn("repeat=unknown", api.issues[0]["body"])
+
+    def test_unknown_repeat_failure_persists_until_new_attempt_evidence(self):
+        marker = f"<!-- stuck-pr-bot:v1 head={HEAD} -->"
+        api = FakeAPI(prs={1: pr(contexts=[check(attempt=1)])}, comments={1: [item(marker)]})
+        bot.run(api, NOW)
+        api.writes.clear()
+        bot.run(api, NOW + dt.timedelta(hours=1))
+        body = api.issues[0]["body"]
+        self.assertIn("repeat=unknown", body)
+        self.assertEqual(0, sum(path.endswith("/comments") for _, path, _ in api.writes))
+        api.writes.clear()
+        api.prs[1]["contexts"] = [check(attempt=2)]
+        bot.run(api, NOW + dt.timedelta(hours=2))
+        self.assertIn('"repeat_failure":true', api.issues[0]["body"])
 
     def test_single_summary_interruption_has_zero_partial_writes(self):
         class FailOnce(FakeAPI):

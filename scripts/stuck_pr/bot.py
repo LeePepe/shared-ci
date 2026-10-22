@@ -338,9 +338,12 @@ def run(api, now, **kwargs):
     options.update({"stale_days": threshold(kwargs.get("stale_days", 14)), "draft_days": threshold(kwargs.get("draft_days", 7)), "auto_merge_grace_minutes": threshold(kwargs.get("auto_merge_grace_minutes", 30)), "thread_hours": threshold(kwargs.get("thread_hours", 24)), "mention_allowlist": allowlist(kwargs.get("mention_allowlist", "")), "summary_assignee": login(kwargs.get("summary_assignee", "")), "exclude_prs": positive_int_list(kwargs.get("exclude_prs", "")), "auto_merge_exempt_prs": positive_int_list(kwargs.get("auto_merge_exempt_prs", ""))})
     scanned = []
     stamp = now.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    scanned_numbers = set()
     for item in api.pages("pulls?state=open"):
         number = item["number"]
         if number in options["exclude_prs"]: continue
+        if number in scanned_numbers: continue
+        scanned_numbers.add(number)
         pr = api.snapshot(number); pr["number"] = number
         scanned.append((number, pr))
     summaries = [item for item in api.pages("issues?state=all&creator=" + BOT) if "pull_request" not in item and owned(item, SUMMARY) and item["title"] == TITLE]
@@ -364,15 +367,27 @@ def run(api, now, **kwargs):
     history = state_history(previous, observed)
     history = {key: value for key, value in history.items() if key in observed}
     entries, pending_comments = [], []
-    unknown_keys = set()
-    if previous.get("truncated"):
-        unknown_keys = set(observed) - set(previous.get("history", {}))
+    previous_unknown = {
+        f"{entry['number']}:{entry['head']}"
+        for entry in previous.get("entries", [])
+        if isinstance(entry, dict) and entry.get("repeat_failure") == "unknown"
+    }
+    legacy_unknown = (set(observed) - set(previous.get("history", {}))
+                      if previous.get("truncated") else set())
     for pr in final_prs:
         current = classify(pr, now, options)
         if not current:
             continue
         key = f"{current['number']}:{current['head']}"
-        current["repeat_failure"] = "unknown" if key in unknown_keys else bool(history.get(key, {}).get("recurrent"))
+        current_history = history.get(key, {})
+        current_attempts = set(current.get("failure_attempts", []))
+        prior_attempts = set(previous.get("history", {}).get(key, {}).get("latest_failed_attempt_ids", []))
+        unknown = key in previous_unknown or key in legacy_unknown
+        new_failure_evidence = (bool(current.get("failed")) and key in previous.get("history", {})
+                                and current_attempts != prior_attempts)
+        if unknown and (not current.get("failed") or new_failure_evidence):
+            unknown = False
+        current["repeat_failure"] = "unknown" if unknown else bool(current_history.get("recurrent"))
         entries.append(current)
         if current["classification"] == "actionable":
             body = report(pr, now, options["failure_hours"], options["open_hours"], options["mention_allowlist"], options)
@@ -396,7 +411,6 @@ def run(api, now, **kwargs):
         def visible(value): return quoted(value)
         def label(value, fallback="unknown"):
             return visible(fallback if value is None else value)
-        state_keys = {entry["number"] for entry in state_entries}
         rows = []
         reason_codes = {
             "required checks failed": "checks",
@@ -419,7 +433,7 @@ def run(api, now, **kwargs):
                 if code not in compact: compact.append(code)
             return ",".join(compact) or "none"
         for e in sorted(selected, key=lambda e: e["number"]):
-            repeat = e["repeat_failure"] if e["number"] in state_keys else "unknown"
+            repeat = e["repeat_failure"]
             rows.append(f"- #{e['number']}: {visible(e['classification'])}; why={compact_reasons(e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if repeat == 'unknown' else ('yes' if repeat else 'no')}; am={'on' if e['auto_merge'] else 'off'},m={label(e['mergeable'])},rv={label(e['review_decision'])},d={'yes' if e['draft'] else 'no'},u={e['unresolved_threads']},g={'present' if e['gtt_present'] else 'absent'},st={'yes' if e['stale'] else 'no'},ex={'yes' if e['exception'] else 'no'}")
         lines += rows
         if closed:
