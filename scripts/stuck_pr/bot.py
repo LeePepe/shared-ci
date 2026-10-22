@@ -198,7 +198,7 @@ def report(pr, now, failure_hours, open_hours, mention_allowlist=None, options=N
     mention = f" @{result['author']}" if result["author"].lower() in options["mention_allowlist"] else ""
     return (f"<!-- stuck-pr-bot:v1 head={result['head']} -->\n## Stuck PR report\n\nHead: `{result['head']}`\n\n"
             f"{'; '.join(result['reasons'])}.{mention}\n\nFailed required checks: {names}.\n\nPR age: {result['age_hours']:.1f} hours.\n\n"
-            "Bot 不会修 (the bot will not repair). This bot only reports; it never reruns checks, approves, changes labels or auto-merge, or merges.\n")
+            "可行动卡住；已写入监督信号 (actionable stuck; supervision signal recorded). Goal TL/PRM/协调者按监督-可修规程回派原写者或合法代修，并跟到 merge 读回 (route repair to the original writer or a legitimate proxy and follow through to the merge read-back). This bot never reruns checks, approves, changes labels or auto-merge, or merges.\n")
 
 
 class API:

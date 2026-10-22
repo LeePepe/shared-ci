@@ -80,7 +80,12 @@ class ClassificationTests(unittest.TestCase):
     def test_required_failure_threshold_and_exact_head(self):
         self.assertIsNone(bot.report(pr(contexts=[check(completed=1.99)]), NOW, 2, 24))
         text = bot.report(pr(contexts=[check(completed=2)]), NOW, 2, 24)
-        self.assertIn("required checks failed", text); self.assertIn("Bot 不会修", text)
+        self.assertIn("required checks failed", text)
+        self.assertIn("可行动卡住；已写入监督信号", text)
+        self.assertIn("Goal TL/PRM/协调者按监督-可修规程回派原写者或合法代修，并跟到 merge 读回", text)
+        self.assertIn("This bot never reruns checks, approves, changes labels or auto-merge, or merges.", text)
+        self.assertIn(f"<!-- stuck-pr-bot:v1 head={HEAD} -->", text)
+        self.assertNotIn("Bot 不会修", text)
         bad = pr(); bad["commits"]["nodes"][0]["commit"]["oid"] = "b" * 40
         with self.assertRaises(ValueError): bot.report(bad, NOW, 2, 24)
 
