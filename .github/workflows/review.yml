@@ -29,7 +29,7 @@ concurrency:
 jobs:
   codex-review-target:
     if: vars.SHARED_CI_REVIEW_RUNNER == 'true'
-    uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc
+    uses: LeePepe/shared-ci/.github/workflows/codex-review.yml@fd8a187ef4872aa1aa69c4e9afec9782183cc02d
     with:
       codex-bin: /opt/homebrew/bin/codex
       rules-file: docs/repository-guide.md
@@ -61,6 +61,6 @@ jobs:
 
   kimi-review:
     if: vars.SHARED_CI_REVIEW_RUNNER == 'true'
-    uses: LeePepe/shared-ci/.github/workflows/kimi-review.yml@ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc
+    uses: LeePepe/shared-ci/.github/workflows/kimi-review.yml@fd8a187ef4872aa1aa69c4e9afec9782183cc02d
     with:
       rules-file: docs/repository-guide.md

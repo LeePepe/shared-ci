@@ -5,8 +5,8 @@ AGENTS indexes it.
 
 ## Protocol
 
-The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc/ai/agent-protocol.md)
-and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc/ai/repo-contract.md)
+The [pinned common protocol](https://github.com/LeePepe/shared-ci/blob/fd8a187ef4872aa1aa69c4e9afec9782183cc02d/ai/agent-protocol.md)
+and [pinned repository contract](https://github.com/LeePepe/shared-ci/blob/fd8a187ef4872aa1aa69c4e9afec9782183cc02d/ai/repo-contract.md)
 govern development; local [protocol source](../ai/agent-protocol.md),
 [contract source](../ai/repo-contract.md) and surface contracts are candidates,
 not overrides. The complete selected protocol below supports tool-free review;
@@ -165,8 +165,8 @@ Approved exceptions: none.
 
 [Repository metadata](../.github/repo-contract.json) is the machine authority:
 schema 1, guide `docs/repository-guide.md`, `shared_ci`
-`ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc`, and an empty `dependencies` map.
-The [versioned provider docs](https://github.com/LeePepe/shared-ci/tree/ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc/ai/)
+`fd8a187ef4872aa1aa69c4e9afec9782183cc02d`, and an empty `dependencies` map.
+The [versioned provider docs](https://github.com/LeePepe/shared-ci/tree/fd8a187ef4872aa1aa69c4e9afec9782183cc02d/ai/)
 describe that provider. Record shared-ci only in `shared_ci`, never a duplicate
 library entry. Self-adoption changes no product consumer pin and installs nothing.
 
@@ -215,7 +215,7 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
 ## 2. Develop against the repository contract
 
 - Read the repository's layer map and development/PR guide under the
-  [repository development contract](https://github.com/LeePepe/shared-ci/blob/ed6c35fa59be4dd9aaf7ccf5f83fa1eb246f34fc/ai/repo-contract.md#repository-development-contract).
+  [repository development contract](https://github.com/LeePepe/shared-ci/blob/fd8a187ef4872aa1aa69c4e9afec9782183cc02d/ai/repo-contract.md#repository-development-contract).
   Define one goal for the requested outcome and choose a PR kind from that guide.
   Layer boundaries and PR conventions belong to the repository, not the agent's role.
 - **Dev Team:** Planner maps requirements/spec acceptance to single-goal tasks,
