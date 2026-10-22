@@ -7,6 +7,9 @@
 - Stuck-PR reporting now classifies actionable signals, records versioned
   summary state, supports exclusions and allowlisted mentions, and leaves
   scheduling to callers rather than the reusable provider.
+- Stuck-PR actionable comments now emit a supervision repair signal; summary
+  assignees are observation recipients, and the repair-queue mapping is
+  documented without granting the bot repair or merge authority.
 
 ## [v0.7.3](https://github.com/LeePepe/shared-ci/releases/tag/v0.7.3) — 2026-10-20
 
