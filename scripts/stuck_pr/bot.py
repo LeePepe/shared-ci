@@ -15,6 +15,7 @@ STATE = "<!-- stuck-pr-bot:state:v2\n"
 BOT = "github-actions[bot]"
 FAILED = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
 GTT = re.compile(r"(?:MY-\d+|TK\w+|(?:^|[/:])gtt/)", re.I)
+MAX_SUMMARY_PRS = 100
 
 QUERY = """
 query($owner:String!, $repo:String!, $number:Int!, $cursor:String, $thread_cursor:String) {
@@ -386,13 +387,11 @@ def run(api, now, **kwargs):
                 current["repeat_failure"] = "unknown"
     actionable = [entry for entry in entries if entry["classification"] == "actionable"]
     state_fields = ("number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure")
-    def render(selected, state_entries=None, state_history=None, omitted=0, closed=False):
+    def render(selected, state_entries=None, state_history=None, closed=False):
         selected = sorted(selected, key=lambda e: e["number"])
         state_entries = state_entries or []
         state_history = state_history or {}
         payload = {"schema": 2, "last_run_at": stamp, "entries": state_entries, "history": state_history}
-        if omitted:
-            payload["truncated"], payload["omitted"] = True, omitted
         lines = [SUMMARY, STATE + state_json(payload) + "\n-->\n# Open stuck PRs\n", f"last_run_at: {stamp}\n", "Legend: am=auto-merge, m=mergeable, rv=review, d=Draft, u=unresolved, g=GTT, st=stale, ex=auto-merge-exempt.\n"]
         def visible(value): return quoted(value)
         def label(value, fallback="unknown"):
@@ -421,46 +420,30 @@ def run(api, now, **kwargs):
             return ",".join(compact) or "none"
         for e in sorted(selected, key=lambda e: e["number"]):
             repeat = e["repeat_failure"] if e["number"] in state_keys else "unknown"
-            rows.append(f"- #{e['number']}: {visible(e['classification'])}; why={compact_reasons(e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if repeat == 'unknown' else ('yes' if repeat else 'no')}; am={'on' if e['auto_merge'] else 'off'}, m={label(e['mergeable'])}, rv={label(e['review_decision'])}, d={'yes' if e['draft'] else 'no'}, u={e['unresolved_threads']}, g={'present' if e['gtt_present'] else 'absent'}, st={'yes' if e['stale'] else 'no'}, ex={'yes' if e['exception'] else 'no'}")
+            rows.append(f"- #{e['number']}: {visible(e['classification'])}; why={compact_reasons(e['reasons'])}; age={e['age_hours']}h; repeat={'unknown' if repeat == 'unknown' else ('yes' if repeat else 'no')}; am={'on' if e['auto_merge'] else 'off'},m={label(e['mergeable'])},rv={label(e['review_decision'])},d={'yes' if e['draft'] else 'no'},u={e['unresolved_threads']},g={'present' if e['gtt_present'] else 'absent'},st={'yes' if e['stale'] else 'no'},ex={'yes' if e['exception'] else 'no'}")
         lines += rows
-        if omitted:
-            lines.append(f"State coverage is truncated: {omitted} PR state record(s) omitted; recurrence for omitted entries is unknown and machine state is a lower bound.")
         if closed:
             lines.append("No open stuck PRs.")
         return "\n".join(lines) + "\n"
-    # The visible list is complete. Machine state is selected as complete
-    # (entry, history) packages in three deterministic priority layers:
-    # actionable, known-failed history, then all remaining current heads.
     entries = sorted(entries, key=lambda e: e["number"])
-    entry_by_key = {f"{e['number']}:{e['head']}": e for e in entries}
-    package_keys = set(entry_by_key) | set(history)
-    def package_number(key): return (int(key.split(":", 1)[0]), key)
-    def package_priority(key):
-        entry = entry_by_key.get(key)
-        if entry and entry["classification"] == "actionable": return 0
-        if key in history and history[key].get("seen_failed"): return 1
-        return 2
-    package_keys = sorted(package_keys, key=lambda key: (package_priority(key), package_number(key)))
-    entry_payload = lambda key: {field: entry_by_key[key].get(field) for field in state_fields}
-    def package_body(keys):
-        chosen_entries = sorted((entry_payload(key) for key in keys if key in entry_by_key), key=lambda e: e["number"])
-        chosen_history = {key: history[key] for key in sorted(keys) if key in history}
-        omitted_count = len(package_keys) - len(keys)
-        return render(entries, chosen_entries, chosen_history, omitted_count, closed=not entries)
-    # A single package must fit with the fixed body shell and a possible
-    # truncation notice; it may not be silently discarded as "omitted".
-    for key in package_keys:
-        if len(package_body([key]).encode("utf-8")) >= 65536:
-            raise ValueError("Single state package exceeds GitHub limit")
-    selected_keys = []
-    for key in package_keys:
-        candidate = selected_keys + [key]
-        if len(package_body(candidate).encode("utf-8")) < 65536:
-            selected_keys = candidate
-    body = package_body(selected_keys)
-    while len(body.encode("utf-8")) >= 65536 and selected_keys:
-        selected_keys.pop()
-        body = package_body(selected_keys)
+    if len({entry["number"] for entry in entries}) > MAX_SUMMARY_PRS:
+        raise ValueError(f"Summary contains more than {MAX_SUMMARY_PRS} open PRs")
+    state_reason_codes = {
+        "required checks failed": "checks", "auto-merge is not enabled": "auto-merge",
+        "merge conflict": "conflict", "changes requested": "review",
+        "branch is behind main": "behind", "stale": "stale",
+        "Draft open too long": "draft-age", "open for": "open-age",
+        "unresolved discussion": "threads", "manual review requested": "review-request",
+        "owner-review label remains": "owner-review", "merge state unknown": "unknown-merge",
+    }
+    def state_entry(entry):
+        result = {field: entry.get(field) for field in state_fields}
+        result["reasons"] = [next((value for prefix, value in state_reason_codes.items()
+                                   if reason.startswith(prefix)), reason)
+                              for reason in entry["reasons"]]
+        return result
+    entry_payload = [state_entry(entry) for entry in entries]
+    body = render(entries, entry_payload, history, closed=not entries)
     if len(body.encode("utf-8")) >= 65536:
         raise ValueError("Summary body exceeds GitHub limit")
     # Validate every pending comment before the first write.

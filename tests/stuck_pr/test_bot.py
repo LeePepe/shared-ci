@@ -207,21 +207,31 @@ class ReconciliationTests(unittest.TestCase):
         text = bot.report(pr(contexts=[check(name=str(i) + "[" * 300) for i in range(300)]), NOW, 2, 24)
         self.assertLess(len(text), 65536); self.assertIn("more failed required checks", text)
 
-    def test_summary_keeps_hundreds_of_reports_within_issue_body_limit(self):
-        api = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, 501)})
+    def test_summary_publishes_100_reports_with_complete_state_and_comments(self):
+        api = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, bot.MAX_SUMMARY_PRS + 1)})
         bot.run(api, NOW)
         bodies = [payload["body"] for _, path, payload in api.writes if path == "issues"]
         self.assertEqual(1, len(bodies))
-        self.assertIn("- #500", bodies[0])
-        self.assertEqual(500, bodies[0].count("\n- #"))
+        self.assertIn(f"- #{bot.MAX_SUMMARY_PRS}", bodies[0])
+        self.assertEqual(bot.MAX_SUMMARY_PRS, bodies[0].count("\n- #"))
         self.assertLess(len(bodies[0].encode("utf-8")), 65536)
         state = bot.read_state(api.issues[0])
-        self.assertTrue(state.get("truncated"))
-        self.assertGreater(state.get("omitted", 0), 0)
-        self.assertLess(len(state["entries"]), 500)
-        self.assertEqual(500, sum(path.endswith("/comments") for _, path, _ in api.writes))
-        self.assertEqual(500 - len(state["entries"]), state["omitted"])
+        self.assertNotIn("truncated", state)
+        self.assertNotIn("omitted", state)
+        self.assertEqual(bot.MAX_SUMMARY_PRS, len(state["entries"]))
+        self.assertEqual(bot.MAX_SUMMARY_PRS, len(state["history"]))
+        self.assertEqual(bot.MAX_SUMMARY_PRS, sum(path.endswith("/comments") for _, path, _ in api.writes))
         self.assertTrue(all(set(entry) == {"number", "head", "classification", "reasons", "age_hours", "auto_merge", "mergeable", "merge_state", "review_decision", "draft", "unresolved_threads", "gtt_present", "stale", "exception", "repeat_failure"} for entry in state["entries"]))
+
+    def test_101_reports_fail_before_any_write(self):
+        api = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, bot.MAX_SUMMARY_PRS + 2)})
+        with self.assertRaises(ValueError): bot.run(api, NOW)
+        self.assertEqual([], api.writes)
+
+    def test_complete_state_byte_limit_fails_before_any_write(self):
+        api = FakeAPI(prs={i: pr(mergeable="é" * 1000, contexts=[check()]) for i in range(1, bot.MAX_SUMMARY_PRS + 1)})
+        with self.assertRaises(ValueError): bot.run(api, NOW)
+        self.assertEqual([], api.writes)
 
     def test_summary_rows_keep_all_signal_labels_visible(self):
         api = FakeAPI(prs={1: pr(age=24 * 15, autoMergeRequest=None, mergeable="CONFLICTING",
@@ -256,6 +266,15 @@ class ReconciliationTests(unittest.TestCase):
             state = {"schema": 2, "last_run_at": None, "entries": [], "history": {}, **extra}
             with self.assertRaises(ValueError): bot.read_state(state_item(state))
 
+    def test_legacy_truncation_metadata_is_read_and_cleaned_on_next_publish(self):
+        state = {"schema": 2, "last_run_at": None, "entries": [], "history": {},
+                 "truncated": True, "omitted": 1}
+        api = FakeAPI(prs={1: pr(contexts=[check()])}, issues=[state_item(state)])
+        bot.run(api, NOW)
+        published = api.issues[0]["body"]
+        self.assertNotIn('"truncated"', published)
+        self.assertNotIn('"omitted"', published)
+
     def test_single_summary_interruption_has_zero_partial_writes(self):
         class FailOnce(FakeAPI):
             def rest(self, method, suffix, body=None):
@@ -284,15 +303,6 @@ class ReconciliationTests(unittest.TestCase):
         bot.run(api, NOW + dt.timedelta(hours=1))
         self.assertEqual(0, sum(path.endswith("/comments") for _, path, _ in api.writes))
 
-    def test_omitted_head_reloaded_is_unknown_and_does_not_suppress_first_comment(self):
-        state = {"schema": 2, "last_run_at": NOW.isoformat(), "entries": [], "history": {},
-                 "truncated": True, "omitted": 1}
-        api = FakeAPI(prs={1: pr(contexts=[check()])}, issues=[state_item(state)])
-        bot.run(api, NOW)
-        body = next(payload["body"] for _, path, payload in api.writes if path == "issues/99")
-        self.assertIn('"repeat_failure":"unknown"', body)
-        self.assertEqual(1, sum(path.endswith("/comments") for _, path, _ in api.writes))
-
     def test_failure_recovery_failure_during_refresh_uses_final_snapshot(self):
         api = FakeAPI()
         bot.run(api, NOW)
@@ -305,28 +315,6 @@ class ReconciliationTests(unittest.TestCase):
         api.refresh[1] = pr(contexts=[check(attempt=1, completed=1)])
         bot.run(api, NOW + dt.timedelta(hours=2))
         self.assertIn('"repeat_failure":true', api.writes[-1][2]["body"])
-
-    def test_truncated_rows_have_unknown_recurrence_and_old_shards_are_not_merged(self):
-        first = FakeAPI(prs={i: pr(contexts=[check()]) for i in range(1, 501)})
-        bot.run(first, NOW)
-        first.writes.clear()
-        bot.run(first, NOW)
-        body = first.issues[0]["body"]
-        self.assertIn('"truncated":true', body)
-        self.assertIn("repeat=unknown", body)
-        self.assertEqual(1, len(first.issues))
-
-        old_shard = state_item({"schema": 2, "last_run_at": None,
-                                "entries": [{"number": 999, "head": "b" * 40}], "history": {}},
-                               number=1000)
-        old_shard["created_at"] = "2026-10-21T00:00:00Z"
-        canonical = state_item({"schema": 2, "last_run_at": None, "entries": [], "history": {}},
-                               number=1001)
-        canonical["created_at"] = "2026-10-20T00:00:00Z"
-        api = FakeAPI(prs={1: pr(contexts=[check()])}, issues=[old_shard, canonical])
-        bot.run(api, NOW)
-        self.assertEqual(1, sum(path == "issues/1001" for _, path, _ in api.writes))
-        self.assertFalse(any(path == "issues/1000" for _, path, _ in api.writes))
 
     def test_latest_attempt_app_and_optional_status_contexts(self):
         contexts = [check(attempt=1, app=1), check(attempt=2, app=1, conclusion="SUCCESS"), check(attempt=1, app=2)]
