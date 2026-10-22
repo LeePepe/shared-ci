@@ -1,8 +1,9 @@
 name: stuck-PR bot
 
 on:
-  schedule:
-    - cron: '17 * * * *'
+  # Example consumer schedule (use a unique pair of minutes per repository):
+  # schedule:
+  #   - cron: '7,37 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -18,3 +19,12 @@ jobs:
     with:
       failure-hours: 2
       open-hours: 24
+      stale-days: 14
+      draft-days: 7
+      auto-merge-grace-minutes: 30
+      thread-hours: 24
+      mention-allowlist: ''
+      summary-assignee: ''
+      # Pick a unique pair of minutes for each consumer; the example is 7,37.
+      exclude-prs: ''
+      auto-merge-exempt-prs: ''
