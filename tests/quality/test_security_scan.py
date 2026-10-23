@@ -269,7 +269,7 @@ class SecurityScanTests(unittest.TestCase):
             "osv-vuln",
             "#!/bin/sh\n"
             "printf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},"
-            "\"packages\":[{\"vulnerabilities\":[{\"id\":\"GHSA-1234-5678-9012\","
+            "\"packages\":[{\"package\":{\"name\":\"lodash\"},\"vulnerabilities\":[{\"id\":\"GHSA-1234-5678-9012\","
             "\"summary\":\"Prototype pollution\"}]}]}]}'\n"
             "exit 1\n",
         )
@@ -451,6 +451,27 @@ class SecurityScanTests(unittest.TestCase):
                 "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && printf '[123]' > \"$a\"; prev=\"$a\"; done\n"
                 "exit 0\n",
             ),
+            (
+                "empty-dict-item",
+                "#!/bin/sh\n"
+                "prev=''\n"
+                "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && printf '[{}]' > \"$a\"; prev=\"$a\"; done\n"
+                "exit 0\n",
+            ),
+            (
+                "missing-file-field",
+                "#!/bin/sh\n"
+                "prev=''\n"
+                "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && printf '[{\"RuleID\":\"generic-api-key\",\"Description\":\"secret\"}]' > \"$a\"; prev=\"$a\"; done\n"
+                "exit 0\n",
+            ),
+            (
+                "missing-rule-and-description",
+                "#!/bin/sh\n"
+                "prev=''\n"
+                "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && printf '[{\"File\":\"app.py\"}]' > \"$a\"; prev=\"$a\"; done\n"
+                "exit 0\n",
+            ),
         ):
             with self.subTest(gitleaks_case=label):
                 stub = self._write_exec(f"gitleaks-{label}", body)
@@ -476,6 +497,35 @@ class SecurityScanTests(unittest.TestCase):
             ("non-dict-json", "#!/bin/sh\nprintf '[]'\nexit 0\n"),
             ("missing-results-key", "#!/bin/sh\nprintf '{\"status\":\"ok\"}'\nexit 0\n"),
             ("non-list-results", "#!/bin/sh\nprintf '{\"results\":{}}'\nexit 0\n"),
+            ("empty-result-entry", "#!/bin/sh\nprintf '{\"results\":[{}]}'\nexit 0\n"),
+            (
+                "missing-source-path",
+                "#!/bin/sh\nprintf '{\"results\":[{\"source\":{},\"packages\":[]}]}'\nexit 0\n",
+            ),
+            (
+                "missing-packages-key",
+                "#!/bin/sh\nprintf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"}}]}'\nexit 0\n",
+            ),
+            (
+                "empty-packages-list",
+                "#!/bin/sh\nprintf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},\"packages\":[]}]}'\nexit 0\n",
+            ),
+            (
+                "empty-package-entry",
+                "#!/bin/sh\nprintf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},\"packages\":[{}]}]}'\nexit 0\n",
+            ),
+            (
+                "missing-package-name",
+                "#!/bin/sh\nprintf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},\"packages\":[{\"package\":{},\"vulnerabilities\":[{\"id\":\"GHSA-1\"}]}]}]}'\nexit 0\n",
+            ),
+            (
+                "empty-vulnerabilities-list",
+                "#!/bin/sh\nprintf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},\"packages\":[{\"package\":{\"name\":\"lodash\"},\"vulnerabilities\":[]}]}]}'\nexit 0\n",
+            ),
+            (
+                "missing-vulnerability-id",
+                "#!/bin/sh\nprintf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},\"packages\":[{\"package\":{\"name\":\"lodash\"},\"vulnerabilities\":[{}]}]}]}'\nexit 0\n",
+            ),
         ):
             with self.subTest(osv_case=label):
                 stub = self._write_exec(f"osv-{label}", body)
@@ -547,7 +597,7 @@ class SecurityScanTests(unittest.TestCase):
             "osv-fail-if-called",
             "#!/bin/sh\n"
             "printf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},"
-            "\"packages\":[{\"vulnerabilities\":[{\"id\":\"GHSA-unstaged\",\"summary\":\"should not scan unstaged lockfile\"}]}]}]}'\n"
+            "\"packages\":[{\"package\":{\"name\":\"lodash\"},\"vulnerabilities\":[{\"id\":\"GHSA-unstaged\",\"summary\":\"should not scan unstaged lockfile\"}]}]}]}'\n"
             "exit 1\n",
         )
         code, stdout, stderr = self._run_cli(
@@ -579,7 +629,7 @@ class SecurityScanTests(unittest.TestCase):
             "for a in \"$@\"; do [ \"$prev\" = \"--lockfile\" ] && lock=\"$a\"; prev=\"$a\"; done\n"
             "if grep -q '\"dirty\"' \"$lock\"; then\n"
             "  printf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},"
-            "\"packages\":[{\"vulnerabilities\":[{\"id\":\"GHSA-dirty-worktree\",\"summary\":\"scanned worktree instead of staged snapshot\"}]}]}]}'\n"
+            "\"packages\":[{\"package\":{\"name\":\"lodash\"},\"vulnerabilities\":[{\"id\":\"GHSA-dirty-worktree\",\"summary\":\"scanned worktree instead of staged snapshot\"}]}]}]}'\n"
             "  exit 1\n"
             "fi\n"
             "printf '{\"results\":[]}'\n"

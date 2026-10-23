@@ -563,6 +563,98 @@ def _scan_identity_and_patterns(
     return summary, findings
 
 
+def _parse_gitleaks_report(
+    raw_report: str,
+    *,
+    scan_source: pathlib.Path,
+) -> list[ScanFinding]:
+    stripped = raw_report.strip()
+    if not stripped:
+        raise json.JSONDecodeError("empty gitleaks report", "", 0)
+    report_data = json.loads(stripped)
+    if not isinstance(report_data, list):
+        return [
+            ScanFinding(
+                scanner="gitleaks",
+                kind="gitleaks_unparseable_report",
+                path="",
+                rule="gitleaks-report-format",
+                detail="gitleaks report JSON must be a list of finding objects",
+            )
+        ]
+
+    findings: list[ScanFinding] = []
+    for item in report_data:
+        if not isinstance(item, dict):
+            return [
+                ScanFinding(
+                    scanner="gitleaks",
+                    kind="gitleaks_unparseable_report",
+                    path="",
+                    rule="gitleaks-report-format",
+                    detail="gitleaks report JSON must be a list of finding objects",
+                )
+            ]
+        raw_file = item.get("File")
+        raw_rule = item.get("RuleID")
+        raw_desc = item.get("Description")
+        has_file = isinstance(raw_file, str) and bool(raw_file.strip())
+        has_rule = isinstance(raw_rule, str) and bool(raw_rule.strip())
+        has_desc = isinstance(raw_desc, str) and bool(raw_desc.strip())
+        if not has_file or not (has_rule or has_desc):
+            return [
+                ScanFinding(
+                    scanner="gitleaks",
+                    kind="gitleaks_unparseable_report",
+                    path="",
+                    rule="gitleaks-report-format",
+                    detail="gitleaks report finding object is missing required fields",
+                )
+            ]
+        raw_line = item.get("StartLine")
+        if raw_line is not None and (
+            not isinstance(raw_line, int) or isinstance(raw_line, bool) or raw_line < 0
+        ):
+            return [
+                ScanFinding(
+                    scanner="gitleaks",
+                    kind="gitleaks_unparseable_report",
+                    path="",
+                    rule="gitleaks-report-format",
+                    detail="gitleaks report finding 'StartLine' must be a non-negative integer",
+                )
+            ]
+        assert isinstance(raw_file, str)
+        clean_file = raw_file.strip()
+        try:
+            rel_item = (
+                pathlib.Path(clean_file)
+                .resolve()
+                .relative_to(scan_source.resolve())
+                .as_posix()
+            )
+        except ValueError:
+            rel_item = clean_file
+        line_no = int(raw_line) if isinstance(raw_line, int) else 0
+        rule_id = raw_rule.strip() if has_rule and isinstance(raw_rule, str) else "gitleaks-rule"
+        desc = (
+            raw_desc.strip()
+            if has_desc and isinstance(raw_desc, str)
+            else "gitleaks detected a potential secret"
+        )
+        findings.append(
+            ScanFinding(
+                scanner="gitleaks",
+                kind="secret_leak",
+                path=rel_item,
+                line=line_no,
+                rule=rule_id,
+                detail=desc,
+            )
+        )
+    return findings
+
+
 def _run_gitleaks(
     root: pathlib.Path,
     files: list[tuple[str, bytes]],
@@ -661,53 +753,10 @@ def _run_gitleaks(
             )
         else:
             try:
-                raw_report = report_file.read_text(encoding="utf-8").strip()
-                if not raw_report:
-                    raise json.JSONDecodeError("empty gitleaks report", "", 0)
-                report_data = json.loads(raw_report)
-                if not isinstance(report_data, list) or any(
-                    not isinstance(item, dict) for item in report_data
-                ):
-                    findings.append(
-                        ScanFinding(
-                            scanner="gitleaks",
-                            kind="gitleaks_unparseable_report",
-                            path="",
-                            rule="gitleaks-report-format",
-                            detail="gitleaks report JSON must be a list of finding objects",
-                        )
-                    )
-                else:
-                    for item in report_data:
-                        raw_file = str(item.get("File") or "")
-                        try:
-                            rel_item = (
-                                pathlib.Path(raw_file)
-                                .resolve()
-                                .relative_to(scan_source.resolve())
-                                .as_posix()
-                            )
-                        except ValueError:
-                            rel_item = raw_file
-                        line_no = (
-                            int(item.get("StartLine") or 0)
-                            if isinstance(item.get("StartLine"), int)
-                            else 0
-                        )
-                        rule_id = str(item.get("RuleID") or "gitleaks-rule")
-                        desc = str(
-                            item.get("Description") or "gitleaks detected a potential secret"
-                        )
-                        findings.append(
-                            ScanFinding(
-                                scanner="gitleaks",
-                                kind="secret_leak",
-                                path=rel_item,
-                                line=line_no,
-                                rule=rule_id,
-                                detail=desc,
-                            )
-                        )
+                raw_report = report_file.read_text(encoding="utf-8")
+                findings.extend(
+                    _parse_gitleaks_report(raw_report, scan_source=scan_source)
+                )
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
                 findings.append(
                     ScanFinding(
@@ -819,17 +868,21 @@ def _parse_osv_output(
                 )
             ]
         src_info = result_entry.get("source")
-        if src_info is not None and not isinstance(src_info, dict):
+        if (
+            not isinstance(src_info, dict)
+            or not isinstance(src_info.get("path"), str)
+            or not src_info["path"].strip()
+        ):
             return [
                 ScanFinding(
                     scanner="osv",
                     kind="osv_unparseable_output",
                     path=default_path,
                     rule="osv-output-format",
-                    detail="osv-scanner result 'source' must be a JSON object",
+                    detail="osv-scanner result 'source.path' must be a non-empty string",
                 )
             ]
-        raw_src = str((src_info or {}).get("path") or default_path)
+        raw_src = src_info["path"].strip()
         rel_src = raw_src
         for base_candidate in (temp_path / "staged", temp_path, root):
             try:
@@ -842,15 +895,15 @@ def _parse_osv_output(
                 break
             except ValueError:
                 continue
-        packages = result_entry.get("packages", [])
-        if not isinstance(packages, list):
+        packages = result_entry.get("packages")
+        if not isinstance(packages, list) or not packages:
             return [
                 ScanFinding(
                     scanner="osv",
                     kind="osv_unparseable_output",
                     path=rel_src,
                     rule="osv-output-format",
-                    detail="osv-scanner result 'packages' must be a list",
+                    detail="osv-scanner result 'packages' must be a non-empty list",
                 )
             ]
         for pkg_entry in packages:
@@ -864,31 +917,73 @@ def _parse_osv_output(
                         detail="osv-scanner package entry must be a JSON object",
                     )
                 ]
-            vulns = pkg_entry.get("vulnerabilities", [])
-            if not isinstance(vulns, list):
+            pkg_info = pkg_entry.get("package")
+            if (
+                not isinstance(pkg_info, dict)
+                or not isinstance(pkg_info.get("name"), str)
+                or not pkg_info["name"].strip()
+            ):
                 return [
                     ScanFinding(
                         scanner="osv",
                         kind="osv_unparseable_output",
                         path=rel_src,
                         rule="osv-output-format",
-                        detail="osv-scanner package 'vulnerabilities' must be a list",
+                        detail="osv-scanner package 'package.name' must be a non-empty string",
+                    )
+                ]
+            if "groups" in pkg_entry and not isinstance(pkg_entry["groups"], list):
+                return [
+                    ScanFinding(
+                        scanner="osv",
+                        kind="osv_unparseable_output",
+                        path=rel_src,
+                        rule="osv-output-format",
+                        detail="osv-scanner package 'groups' must be a list",
+                    )
+                ]
+            vulns = pkg_entry.get("vulnerabilities")
+            if not isinstance(vulns, list) or not vulns:
+                return [
+                    ScanFinding(
+                        scanner="osv",
+                        kind="osv_unparseable_output",
+                        path=rel_src,
+                        rule="osv-output-format",
+                        detail="osv-scanner package 'vulnerabilities' must be a non-empty list",
                     )
                 ]
             for vuln in vulns:
-                if not isinstance(vuln, dict):
+                if (
+                    not isinstance(vuln, dict)
+                    or not isinstance(vuln.get("id"), str)
+                    or not vuln["id"].strip()
+                ):
                     return [
                         ScanFinding(
                             scanner="osv",
                             kind="osv_unparseable_output",
                             path=rel_src,
                             rule="osv-output-format",
-                            detail="osv-scanner vulnerability entry must be a JSON object",
+                            detail="osv-scanner vulnerability entry must be an object with a non-empty 'id'",
                         )
                     ]
-                vuln_id = str(vuln.get("id") or "OSV-UNKNOWN")
-                summary_text = str(
-                    vuln.get("summary") or "dependency vulnerability detected"
+                raw_summary = vuln.get("summary")
+                if raw_summary is not None and not isinstance(raw_summary, str):
+                    return [
+                        ScanFinding(
+                            scanner="osv",
+                            kind="osv_unparseable_output",
+                            path=rel_src,
+                            rule="osv-output-format",
+                            detail="osv-scanner vulnerability 'summary' must be a string",
+                        )
+                    ]
+                vuln_id = vuln["id"].strip()
+                summary_text = (
+                    raw_summary.strip()
+                    if isinstance(raw_summary, str) and raw_summary.strip()
+                    else "dependency vulnerability detected"
                 )
                 findings.append(
                     ScanFinding(
