@@ -20,7 +20,7 @@ REQUIRED_HEADINGS = (
 )
 REQUIRED_STATES = ("populated", "empty", "loading", "error")
 SUPPORTED_SUFFIXES = frozenset({".swift", ".tsx", ".ts", ".jsx", ".css", ".scss"})
-SKIP_MARKERS = ("token", "generated", "palette", "tests", "test", ".test.", ".spec.")
+SKIP_DIRECTORY_NAMES = frozenset({"tokens", "generated", "tests", "__tests__"})
 ALLOW_PATTERN = re.compile(r"design-contract-allow:\s*\S+")
 
 RAW_HEX_COLOR = re.compile(
@@ -28,8 +28,9 @@ RAW_HEX_COLOR = re.compile(
     r"[0-9A-Fa-f]{4}|[0-9A-Fa-f]{3})(?![A-Za-z0-9_])"
 )
 RAW_RGB_COLOR = re.compile(
-    r"(?:\bColor\s*\(\s*red\s*:|\bUIColor\s*\(\s*red\s*:|"
-    r"\bNSColor\s*\(\s*red\s*:|\bColor\s*\(\s*\.sRGB\b|\brgba?\s*\()"
+    r"(?:\b(?:Color|UIColor|NSColor)\s*\(\s*(?:red\s*:|\.sRGB\b)|"
+    r"\brgba?\s*\(\s*)",
+    re.DOTALL | re.MULTILINE,
 )
 
 
@@ -80,8 +81,29 @@ def _relative_path(root: Path, path: Path) -> str:
 
 
 def _is_skipped_source(root: Path, path: Path) -> bool:
-    normalized = _relative_path(root, path).casefold()
-    return any(marker in normalized for marker in SKIP_MARKERS)
+    relative = Path(_relative_path(root, path))
+    directory_parts = relative.parts[:-1]
+    if any(
+        component.casefold() in SKIP_DIRECTORY_NAMES
+        or component.casefold().endswith(("tests", "tokens"))
+        for component in directory_parts
+    ):
+        return True
+
+    filename = relative.name
+    stem = relative.stem
+    lowered_filename = filename.casefold()
+    lowered_stem = stem.casefold()
+    suffix = path.suffix.casefold()
+    if lowered_filename.endswith((f".test{suffix}", f".spec{suffix}")):
+        return True
+    if lowered_stem.startswith(("test_", "generated")):
+        return True
+    if re.search(r"(?:^|[_-])(?:test|tests|token|tokens|palette)$", stem, re.I):
+        return True
+    return bool(
+        re.search(r"(?:[a-z0-9])(?:Test|Tests|Token|Tokens|Palette)$", stem)
+    )
 
 
 def _matches_exclude(path: Path, root: Path, exclude_globs: Sequence[str]) -> bool:
@@ -108,7 +130,7 @@ def _violation(
 
 def _scan_file(root: Path, path: Path) -> list[DesignViolation]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return [
             _violation(
@@ -120,18 +142,27 @@ def _scan_file(root: Path, path: Path) -> list[DesignViolation]:
             )
         ]
 
+    lines = content.splitlines()
     findings: list[DesignViolation] = []
     for line_number, line in enumerate(lines, start=1):
-        if ALLOW_PATTERN.search(line):
-            continue
         for _match in RAW_HEX_COLOR.finditer(line):
+            if ALLOW_PATTERN.search(line):
+                continue
             findings.append(
                 _violation(root, path, line_number, "RAW_HEX_COLOR", line)
             )
-        for _match in RAW_RGB_COLOR.finditer(line):
-            findings.append(
-                _violation(root, path, line_number, "RAW_RGB_COLOR", line)
-            )
+    for match in RAW_RGB_COLOR.finditer(content):
+        line_number = content.count("\n", 0, match.start()) + 1
+        argument_line = content.count("\n", 0, match.end()) + 1
+        start_text = lines[line_number - 1] if line_number <= len(lines) else ""
+        argument_text = (
+            lines[argument_line - 1] if argument_line <= len(lines) else ""
+        )
+        if ALLOW_PATTERN.search(start_text) or ALLOW_PATTERN.search(argument_text):
+            continue
+        findings.append(
+            _violation(root, path, line_number, "RAW_RGB_COLOR", start_text)
+        )
     return findings
 
 

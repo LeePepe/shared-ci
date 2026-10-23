@@ -98,6 +98,52 @@ No raw colors.
             {(item.path, item.line, item.rule) for item in findings},
         )
 
+    def test_scanner_does_not_skip_production_names_containing_test(self) -> None:
+        self._write(
+            "UI/LatestView.swift",
+            "let color = Color(red: 1, green: 0, blue: 0)\n",
+        )
+        self._write(
+            "UI/ContestScreen.tsx",
+            "const color = rgba(0, 0, 0, 0.5);\n",
+        )
+
+        findings = design_contract.scan_ui_sources(self.root, ["UI"])
+
+        self.assertEqual(
+            {
+                ("UI/LatestView.swift", 1, "RAW_RGB_COLOR"),
+                ("UI/ContestScreen.tsx", 1, "RAW_RGB_COLOR"),
+            },
+            {(item.path, item.line, item.rule) for item in findings},
+        )
+
+    def test_scanner_detects_multiline_rgb_constructors(self) -> None:
+        self._write(
+            "UI/Multiline.swift",
+            "let color = Color(\n"
+            "    red: 1.0,\n"
+            "    green: 0.0,\n"
+            "    blue: 0.0\n"
+            ")\n",
+        )
+        self._write(
+            "UI/Multiline.tsx",
+            "const color = rgba(\n"
+            "    0, 0, 0, 0.5\n"
+            ");\n",
+        )
+
+        findings = design_contract.scan_ui_sources(self.root, ["UI"])
+
+        self.assertEqual(
+            {
+                ("UI/Multiline.swift", 1, "RAW_RGB_COLOR"),
+                ("UI/Multiline.tsx", 1, "RAW_RGB_COLOR"),
+            },
+            {(item.path, item.line, item.rule) for item in findings},
+        )
+
     def test_cli_json_reports_success_and_failure_status(self) -> None:
         self._write("docs/design-contract.md", self._valid_contract())
         self._write("UI/View.tsx", 'const style = { color: "#123456" };\n')
