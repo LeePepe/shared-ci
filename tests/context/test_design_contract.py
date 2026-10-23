@@ -107,6 +107,10 @@ No raw colors.
             "UI/ContestScreen.tsx",
             "const color = rgba(0, 0, 0, 0.5);\n",
         )
+        self._write(
+            "UI/Contests/Screen.tsx",
+            'const accent = "#112233";\n',
+        )
 
         findings = design_contract.scan_ui_sources(self.root, ["UI"])
 
@@ -114,6 +118,7 @@ No raw colors.
             {
                 ("UI/LatestView.swift", 1, "RAW_RGB_COLOR"),
                 ("UI/ContestScreen.tsx", 1, "RAW_RGB_COLOR"),
+                ("UI/Contests/Screen.tsx", 1, "RAW_HEX_COLOR"),
             },
             {(item.path, item.line, item.rule) for item in findings},
         )

@@ -80,14 +80,18 @@ def _relative_path(root: Path, path: Path) -> str:
         return path.as_posix()
 
 
+def _is_skipped_directory(component: str) -> bool:
+    if component.casefold() in SKIP_DIRECTORY_NAMES:
+        return True
+    if re.search(r"[_-](?:tests|tokens)$", component, re.I):
+        return True
+    return bool(re.search(r"[a-z0-9](?:Tests|Tokens)$", component))
+
+
 def _is_skipped_source(root: Path, path: Path) -> bool:
     relative = Path(_relative_path(root, path))
     directory_parts = relative.parts[:-1]
-    if any(
-        component.casefold() in SKIP_DIRECTORY_NAMES
-        or component.casefold().endswith(("tests", "tokens"))
-        for component in directory_parts
-    ):
+    if any(_is_skipped_directory(component) for component in directory_parts):
         return True
 
     filename = relative.name
@@ -97,9 +101,11 @@ def _is_skipped_source(root: Path, path: Path) -> bool:
     suffix = path.suffix.casefold()
     if lowered_filename.endswith((f".test{suffix}", f".spec{suffix}")):
         return True
-    if lowered_stem.startswith(("test_", "generated")):
+    if lowered_stem.startswith("test_"):
         return True
-    if re.search(r"(?:^|[_-])(?:test|tests|token|tokens|palette)$", stem, re.I):
+    if re.search(r"(?:^|[_-])(?:test|tests|token|tokens|palette|generated)$", stem, re.I):
+        return True
+    if re.search(r"^Generated(?:Colors|Styles|Tokens|Palette)$", stem):
         return True
     return bool(
         re.search(r"(?:[a-z0-9])(?:Test|Tests|Token|Tokens|Palette)$", stem)
