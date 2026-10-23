@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Fast staged-snapshot pre-commit hook (<30s); full scripts/verify runs on pre-push and CI.
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+python="${PYTHON:-python3}"
+
+git diff --cached --check
+
+SNAP="$(mktemp -d -t shared-ci-precommit.XXXXXX)"
+cleanup() {
+    rm -rf "$SNAP"
+}
+trap cleanup EXIT HUP INT TERM
+
+# Export the staged Git index into an isolated snapshot directory so unstaged
+# worktree edits are never inspected or modified.
+git checkout-index -a -f --prefix="$SNAP/"
+
+provider="${SHARED_CI:-}"
+if [[ -z "$provider" ]] && [[ -f "$root/scripts/quality/security_scan.py" ]]; then
+    provider="$root"
+elif [[ -z "$provider" ]] && [[ -d "$root/.shared-ci" ]]; then
+    provider="$root/.shared-ci"
+fi
+
+if [[ -n "$provider" ]] && [[ -f "$provider/scripts/quality/security_scan.py" ]]; then
+    if ! "$python" -I -B "$provider/scripts/quality/security_scan.py" --root . --staged >"$SNAP/.security-staged.json"; then
+        cat "$SNAP/.security-staged.json" >&2
+        exit 1
+    fi
+    rm -f "$SNAP/.security-staged.json"
+    if ! "$python" -I -B "$provider/scripts/quality/security_scan.py" --root "$SNAP" --staged >"$SNAP/.security-snap.json"; then
+        cat "$SNAP/.security-snap.json" >&2
+        exit 1
+    fi
+    rm -f "$SNAP/.security-snap.json"
+fi
+
+if [[ -n "$provider" ]] && [[ -f "$provider/scripts/lint/workflows.py" ]] && [[ -d "$SNAP/.github/workflows" ]]; then
+    "$python" -I -B "$provider/scripts/lint/workflows.py" --root "$SNAP" >/dev/null
+fi

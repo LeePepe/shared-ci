@@ -862,6 +862,64 @@ exec "$STUB_PYTHON" "$@"
         self.assertEqual("", comment)
         self.assertFalse((self.out / "summary").exists())
 
+    def test_kimi_transient_failure_succeeds_on_retry(self):
+        flaky_kimi = self.tools / "kimi-flaky"
+        flaky_kimi.write_text(
+            "#!/bin/sh\n"
+            "count=0\n"
+            '[ -f "$STUB_OUT/kimi-attempts" ] && count="$(cat "$STUB_OUT/kimi-attempts")"\n'
+            "count=$((count + 1))\n"
+            'printf "%s" "$count" > "$STUB_OUT/kimi-attempts"\n'
+            'if [ "$count" -eq 1 ]; then\n'
+            '  printf "transient 502 bad gateway\\n" >&2\n'
+            "  exit 9\n"
+            "fi\n"
+            'exec "' + str(self.tools / "kimi") + '" "$@"\n',
+            encoding="utf-8",
+        )
+        flaky_kimi.chmod(0o755)
+        result, comment = self.run_script(
+            "kimi-review.sh", json.dumps(PASS), KIMI_BIN=str(flaky_kimi)
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("2", (self.out / "kimi-attempts").read_text(encoding="utf-8"))
+        self.assertIn("kimi advisory review: pass", comment)
+        self.assertIn("advisory complete", result.stdout)
+        self.assertNotIn("::warning::", result.stdout)
+
+    def test_kimi_persistent_failure_reports_sanitized_stderr_diagnostic(self):
+        secret_tok = "sk-" + "liveSecretTokenValue1234567890"
+        home_dir = "/" + "Users" + "/alice/secret/config.json"
+        failing_kimi = self.tools / "kimi-diag-fail"
+        failing_kimi.write_text(
+            "#!/bin/sh\n"
+            "count=0\n"
+            '[ -f "$STUB_OUT/kimi-diag-attempts" ] && count="$(cat "$STUB_OUT/kimi-diag-attempts")"\n'
+            "count=$((count + 1))\n"
+            'printf "%s" "$count" > "$STUB_OUT/kimi-diag-attempts"\n'
+            'printf "initializing client...\\n" >&2\n'
+            f"printf 'HTTP 429 rate limit for token={secret_tok} at {home_dir} @reviewer <b> `x`.\\n' >&2\n"
+            "exit 17\n",
+            encoding="utf-8",
+        )
+        failing_kimi.chmod(0o755)
+        result, comment = self.run_script(
+            "kimi-review.sh", json.dumps(PASS), KIMI_BIN=str(failing_kimi)
+        )
+        expected_reason = (
+            "kimi CLI exited non-zero (exit 17: "
+            "HTTP 429 rate limit for token=[redacted] at [path] ＠reviewer ‹b> ´x´)."
+        )
+        self.assertEqual("2", (self.out / "kimi-diag-attempts").read_text(encoding="utf-8"))
+        self.assert_kimi_unavailable(result, comment, expected_reason)
+        self.assertIn(expected_reason, comment)
+        for surface in (result.stdout, comment, (self.out / "summary").read_text(encoding="utf-8")):
+            self.assertNotIn(secret_tok, surface)
+            self.assertNotIn(home_dir, surface)
+            self.assertNotIn("@reviewer", surface)
+            self.assertNotIn("<b>", surface)
+            self.assertNotIn("`x`", surface)
+
 
 if __name__ == "__main__":
     unittest.main()

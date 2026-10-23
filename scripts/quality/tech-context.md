@@ -9,7 +9,8 @@ red_lines: ["Anything other than an explicit pass fails the aggregate."]
 
 Owns the fail-closed Actions gate, PR-range quality checks
 ([test integrity](../../docs/test-integrity.md) and
-[commit identity](../../docs/commit-identity.md)), cross-target version sync and
+[commit identity](../../docs/commit-identity.md)), fail-closed `G2` security
+scanning (`scripts/quality/security_scan.py`), cross-target version sync and
 live-readback verification (`scripts/quality/release_sync.py`), and pure
 [6DQ receipt reconciliation](../../docs/quality-aggregation-contract.md).
 

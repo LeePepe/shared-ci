@@ -15,7 +15,7 @@ step "syntax"
 for entry in audit audit-selected resolve layers field contexts run; do
     /bin/sh -n "scripts/context/$entry"
 done
-for script in scripts/review/*.sh scripts/ruleset/apply.sh templates/scripts/verify templates/githooks/pre-push .githooks/pre-push; do
+for script in scripts/review/*.sh scripts/ruleset/apply.sh templates/scripts/verify templates/githooks/pre-push templates/githooks/pre-commit .githooks/pre-push .githooks/pre-commit; do
     bash -n "$script"
 done
 "$python" -I -B -c 'import ast,sys; [ast.parse(open(p).read(), p) for p in sys.argv[1:]]' $(git ls-files '*.py')
@@ -35,6 +35,7 @@ done
 "$python" -I -B -m unittest discover -s tests/quality -p 'test_test_integrity.py'
 "$python" -I -B -m unittest discover -s tests/quality -p 'test_commit_identity.py'
 "$python" -I -B -m unittest discover -s tests/quality -p 'test_release_sync.py'
+"$python" -I -B -m unittest discover -s tests/quality -p 'test_security_scan.py'
 "$python" -I -S -B -m unittest discover -s tests/policy -p 'test_validation.py'
 "$python" -I -S -B tests/quality/test_aggregation.py
 

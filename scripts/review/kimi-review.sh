@@ -12,6 +12,10 @@ MARKER="${REVIEW_MARKER:-<!-- shared-ci-kimi-review -->}"
 MAX_BYTES="${REVIEW_MAX_BYTES:-80000}"
 KIMI_BIN="${KIMI_BIN:-kimi}"
 KIMI_MODEL="${KIMI_MODEL:-kimi-code/k3}"
+KIMI_MAX_ATTEMPTS="${KIMI_MAX_ATTEMPTS:-2}"
+case "$KIMI_MAX_ATTEMPTS" in
+    ''|*[!0-9]*|0) KIMI_MAX_ATTEMPTS=2 ;;
+esac
 
 # Exit 0 is advisory, not proof of model completion. Only a validated model
 # verdict can enable the workflow's final review check; direct callers need no output file.
@@ -85,9 +89,63 @@ PROMPT="$PROMPT
 Return exactly one JSON object with keys verdict (pass|changes), summary, blockers
 [{file,line,severity(critical|high),why}], notes [{file,line,note}]."
 
-KIMI_DISABLE_TELEMETRY=1 "$KIMI_BIN" --agent-file "$REVIEW_DIR/kimi-agent.md" \
-    --output-format stream-json -m "$KIMI_MODEL" -p "$PROMPT" >"$WORK/out" 2>"$WORK/err" \
-    || advisory_unavailable "kimi CLI exited non-zero."
+KIMI_RC=0
+KIMI_ATTEMPT=1
+while :; do
+    : >"$WORK/out"
+    : >"$WORK/err"
+    if KIMI_DISABLE_TELEMETRY=1 "$KIMI_BIN" --agent-file "$REVIEW_DIR/kimi-agent.md" \
+        --output-format stream-json -m "$KIMI_MODEL" -p "$PROMPT" >"$WORK/out" 2>"$WORK/err"; then
+        KIMI_RC=0
+        break
+    else
+        KIMI_RC=$?
+    fi
+    if [ "$KIMI_ATTEMPT" -ge "$KIMI_MAX_ATTEMPTS" ]; then
+        break
+    fi
+    KIMI_ATTEMPT=$((KIMI_ATTEMPT + 1))
+done
+
+if [ "$KIMI_RC" -ne 0 ]; then
+    KIMI_FAIL_REASON="$(python3 -I -B -c '
+import pathlib
+import re
+import sys
+
+rc = sys.argv[1]
+err_path = pathlib.Path(sys.argv[2])
+try:
+    raw = err_path.read_text(encoding="utf-8", errors="replace")
+except OSError:
+    raw = ""
+raw = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", raw)
+lines = [line.strip() for line in raw.splitlines() if line.strip()]
+if not lines:
+    print("kimi CLI exited non-zero.")
+    sys.exit(0)
+last = lines[-1]
+last = re.sub(
+    r"(?i)\b(bearer|token|api[_-]?key|secret|password|authorization)\s*([:=]|\s+)\s*\S+",
+    r"\1=[redacted]",
+    last,
+)
+last = re.sub(
+    r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github[_]pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{8,}|xox[baprs]-[0-9A-Za-z-]+)\b",
+    "[redacted]",
+    last,
+)
+last = re.sub(r"(?<![A-Za-z0-9_.-])/(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]*", "[path]", last)
+last = re.sub(r"[\x00-\x1f\x7f]+", " ", last)
+last = " ".join(last.split())
+last = last.replace("@", "＠").replace("<", "‹").replace("\x60", "´")[:200].rstrip(".")
+if not last:
+    print("kimi CLI exited non-zero.")
+else:
+    print(f"kimi CLI exited non-zero (exit {rc}: {last}).")
+' "$KIMI_RC" "$WORK/err" 2>/dev/null)" || KIMI_FAIL_REASON="kimi CLI exited non-zero."
+    advisory_unavailable "${KIMI_FAIL_REASON:-kimi CLI exited non-zero.}"
+fi
 
 BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
     --head "$HEAD_SHA" --unavailable-reason-file "$WORK/unavailable" "$WORK/out")" \
