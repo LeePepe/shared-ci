@@ -13,6 +13,7 @@
 ## Verify
 
 - Before local validation or push: [Verification](docs/repository-guide.md#verify)
+- For the 6DQ quality matrix and current gaps: [Quality contract](docs/development.md#quality-contract-6dq-matrix)
 
 ## Required checks
 
@@ -21,6 +22,7 @@
 ## Red lines
 
 - Before changing policy or behavior: [Constraints](docs/repository-guide.md#red-lines)
+- For incident distillation into recurring rules: [Retrospective distillation](docs/development.md#retrospective-distillation)
 
 ## Dependencies
 

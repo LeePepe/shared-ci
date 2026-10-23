@@ -57,6 +57,26 @@ class ContractPositiveTests(unittest.TestCase):
         self.assertLessEqual(len(agents.splitlines()), contract["agents_max_lines"])
         self.assertEqual(8, len(contract["items"]))
 
+    def test_templates_include_6dq_matrix_and_retrospective_distillation(self):
+        dev = (REPO / "templates/development.md").read_text(encoding="utf-8")
+        agents = (REPO / "templates/AGENTS.md").read_text(encoding="utf-8")
+        legacy = (REPO / "templates/AGENTS.legacy.md").read_text(encoding="utf-8")
+        repo_contract = (REPO / "ai/repo-contract.md").read_text(encoding="utf-8")
+        self.assertIn("## Quality contract (6DQ matrix)", dev)
+        self.assertIn("## Retrospective distillation", dev)
+        self.assertIn(
+            "| Dimension | Requirement & Bar | Status (enforced/planned/manual/N/A) | Verification Command & Current Gap |",
+            dev,
+        )
+        for dim in ("`L1`", "`L2`", "`L3`", "`G2`", "`D1`"):
+            self.assertIn(dim, dev)
+            self.assertIn(dim, repo_contract)
+        self.assertIn("docs/development.md#quality-contract-6dq-matrix", agents)
+        self.assertIn("docs/development.md#retrospective-distillation", agents)
+        self.assertIn("docs/development.md#quality-contract-6dq-matrix", legacy)
+        self.assertIn("Retrospective.md", legacy)
+        self.assertIn("Retrospective.md", repo_contract)
+
 
 class ContractNegativeTests(unittest.TestCase):
     def setUp(self):

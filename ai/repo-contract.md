@@ -223,6 +223,22 @@ PRM consumes existing CI/review outcomes and manages delivery, not PR size.
 Updating this source does not deploy consumer pins, roles, directory-only
 schema/audit migrations or server protections.
 
+### Quality contract (6DQ matrix) and retrospective distillation
+
+The development guide also records the repository's
+[6DQ quality contract matrix](../templates/development.md#quality-contract-6dq-matrix)
+with columns `Dimension | Requirement & Bar | Status (enforced/planned/manual/N/A) | Verification Command & Current Gap`:
+
+- `L1` (Unit & Static): 4-metric coverage ≥95%, zero warnings/errors, no skipped/focused tests.
+- `L2` (Integration): local isolated API/DB/XPC/IPC boundary tests.
+- `L3` (System / UI / CLI): critical user journeys.
+- `G2` (Security & Policy): secret scan, lockfile audit, workflow-lint, repo-contract audit; missing scanner fails closed.
+- `D1` (Test Isolation): dedicated task worktree, per-run isolated temp state with test marker, zero prod/dev credentials.
+
+For [retrospective distillation](../templates/development.md#retrospective-distillation),
+keep detailed incident narratives in `Retrospective.md` and retain at most ~10
+concise one-line recurring project rules in the guide's `Red lines`.
+
 ## Changed-layer selection (optional)
 
 A caller may set `changed-only: true` on `quality.yml`, and may call
