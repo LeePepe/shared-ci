@@ -212,12 +212,15 @@ class ReleaseSyncTests(unittest.TestCase):
         target_rels = release_sync.discover_version_targets(repo)
         originals = {rel: (repo / rel).read_bytes() for rel in target_rels}
         real_replace = os.replace
-        call_count = 0
+        replace_calls: list[tuple[str, str]] = []
 
         def flaky_replace(src: os.PathLike[str] | str, dst: os.PathLike[str] | str) -> None:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
+            src_str, dst_str = os.fspath(src), os.fspath(dst)
+            replace_calls.append((src_str, dst_str))
+            if len(replace_calls) == 2:
+                # Before any replacement failure rollback runs, all .bak- files must already exist.
+                bak_files = list(repo.rglob(".*.bak-*"))
+                self.assertEqual(len(target_rels), len(bak_files))
                 raise OSError("simulated mid-batch os.replace failure")
             real_replace(src, dst)
 
@@ -231,10 +234,44 @@ class ReleaseSyncTests(unittest.TestCase):
         err_payload = json.loads(stderr)
         self.assertFalse(err_payload["ok"])
         self.assertEqual("write_failed", err_payload["code"])
+        # Rollback must use os.replace from the pre-staged .bak- file.
+        self.assertEqual(3, len(replace_calls))
+        self.assertIn(".bak-", pathlib.Path(replace_calls[2][0]).name)
         for rel, orig_bytes in originals.items():
             self.assertEqual(orig_bytes, (repo / rel).read_bytes(), f"{rel} was not rolled back")
-        leftover_temps = list(repo.rglob("*.tmp-*")) + list(repo.rglob(".*.tmp-*"))
+        leftover_temps = (
+            list(repo.rglob("*.tmp-*"))
+            + list(repo.rglob(".*.tmp-*"))
+            + list(repo.rglob("*.bak-*"))
+            + list(repo.rglob(".*.bak-*"))
+        )
         self.assertEqual([], leftover_temps)
+
+    def test_version_sync_atomic_apply_retains_backup_if_rollback_replace_fails(self) -> None:
+        repo = self._make_polyglot_repo("1.2.3")
+        real_replace = os.replace
+        call_count = 0
+
+        def double_fault_replace(src: os.PathLike[str] | str, dst: os.PathLike[str] | str) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise OSError("simulated storage failure during replace and rollback")
+            real_replace(src, dst)
+
+        with mock.patch("os.replace", side_effect=double_fault_replace):
+            code, stdout, stderr = self._run_cli(
+                "version-sync", "--root", str(repo), "--version", "2.0.0", "--apply"
+            )
+
+        self.assertEqual(2, code)
+        self.assertEqual("", stdout)
+        err_payload = json.loads(stderr)
+        self.assertEqual("write_failed", err_payload["code"])
+        self.assertIn("backup retained at", err_payload["error"])
+        retained_baks = list(repo.rglob(".*.bak-*"))
+        self.assertEqual(1, len(retained_baks))
+        self.assertEqual(b"1.2.3\n", retained_baks[0].read_bytes())
 
     def test_version_sync_atomic_apply_cleans_staged_temps_on_stage_failure(self) -> None:
         repo = self._make_polyglot_repo("1.2.3")
@@ -243,12 +280,18 @@ class ReleaseSyncTests(unittest.TestCase):
         real_stage = release_sync._stage_sibling_temp
         stage_calls = 0
 
-        def flaky_stage(target_path: pathlib.Path, payload: bytes, mode: int) -> pathlib.Path:
+        def flaky_stage(
+            target_path: pathlib.Path,
+            payload: bytes,
+            mode: int,
+            *,
+            kind: str = "tmp",
+        ) -> pathlib.Path:
             nonlocal stage_calls
             stage_calls += 1
             if stage_calls == 2:
                 raise OSError("simulated disk full during staging")
-            return real_stage(target_path, payload, mode)
+            return real_stage(target_path, payload, mode, kind=kind)
 
         with mock.patch.object(release_sync, "_stage_sibling_temp", side_effect=flaky_stage):
             code, stdout, stderr = self._run_cli(
@@ -262,7 +305,12 @@ class ReleaseSyncTests(unittest.TestCase):
         self.assertEqual("write_failed", err_payload["code"])
         for rel, orig_bytes in originals.items():
             self.assertEqual(orig_bytes, (repo / rel).read_bytes(), f"{rel} was modified")
-        leftover_temps = list(repo.rglob("*.tmp-*")) + list(repo.rglob(".*.tmp-*"))
+        leftover_temps = (
+            list(repo.rglob("*.tmp-*"))
+            + list(repo.rglob(".*.tmp-*"))
+            + list(repo.rglob("*.bak-*"))
+            + list(repo.rglob(".*.bak-*"))
+        )
         self.assertEqual([], leftover_temps)
 
     def test_symlinked_ancestor_rejected_in_check_and_apply_without_external_writes(self) -> None:
@@ -496,47 +544,32 @@ class ReleaseSyncTests(unittest.TestCase):
         fm = importlib.util.module_from_spec(fm_spec)
         fm_spec.loader.exec_module(fm)
         parsed = fm.parse(workflow_text)
+        inputs = parsed["on"]["workflow_call"]["inputs"]
+        self.assertTrue(inputs["shared-ci-sha"].get("required"))
         steps = parsed["jobs"]["release"]["steps"]
-        provider_step = next(s for s in steps if s.get("id") == "provider")
+        self.assertEqual("provider", steps[0].get("id"))
+        provider_step = steps[0]
 
         caller = self.root / "caller-repo"
         caller.mkdir(parents=True, exist_ok=True)
+        # Even if an untrusted worktree has a hostile repo-contract.json, provider step ignores it.
         (caller / ".github").mkdir(parents=True, exist_ok=True)
         (caller / ".github" / "repo-contract.json").write_text(
-            json.dumps(
-                {
-                    "schema": 1,
-                    "guide": "docs/repository-guide.md",
-                    "shared_ci": SAMPLE_SHA,
-                    "dependencies": {},
-                }
-            ),
+            json.dumps({"shared_ci": OTHER_SHA}),
             encoding="utf-8",
         )
-        git_env = {
+
+        gh_out = self.root / "github_output.txt"
+        base_env = {
             k: os.environ[k]
             for k in ("PATH", "HOME", "TMPDIR")
             if k in os.environ
         }
-        git_env.update(
-            GIT_CONFIG_NOSYSTEM="1",
-            GIT_CONFIG_GLOBAL=os.devnull,
-            GIT_CONFIG_SYSTEM=os.devnull,
-        )
-        subprocess.run(["git", "init", "-q"], cwd=caller, env=git_env, check=True)
-        subprocess.run(
-            ["git", "add", ".github/repo-contract.json"],
-            cwd=caller,
-            env=git_env,
-            check=True,
-        )
-
-        gh_out = self.root / "github_output.txt"
         run_env = dict(
-            git_env,
+            base_env,
             GITHUB_OUTPUT=str(gh_out),
             INPUT_REPOSITORY="LeePepe/shared-ci",
-            INPUT_SHA="",
+            INPUT_SHA=SAMPLE_SHA,
         )
         res = subprocess.run(
             ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", provider_step["run"]],
@@ -552,9 +585,9 @@ class ReleaseSyncTests(unittest.TestCase):
             gh_out.read_text(encoding="utf-8"),
         )
 
-        # Mismatched INPUT_SHA vs .github/repo-contract.json must fail closed.
+        # Missing or non-40-char INPUT_SHA must fail closed without falling back to worktree files.
         gh_out.write_text("", encoding="utf-8")
-        bad_env = dict(run_env, INPUT_SHA=OTHER_SHA)
+        bad_env = dict(run_env, INPUT_SHA="")
         bad_res = subprocess.run(
             ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", provider_step["run"]],
             cwd=caller,
@@ -564,7 +597,7 @@ class ReleaseSyncTests(unittest.TestCase):
             check=False,
         )
         self.assertNotEqual(0, bad_res.returncode)
-        self.assertIn("does not match repository contract pin", bad_res.stdout + bad_res.stderr)
+        self.assertIn("shared-ci-sha is required", bad_res.stdout + bad_res.stderr)
 
 
 if __name__ == "__main__":

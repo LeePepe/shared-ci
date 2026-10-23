@@ -438,13 +438,19 @@ def _split_csv_args(values: list[str] | None) -> list[str]:
     return items
 
 
-def _stage_sibling_temp(target_path: pathlib.Path, payload: bytes, mode: int) -> pathlib.Path:
+def _stage_sibling_temp(
+    target_path: pathlib.Path,
+    payload: bytes,
+    mode: int,
+    *,
+    kind: str = "tmp",
+) -> pathlib.Path:
     tmp_path: pathlib.Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="wb",
             dir=target_path.parent,
-            prefix=f".{target_path.name}.tmp-",
+            prefix=f".{target_path.name}.{kind}-",
             delete=False,
         ) as tmp_file:
             tmp_path = pathlib.Path(tmp_file.name)
@@ -466,14 +472,18 @@ def _atomic_apply_writes(
     root: pathlib.Path,
     planned_writes: list[tuple[str, pathlib.Path, bytes, int, bytes]],
 ) -> None:
-    staged: list[tuple[str, pathlib.Path, bytes, int, pathlib.Path]] = []
+    staged: list[tuple[str, pathlib.Path, pathlib.Path, pathlib.Path]] = []
+    created_temps: list[pathlib.Path] = []
     try:
         for rel, target_path, orig_bytes, mode, new_bytes in planned_writes:
             _ensure_safe_target(root, rel)
-            tmp_path = _stage_sibling_temp(target_path, new_bytes, mode)
-            staged.append((rel, target_path, orig_bytes, mode, tmp_path))
+            new_tmp = _stage_sibling_temp(target_path, new_bytes, mode, kind="tmp")
+            created_temps.append(new_tmp)
+            bak_tmp = _stage_sibling_temp(target_path, orig_bytes, mode, kind="bak")
+            created_temps.append(bak_tmp)
+            staged.append((rel, target_path, new_tmp, bak_tmp))
     except Exception as error:
-        for _, _, _, _, tmp_path in staged:
+        for tmp_path in created_temps:
             try:
                 tmp_path.unlink(missing_ok=True)
             except OSError:
@@ -485,48 +495,50 @@ def _atomic_apply_writes(
             code="write_failed",
         ) from None
 
-    committed: list[tuple[str, pathlib.Path, bytes, int]] = []
+    replaced: list[tuple[str, pathlib.Path, pathlib.Path]] = []
     failed_rel = ""
     try:
-        for rel, target_path, orig_bytes, mode, tmp_path in staged:
+        for rel, target_path, new_tmp, bak_tmp in staged:
             failed_rel = rel
             _ensure_safe_target(root, rel)
-            if tmp_path.is_symlink():
+            if new_tmp.is_symlink() or bak_tmp.is_symlink():
                 raise ReleaseSyncError(
                     f"symlink_target: staged temporary file became a symlink for {rel}",
                     code="symlink_target",
                 )
-            os.replace(tmp_path, target_path)
-            committed.append((rel, target_path, orig_bytes, mode))
+            os.replace(new_tmp, target_path)
+            replaced.append((rel, target_path, bak_tmp))
     except Exception as error:
-        for _, _, _, _, tmp_path in staged:
+        for _, _, new_tmp, _ in staged:
             try:
-                if tmp_path.exists() or tmp_path.is_symlink():
-                    tmp_path.unlink(missing_ok=True)
+                if new_tmp.exists() or new_tmp.is_symlink():
+                    new_tmp.unlink(missing_ok=True)
             except OSError:
                 pass
         rollback_errors: list[str] = []
-        for c_rel, c_target, c_orig_bytes, c_mode in reversed(committed):
-            rb_tmp: pathlib.Path | None = None
+        preserved_backups: set[pathlib.Path] = set()
+        for c_rel, c_target, c_bak_tmp in reversed(replaced):
             try:
                 _ensure_safe_target(root, c_rel)
-                rb_tmp = _stage_sibling_temp(c_target, c_orig_bytes, c_mode)
-                os.replace(rb_tmp, c_target)
-            except Exception:
-                if rb_tmp is not None:
-                    try:
-                        rb_tmp.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                try:
-                    _ensure_safe_target(root, c_rel)
-                    with open(c_target, "wb") as fh:
-                        fh.write(c_orig_bytes)
-                        fh.flush()
-                        os.fsync(fh.fileno())
-                    os.chmod(c_target, c_mode)
-                except Exception as rb_err:
-                    rollback_errors.append(f"{c_rel}: {rb_err}")
+                if c_bak_tmp.is_symlink():
+                    raise ReleaseSyncError(
+                        f"symlink_target: staged backup file became a symlink for {c_rel}",
+                        code="symlink_target",
+                    )
+                os.replace(c_bak_tmp, c_target)
+            except Exception as rb_err:
+                preserved_backups.add(c_bak_tmp)
+                rollback_errors.append(
+                    f"{c_rel} (backup retained at {c_bak_tmp.name}): {rb_err}"
+                )
+        for _, _, _, bak_tmp in staged:
+            if bak_tmp in preserved_backups:
+                continue
+            try:
+                if bak_tmp.exists() or bak_tmp.is_symlink():
+                    bak_tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
         if rollback_errors:
             raise ReleaseSyncError(
                 f"write_failed: failed to update {failed_rel} ({error}); "
@@ -537,9 +549,15 @@ def _atomic_apply_writes(
             raise
         raise ReleaseSyncError(
             f"write_failed: failed to update {failed_rel} "
-            f"(rolled back {len(committed)} target(s)): {error}",
+            f"(rolled back {len(replaced)} target(s)): {error}",
             code="write_failed",
         ) from None
+
+    for _, _, _, bak_tmp in staged:
+        try:
+            bak_tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def run_version_sync(

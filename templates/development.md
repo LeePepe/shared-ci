@@ -74,7 +74,8 @@ possible.
 ## Release and live readback
 
 Use `scripts/quality/release_sync.py` (or the reusable `.github/workflows/release.yml`
-workflow pinned by 40-char SHA) to keep multi-language version manifests
-(`package.json`, `Cargo.toml`, `project.yml`, `*.pbxproj`, `VERSION`) in lockstep
-and verify post-release live readback (`/api/live` JSON version/SHA parity,
-`SHA256SUMS` artifact digests, and GitHub Release asset metadata).
+workflow pinned by 40-char SHA with `with: shared-ci-sha: <40-char-sha>`) to keep
+multi-language version manifests (`package.json`, `Cargo.toml`, `project.yml`,
+`*.pbxproj`, `VERSION`) in lockstep and verify post-release live readback
+(`/api/live` JSON version/SHA parity, `SHA256SUMS` artifact digests, and GitHub
+Release asset metadata).

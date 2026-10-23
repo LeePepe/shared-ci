@@ -11,9 +11,9 @@ on:
         type: string
         default: LeePepe/shared-ci
       shared-ci-sha:
-        description: Optional 40-char commit SHA for shared-ci (defaults to .github/repo-contract.json shared_ci or AGENTS.md pin).
+        description: Required 40-char lowercase commit SHA for shared-ci (must match the caller workflow's pinned ref).
         type: string
-        default: ""
+        required: true
       expected-version:
         description: Expected SemVer version (optional; defaults to canonical manifest version).
         type: string
@@ -75,13 +75,36 @@ permissions:
 
 jobs:
   release:
-    if: github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request_target' && (github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       version: ${{ steps.version-sync.outputs.version }}
       released-sha: ${{ steps.sha.outputs.released-sha }}
     steps:
+      - name: Resolve shared-ci provider revision
+        id: provider
+        env:
+          INPUT_REPOSITORY: ${{ inputs.shared-ci-repository }}
+          INPUT_SHA: ${{ inputs.shared-ci-sha }}
+        run: |
+          python3 -I -B -c '
+          import os
+          import re
+
+          repo = os.environ.get("INPUT_REPOSITORY", "").strip() or "LeePepe/shared-ci"
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+              raise SystemExit("::error::invalid shared-ci-repository: " + repo)
+
+          input_sha = os.environ.get("INPUT_SHA", "").strip()
+          if not re.fullmatch(r"[0-9a-f]{40}", input_sha):
+              raise SystemExit(
+                  "::error::shared-ci-sha is required and must be a full lowercase 40-char SHA"
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out_file:
+              out_file.write(f"repository={repo}\nsha={input_sha}\n")
+          '
       - name: Check out caller at the target SHA
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -90,85 +113,6 @@ jobs:
           persist-credentials: false
       - id: sha
         run: echo "released-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Resolve shared-ci provider revision
-        id: provider
-        env:
-          INPUT_REPOSITORY: ${{ inputs.shared-ci-repository }}
-          INPUT_SHA: ${{ inputs.shared-ci-sha }}
-        run: |
-          python3 -I -B -c '
-          import json
-          import os
-          import pathlib
-          import re
-          import subprocess
-
-          repo = os.environ.get("INPUT_REPOSITORY", "").strip() or "LeePepe/shared-ci"
-          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-              raise SystemExit("::error::invalid shared-ci-repository: " + repo)
-
-          input_sha = os.environ.get("INPUT_SHA", "").strip()
-          if input_sha and not re.fullmatch(r"[0-9a-f]{40}", input_sha):
-              raise SystemExit("::error::shared-ci-sha must be a full lowercase 40-char SHA")
-
-          contract_pin = ""
-          metadata = pathlib.Path(".github/repo-contract.json")
-          if metadata.is_symlink() or metadata.parent.is_symlink():
-              raise SystemExit("::error::repository metadata must not traverse a symlink")
-          if metadata.exists():
-              if not metadata.is_file():
-                  raise SystemExit("::error::repository metadata must be a regular file")
-              rows = subprocess.check_output(
-                  ["git", "ls-files", "--stage", "--", str(metadata)], text=True
-              ).splitlines()
-              if len(rows) != 1 or not re.fullmatch(
-                  r"100(?:644|755) [0-9a-f]+ 0\t\.github/repo-contract\.json", rows[0]
-              ):
-                  raise SystemExit("::error::repository metadata must be tracked and unconflicted")
-              def unique(pairs):
-                  result = {}
-                  for key, value in pairs:
-                      if key in result:
-                          raise ValueError("duplicate metadata key: " + key)
-                      result[key] = value
-                  return result
-              data = json.loads(metadata.read_text(encoding="utf-8"), object_pairs_hook=unique)
-              if not isinstance(data, dict) or not isinstance(data.get("shared_ci"), str):
-                  raise SystemExit("::error::invalid shared_ci field in .github/repo-contract.json")
-              contract_pin = data["shared_ci"]
-              if not re.fullmatch(r"[0-9a-f]{40}", contract_pin):
-                  raise SystemExit("::error::.github/repo-contract.json shared_ci must be a 40-char SHA")
-          else:
-              agents = pathlib.Path("AGENTS.md")
-              if agents.is_symlink():
-                  raise SystemExit("::error::AGENTS.md must not be a symlink")
-              if agents.is_file():
-                  text = agents.read_text(encoding="utf-8")
-                  pins = set(
-                      re.findall(
-                          r"(?:LeePepe/shared-ci@|github\.com/LeePepe/shared-ci/blob/)([0-9a-f]{40})/ai/agent-protocol\.md",
-                          text,
-                      )
-                  )
-                  if len(pins) > 1:
-                      raise SystemExit("::error::multiple shared-ci pins found in AGENTS.md")
-                  if len(pins) == 1:
-                      contract_pin = pins.pop()
-
-          if input_sha and contract_pin and input_sha != contract_pin:
-              raise SystemExit(
-                  f"::error::shared-ci-sha ({input_sha}) does not match repository contract pin ({contract_pin})"
-              )
-
-          resolved_sha = input_sha or contract_pin
-          if not re.fullmatch(r"[0-9a-f]{40}", resolved_sha):
-              raise SystemExit(
-                  "::error::shared-ci revision unavailable; set shared-ci-sha or .github/repo-contract.json shared_ci"
-              )
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out_file:
-              out_file.write(f"repository={repo}\nsha={resolved_sha}\n")
-          '
       - name: Check out shared-ci at the pinned SHA
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
