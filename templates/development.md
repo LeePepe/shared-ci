@@ -70,3 +70,11 @@ Keep detailed post-mortem and incident narratives in `Retrospective.md`. Distill
 at most ~10 concise one-line recurring project rules into `docs/repository-guide.md`
 under `Red lines`, paired with a mechanical test, lint or contract check whenever
 possible.
+
+## Release and live readback
+
+Use `scripts/quality/release_sync.py` (or the reusable `.github/workflows/release.yml`
+workflow pinned by 40-char SHA) to keep multi-language version manifests
+(`package.json`, `Cargo.toml`, `project.yml`, `*.pbxproj`, `VERSION`) in lockstep
+and verify post-release live readback (`/api/live` JSON version/SHA parity,
+`SHA256SUMS` artifact digests, and GitHub Release asset metadata).

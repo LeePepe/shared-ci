@@ -1,0 +1,177 @@
+name: release
+
+# Reusable cross-target version parity, release execution, and post-release
+# live-readback verification workflow. Pin by full 40-char SHA.
+
+on:
+  workflow_call:
+    inputs:
+      expected-version:
+        description: Expected SemVer version (optional; defaults to canonical manifest version).
+        type: string
+        default: ""
+      targets:
+        description: Optional comma-separated manifest paths for version-sync.
+        type: string
+        default: ""
+      check-stale:
+        description: Optional comma-separated file paths scanned for leftover version strings.
+        type: string
+        default: ""
+      setup-command:
+        description: Optional setup command executed before release-command.
+        type: string
+        default: ""
+      release-command:
+        description: Optional caller build, package, or publish command.
+        type: string
+        default: ""
+      artifacts-glob:
+        description: Optional glob pattern(s) for release artifacts to hash and verify against SHA256SUMS.
+        type: string
+        default: ""
+      checksums-file:
+        description: Path to the SHA-256 checksums manifest when artifacts-glob is used.
+        type: string
+        default: SHA256SUMS
+      live-url:
+        description: Optional HTTP/HTTPS /api/live endpoint URL for post-deploy readback verification.
+        type: string
+        default: ""
+      release-json:
+        description: Optional path to GitHub Release JSON metadata for release asset readback.
+        type: string
+        default: ""
+      readback-timeout:
+        description: HTTP timeout in seconds for live-url readback.
+        type: number
+        default: 10
+      readback-retries:
+        description: HTTP retry count for live-url readback.
+        type: number
+        default: 3
+      timeout-minutes:
+        description: Job timeout in minutes.
+        type: number
+        default: 30
+    outputs:
+      version:
+        description: Verified SemVer version from version-sync.
+        value: ${{ jobs.release.outputs.version }}
+      released-sha:
+        description: Commit SHA verified by the release workflow.
+        value: ${{ jobs.release.outputs.released-sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.event.pull_request == null || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      version: ${{ steps.version-sync.outputs.version }}
+      released-sha: ${{ steps.sha.outputs.released-sha }}
+    steps:
+      - name: Check out caller at the target SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: sha
+        run: echo "released-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check out shared-ci at the pinned SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .shared-ci
+          persist-credentials: false
+      - name: Confirm shared-ci revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          case "$WORKFLOW_SHA" in *[!0-9a-f]*|"") echo "::error::job.workflow_sha unavailable"; exit 1 ;; esac
+          [ "${#WORKFLOW_SHA}" -eq 40 ] && [ -n "$WORKFLOW_REPOSITORY" ] || { echo "::error::shared-ci identity unavailable"; exit 1; }
+          [ "$(git -C .shared-ci rev-parse HEAD)" = "$WORKFLOW_SHA" ] || { echo "::error::.shared-ci is not $WORKFLOW_SHA"; exit 1; }
+      - name: Verify cross-target version parity
+        id: version-sync
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected-version }}
+          TARGETS: ${{ inputs.targets }}
+          CHECK_STALE: ${{ inputs.check-stale }}
+        run: |
+          args=(version-sync --root . --check)
+          if [ -n "$EXPECTED_VERSION" ]; then
+            args+=(--version "$EXPECTED_VERSION")
+          fi
+          if [ -n "$TARGETS" ]; then
+            args+=(--targets "$TARGETS")
+          fi
+          if [ -n "$CHECK_STALE" ]; then
+            args+=(--check-stale "$CHECK_STALE")
+          fi
+          report="$(python3 -I -B .shared-ci/scripts/quality/release_sync.py "${args[@]}")"
+          printf '%s\n' "$report"
+          resolved_version="$(python3 -I -B -c 'import json,sys; print(json.loads(sys.stdin.read())["version"])' <<< "$report")"
+          echo "version=$resolved_version" >> "$GITHUB_OUTPUT"
+      - if: inputs.setup-command != ''
+        name: Run setup command
+        env:
+          COMMAND: ${{ inputs.setup-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+      - if: inputs.release-command != ''
+        name: Run release command
+        env:
+          COMMAND: ${{ inputs.release-command }}
+          RELEASE_VERSION: ${{ steps.version-sync.outputs.version }}
+          RELEASE_SHA: ${{ steps.sha.outputs.released-sha }}
+        run: bash -euo pipefail -c "$COMMAND"
+      - if: inputs.artifacts-glob != '' || inputs.live-url != '' || inputs.release-json != ''
+        name: Verify SHA256SUMS and post-deploy live readback
+        env:
+          VERSION: ${{ steps.version-sync.outputs.version }}
+          RELEASED_SHA: ${{ steps.sha.outputs.released-sha }}
+          ARTIFACTS_GLOB: ${{ inputs.artifacts-glob }}
+          CHECKSUMS_FILE: ${{ inputs.checksums-file }}
+          LIVE_URL: ${{ inputs.live-url }}
+          RELEASE_JSON: ${{ inputs.release-json }}
+          TIMEOUT: ${{ inputs.readback-timeout }}
+          RETRIES: ${{ inputs.readback-retries }}
+        run: |
+          rb_args=(readback --root . --expected-version "$VERSION" --expected-sha "$RELEASED_SHA" --timeout "$TIMEOUT" --retries "$RETRIES")
+          if [ -n "$ARTIFACTS_GLOB" ]; then
+            shopt -s nullglob
+            read -r -a patterns <<< "$ARTIFACTS_GLOB"
+            artifacts=()
+            for pattern in "${patterns[@]}"; do
+              for match in $pattern; do
+                artifacts+=("$match")
+              done
+            done
+            if [ "${#artifacts[@]}" -eq 0 ]; then
+              echo "::error::artifacts-glob matched no files: $ARTIFACTS_GLOB"
+              exit 1
+            fi
+            if [ ! -f "$CHECKSUMS_FILE" ]; then
+              if command -v sha256sum >/dev/null 2>&1; then
+                sha256sum "${artifacts[@]}" > "$CHECKSUMS_FILE"
+              else
+                shasum -a 256 "${artifacts[@]}" > "$CHECKSUMS_FILE"
+              fi
+            fi
+            rb_args+=(--checksums-file "$CHECKSUMS_FILE")
+            for artifact in "${artifacts[@]}"; do
+              rb_args+=(--artifact "$artifact")
+            done
+          fi
+          if [ -n "$LIVE_URL" ]; then
+            rb_args+=(--live-url "$LIVE_URL")
+          fi
+          if [ -n "$RELEASE_JSON" ]; then
+            rb_args+=(--release-json "$RELEASE_JSON")
+          fi
+          python3 -I -B .shared-ci/scripts/quality/release_sync.py "${rb_args[@]}"
