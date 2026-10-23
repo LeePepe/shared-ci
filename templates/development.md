@@ -61,7 +61,7 @@ current gaps; do not treat template placeholders as proof of enforcement.
 | `L1` (Unit & Static) | 4-metric coverage ≥95% (line/branch/function/statement where supported), zero compiler/linter warnings or errors, no skipped or focused tests | `planned` | `scripts/verify` — replace with actual unit/static command and coverage gap |
 | `L2` (Integration) | Local isolated API/DB/XPC/IPC boundary tests with deterministic fixtures | `planned` | `scripts/verify` — replace with actual integration suite or record `N/A` with reason |
 | `L3` (System / UI / CLI) | Critical user journeys exercised end-to-end | `planned` | `scripts/verify` — replace with actual E2E/CLI smoke command or gap |
-| `G2` (Security & Policy) | Secret scan, lockfile audit, workflow-lint, repo-contract audit; missing scanner fails closed | `enforced` | `scripts/verify` (context audit + workflow-lint; add secret/dependency scanner commands or record gap) |
+| `G2` (Security & Policy) | Secret scan, lockfile audit, workflow-lint, repo-contract audit; missing scanner fails closed | `planned` | `scripts/verify` (context audit + workflow-lint; add secret/dependency scanner commands or record gap) |
 | `D1` (Test Isolation) | Dedicated task worktree, per-run isolated temp state with test marker, zero prod/dev credentials | `enforced` | `scripts/verify` (hermetic per-run fixtures; document any remaining state isolation gap) |
 
 ## Retrospective distillation

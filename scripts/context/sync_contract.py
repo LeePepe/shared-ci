@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import json
 import pathlib
 import re
+import stat
 import sys
 from typing import Any
 
@@ -63,6 +64,10 @@ AGENT_FILE_TEMPLATES: dict[str, str] = {
 class SyncError(ValueError):
     """Invalid input or target repository state."""
 
+    def __init__(self, message: str, code: str = "invalid_input") -> None:
+        super().__init__(message)
+        self.code = code
+
 
 @dataclass(frozen=True)
 class FileChange:
@@ -103,6 +108,82 @@ def _valid_local_path(value: str) -> bool:
         and not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
         and all(part not in ("", ".", "..") for part in value.split("/"))
     )
+
+
+def _within_root(root: pathlib.Path, target: pathlib.Path) -> bool:
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved_target = target.resolve(strict=False)
+    except OSError:
+        return False
+    return resolved_root in resolved_target.parents
+
+
+def _has_symlink_ancestor(root: pathlib.Path, target: pathlib.Path) -> pathlib.Path | None:
+    try:
+        rel = target.relative_to(root)
+    except ValueError:
+        return target
+    current = root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            return current
+    return None
+
+
+def _ensure_safe_target(
+    root: pathlib.Path, rel_path: str, *, expect_dir: bool = False
+) -> pathlib.Path:
+    if not _valid_local_path(rel_path):
+        raise SyncError(
+            f"unsafe_target: path must be a safe repository-relative path: {rel_path!r}",
+            code="unsafe_target",
+        )
+    target = root / rel_path
+    symlink = _has_symlink_ancestor(root, target)
+    if symlink is not None:
+        rel_symlink = symlink.relative_to(root).as_posix()
+        raise SyncError(
+            f"symlink_target: {rel_path} traverses symlink {rel_symlink}",
+            code="symlink_target",
+        )
+    if not _within_root(root, target):
+        raise SyncError(
+            f"unsafe_target: {rel_path} resolves outside repository root {root}",
+            code="unsafe_target",
+        )
+    current = root
+    parts = rel_path.split("/")
+    for index, part in enumerate(parts):
+        current = current / part
+        try:
+            st = current.lstat()
+        except FileNotFoundError:
+            continue
+        is_last = index == len(parts) - 1
+        if stat.S_ISLNK(st.st_mode):
+            raise SyncError(
+                f"symlink_target: {rel_path} traverses symlink {current.relative_to(root).as_posix()}",
+                code="symlink_target",
+            )
+        if not is_last and not stat.S_ISDIR(st.st_mode):
+            raise SyncError(
+                f"unsafe_target: ancestor {current.relative_to(root).as_posix()} is not a directory",
+                code="unsafe_target",
+            )
+        if is_last:
+            if expect_dir and not stat.S_ISDIR(st.st_mode):
+                raise SyncError(
+                    f"unsafe_target: expected directory at {rel_path}",
+                    code="unsafe_target",
+                )
+            if not expect_dir and not stat.S_ISREG(st.st_mode):
+                raise SyncError(
+                    f"unsafe_target: existing target {rel_path} is not a regular file",
+                    code="unsafe_target",
+                )
+    return target
 
 
 def _extract_required_checks(guide_text: str) -> list[str]:
@@ -197,19 +278,28 @@ def sync_repository(
 ) -> RepoSyncResult:
     if not isinstance(pin, str) or not SHA_RE.fullmatch(pin):
         raise SyncError("pin must be a full lowercase 40-char hex SHA")
+    if repo_root.is_symlink():
+        raise SyncError(
+            f"symlink_target: target repository root is a symlink: {repo_root}",
+            code="symlink_target",
+        )
     if not repo_root.is_dir():
         raise SyncError(f"target repository is not a directory: {repo_root}")
+    root = repo_root.resolve()
     if guide is not None and not _valid_local_path(guide):
-        raise SyncError(f"guide must be a safe repository-relative file path: {guide!r}")
+        raise SyncError(
+            f"unsafe_target: guide must be a safe repository-relative file path: {guide!r}",
+            code="unsafe_target",
+        )
 
     changes: list[FileChange] = []
-    writes: list[tuple[pathlib.Path, str]] = []
+    writes: list[tuple[str, pathlib.Path, str]] = []
 
     # 1. .github/repo-contract.json
-    metadata_path = repo_root / METADATA_REL
+    metadata_path = _ensure_safe_target(root, METADATA_REL)
     existing_metadata: dict[str, Any] | None = None
     existing_metadata_text: str | None = None
-    if metadata_path.is_file() and not metadata_path.is_symlink():
+    if metadata_path.is_file():
         try:
             existing_metadata_text = metadata_path.read_text(encoding="utf-8")
             parsed = json.loads(existing_metadata_text)
@@ -220,14 +310,18 @@ def sync_repository(
 
     effective_guide = guide
     if effective_guide is None:
-        if (
-            existing_metadata is not None
-            and isinstance(existing_metadata.get("guide"), str)
-            and _valid_local_path(existing_metadata["guide"])
-        ):
-            effective_guide = existing_metadata["guide"]
+        if existing_metadata is not None and "guide" in existing_metadata:
+            raw_guide = existing_metadata["guide"]
+            if not isinstance(raw_guide, str) or not _valid_local_path(raw_guide):
+                raise SyncError(
+                    f"unsafe_target: metadata guide must be a safe repository-relative file path: {raw_guide!r}",
+                    code="unsafe_target",
+                )
+            effective_guide = raw_guide
         else:
             effective_guide = DEFAULT_GUIDE
+
+    guide_file = _ensure_safe_target(root, effective_guide)
 
     dependencies: dict[str, Any] = {}
     if existing_metadata is not None and isinstance(existing_metadata.get("dependencies"), dict):
@@ -245,79 +339,79 @@ def sync_repository(
     desired_metadata_text = json.dumps(desired_metadata_obj, indent=2, ensure_ascii=False) + "\n"
     if existing_metadata_text is None:
         changes.append(FileChange(METADATA_REL, "create", "create .github/repo-contract.json"))
-        writes.append((metadata_path, desired_metadata_text))
+        writes.append((METADATA_REL, metadata_path, desired_metadata_text))
     elif existing_metadata != desired_metadata_obj:
         changes.append(FileChange(METADATA_REL, "update", "sync shared_ci pin and schema in .github/repo-contract.json"))
-        writes.append((metadata_path, desired_metadata_text))
+        writes.append((METADATA_REL, metadata_path, desired_metadata_text))
 
     # 2. AGENTS.md
-    agents_path = repo_root / "AGENTS.md"
+    agents_path = _ensure_safe_target(root, "AGENTS.md")
     existing_agents_text: str | None = None
-    if agents_path.is_file() and not agents_path.is_symlink():
+    if agents_path.is_file():
         existing_agents_text = agents_path.read_text(encoding="utf-8")
     desired_agents_text, agents_reason = _desired_agents(
         existing_agents_text, pin, effective_guide, overwrite=overwrite_agents
     )
     if existing_agents_text is None:
         changes.append(FileChange("AGENTS.md", "create", agents_reason))
-        writes.append((agents_path, desired_agents_text))
+        writes.append(("AGENTS.md", agents_path, desired_agents_text))
     elif existing_agents_text != desired_agents_text:
         changes.append(FileChange("AGENTS.md", "update", agents_reason))
-        writes.append((agents_path, desired_agents_text))
+        writes.append(("AGENTS.md", agents_path, desired_agents_text))
 
     # 3. Tool pointer files (CLAUDE.md, .github/copilot-instructions.md, GEMINI.md, .cursorrules)
-    guide_file = repo_root / effective_guide
-    guide_text = (
-        guide_file.read_text(encoding="utf-8")
-        if guide_file.is_file() and not guide_file.is_symlink()
-        else ""
-    )
+    guide_text = guide_file.read_text(encoding="utf-8") if guide_file.is_file() else ""
     required_checks = _extract_required_checks(guide_text)
     agent_candidates = list(REQUIRED_AGENT_FILES)
     for opt in OPTIONAL_AGENT_FILES:
-        if include_optional_agent_files or (repo_root / opt).exists():
+        opt_target = _ensure_safe_target(root, opt)
+        if include_optional_agent_files or opt_target.exists():
             agent_candidates.append(opt)
 
     for rel_path in agent_candidates:
-        target = repo_root / rel_path
+        target = _ensure_safe_target(root, rel_path)
         canonical = AGENT_FILE_TEMPLATES[rel_path]
-        if not target.is_file() or target.is_symlink():
+        if not target.is_file():
             changes.append(FileChange(rel_path, "create", f"bootstrap tool pointer {rel_path}"))
-            writes.append((target, canonical))
+            writes.append((rel_path, target, canonical))
         else:
             current_text = target.read_text(encoding="utf-8")
             if not _agent_file_valid(current_text, required_checks):
                 changes.append(
                     FileChange(rel_path, "update", f"repair non-compliant tool pointer {rel_path}")
                 )
-                writes.append((target, canonical))
+                writes.append((rel_path, target, canonical))
 
     # 4. .github/workflows/*.yml and *.yaml
-    workflows_dir = repo_root / ".github" / "workflows"
-    if workflows_dir.is_dir() and not workflows_dir.is_symlink():
-        workflow_files = sorted(
-            p for p in workflows_dir.iterdir()
-            if p.is_file() and not p.is_symlink() and p.suffix in (".yml", ".yaml")
-        )
-        for wf_path in workflow_files:
-            rel_wf = wf_path.relative_to(repo_root).as_posix()
-            current_wf = wf_path.read_text(encoding="utf-8")
-            desired_wf = _sync_workflow_text(current_wf, pin, effective_guide)
-            if desired_wf != current_wf:
-                changes.append(
-                    FileChange(rel_wf, "update", "sync shared-ci workflow pin and review rules-file")
-                )
-                writes.append((wf_path, desired_wf))
+    workflows_candidate = root / ".github" / "workflows"
+    if workflows_candidate.exists() or workflows_candidate.is_symlink():
+        workflows_dir = _ensure_safe_target(root, ".github/workflows", expect_dir=True)
+        for entry in sorted(workflows_dir.iterdir()):
+            rel_wf = entry.relative_to(root).as_posix()
+            if entry.is_symlink() or entry.suffix in (".yml", ".yaml"):
+                wf_path = _ensure_safe_target(root, rel_wf)
+            else:
+                continue
+            if wf_path.is_file() and wf_path.suffix in (".yml", ".yaml"):
+                current_wf = wf_path.read_text(encoding="utf-8")
+                desired_wf = _sync_workflow_text(current_wf, pin, effective_guide)
+                if desired_wf != current_wf:
+                    changes.append(
+                        FileChange(rel_wf, "update", "sync shared-ci workflow pin and review rules-file")
+                    )
+                    writes.append((rel_wf, wf_path, desired_wf))
 
     if apply:
-        for target_path, content in writes:
+        for rel_path, _, _ in writes:
+            _ensure_safe_target(root, rel_path)
+        for rel_path, target_path, content in writes:
+            _ensure_safe_target(root, rel_path)
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            if target_path.is_symlink():
-                target_path.unlink()
+            _ensure_safe_target(root, rel_path)
             target_path.write_text(content, encoding="utf-8")
 
     return RepoSyncResult(
-        repo=str(repo_root),
+        repo=str(root),
         pin=pin,
         guide=effective_guide,
         drifted=bool(changes),
@@ -337,6 +431,16 @@ def sync_repositories(
 ) -> dict[str, Any]:
     if not repo_roots:
         raise SyncError("at least one target repository path is required")
+    if apply:
+        for root in repo_roots:
+            sync_repository(
+                root,
+                pin,
+                guide=guide,
+                apply=False,
+                overwrite_agents=overwrite_agents,
+                include_optional_agent_files=include_optional_agent_files,
+            )
     results = [
         sync_repository(
             root,
@@ -410,7 +514,10 @@ def main(argv: list[str] | None = None) -> int:
     raw_repos = list(args.repos) + list(args.extra_repos)
     if not raw_repos:
         raw_repos = ["."]
-    repo_paths = [pathlib.Path(p).resolve() for p in raw_repos]
+    repo_paths = [
+        pathlib.Path(p) if pathlib.Path(p).is_symlink() else pathlib.Path(p).resolve()
+        for p in raw_repos
+    ]
     try:
         report = sync_repositories(
             repo_paths,
@@ -421,7 +528,13 @@ def main(argv: list[str] | None = None) -> int:
             include_optional_agent_files=bool(args.all_agent_files),
         )
     except SyncError as error:
-        print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False), file=sys.stderr)
+        print(
+            json.dumps(
+                {"ok": False, "code": error.code, "error": str(error)},
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
         return 2
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if not args.apply and report["drifted_count"] > 0:

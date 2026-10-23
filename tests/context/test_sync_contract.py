@@ -236,6 +236,40 @@ class SyncContractTests(unittest.TestCase):
                 self.assertEqual(2, code)
                 self.assertFalse(json.loads(stderr)["ok"])
 
+    def test_symlinked_github_ancestor_rejected_in_check_and_apply_without_external_writes(self) -> None:
+        repo = self._make_consumer_repo()
+        external = self.root / "external-github"
+        external.mkdir(parents=True, exist_ok=True)
+        external_wf = external / "workflows"
+        external_wf.mkdir(parents=True, exist_ok=True)
+        sentinel_ci = external_wf / "ci.yml"
+        sentinel_ci.write_text(
+            f"name: ci\non:\n  pull_request:\njobs:\n  quality:\n"
+            f"    uses: LeePepe/shared-ci/.github/workflows/quality.yml@{OLD_PIN}\n",
+            encoding="utf-8",
+        )
+        # Replace consumer's .github directory with a symlink to external-github.
+        for child in sorted((repo / ".github").rglob("*"), reverse=True):
+            if child.is_file() or child.is_symlink():
+                child.unlink()
+            elif child.is_dir():
+                child.rmdir()
+        (repo / ".github").rmdir()
+        (repo / ".github").symlink_to(external, target_is_directory=True)
+
+        for mode_flag in ("--check", "--apply"):
+            with self.subTest(mode=mode_flag):
+                code, stdout, stderr = self._run_cli(str(repo), "--pin", NEW_PIN, mode_flag)
+                self.assertEqual(2, code)
+                self.assertEqual("", stdout)
+                err_payload = json.loads(stderr)
+                self.assertFalse(err_payload["ok"])
+                self.assertIn(err_payload["code"], ("symlink_target", "unsafe_target"))
+                self.assertFalse((external / "repo-contract.json").exists())
+                self.assertFalse((external / "copilot-instructions.md").exists())
+                self.assertFalse((repo / "AGENTS.md").exists())
+                self.assertIn(OLD_PIN, sentinel_ci.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
