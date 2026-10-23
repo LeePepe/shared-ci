@@ -19,10 +19,12 @@ from dataclasses import dataclass
 import hashlib
 import http.client
 import json
+import os
 import pathlib
 import re
 import stat
 import sys
+import tempfile
 import time
 from typing import Any
 import urllib.error
@@ -436,6 +438,110 @@ def _split_csv_args(values: list[str] | None) -> list[str]:
     return items
 
 
+def _stage_sibling_temp(target_path: pathlib.Path, payload: bytes, mode: int) -> pathlib.Path:
+    tmp_path: pathlib.Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target_path.parent,
+            prefix=f".{target_path.name}.tmp-",
+            delete=False,
+        ) as tmp_file:
+            tmp_path = pathlib.Path(tmp_file.name)
+            tmp_file.write(payload)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.chmod(tmp_path, mode)
+        return tmp_path
+    except Exception:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+
+
+def _atomic_apply_writes(
+    root: pathlib.Path,
+    planned_writes: list[tuple[str, pathlib.Path, bytes, int, bytes]],
+) -> None:
+    staged: list[tuple[str, pathlib.Path, bytes, int, pathlib.Path]] = []
+    try:
+        for rel, target_path, orig_bytes, mode, new_bytes in planned_writes:
+            _ensure_safe_target(root, rel)
+            tmp_path = _stage_sibling_temp(target_path, new_bytes, mode)
+            staged.append((rel, target_path, orig_bytes, mode, tmp_path))
+    except Exception as error:
+        for _, _, _, _, tmp_path in staged:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if isinstance(error, ReleaseSyncError):
+            raise
+        raise ReleaseSyncError(
+            f"write_failed: failed to stage version updates before replacement: {error}",
+            code="write_failed",
+        ) from None
+
+    committed: list[tuple[str, pathlib.Path, bytes, int]] = []
+    failed_rel = ""
+    try:
+        for rel, target_path, orig_bytes, mode, tmp_path in staged:
+            failed_rel = rel
+            _ensure_safe_target(root, rel)
+            if tmp_path.is_symlink():
+                raise ReleaseSyncError(
+                    f"symlink_target: staged temporary file became a symlink for {rel}",
+                    code="symlink_target",
+                )
+            os.replace(tmp_path, target_path)
+            committed.append((rel, target_path, orig_bytes, mode))
+    except Exception as error:
+        for _, _, _, _, tmp_path in staged:
+            try:
+                if tmp_path.exists() or tmp_path.is_symlink():
+                    tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        rollback_errors: list[str] = []
+        for c_rel, c_target, c_orig_bytes, c_mode in reversed(committed):
+            rb_tmp: pathlib.Path | None = None
+            try:
+                _ensure_safe_target(root, c_rel)
+                rb_tmp = _stage_sibling_temp(c_target, c_orig_bytes, c_mode)
+                os.replace(rb_tmp, c_target)
+            except Exception:
+                if rb_tmp is not None:
+                    try:
+                        rb_tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                try:
+                    _ensure_safe_target(root, c_rel)
+                    with open(c_target, "wb") as fh:
+                        fh.write(c_orig_bytes)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    os.chmod(c_target, c_mode)
+                except Exception as rb_err:
+                    rollback_errors.append(f"{c_rel}: {rb_err}")
+        if rollback_errors:
+            raise ReleaseSyncError(
+                f"write_failed: failed to update {failed_rel} ({error}); "
+                f"rollback errors: {'; '.join(rollback_errors)}",
+                code="write_failed",
+            ) from None
+        if isinstance(error, ReleaseSyncError):
+            raise
+        raise ReleaseSyncError(
+            f"write_failed: failed to update {failed_rel} "
+            f"(rolled back {len(committed)} target(s)): {error}",
+            code="write_failed",
+        ) from None
+
+
 def run_version_sync(
     repo_root: pathlib.Path,
     *,
@@ -466,7 +572,7 @@ def run_version_sync(
         )
 
     # Atomically validate all target paths and parse current versions before any write.
-    parsed_targets: list[tuple[str, pathlib.Path, str, str, list[str]]] = []
+    parsed_targets: list[tuple[str, pathlib.Path, str, bytes, int, str, list[str]]] = []
     for rel in target_rels:
         target_path = _ensure_safe_target(root, rel)
         if not target_path.is_file():
@@ -476,14 +582,16 @@ def run_version_sync(
             )
         kind = _classify_target(rel)
         try:
-            content = target_path.read_text(encoding="utf-8")
+            mode = stat.S_IMODE(target_path.lstat().st_mode)
+            orig_bytes = target_path.read_bytes()
+            content = orig_bytes.decode("utf-8")
         except (OSError, UnicodeError) as error:
             raise ReleaseSyncError(
                 f"invalid_input: cannot read {rel}: {error}",
                 code="invalid_input",
             ) from None
         found_versions, _ = _parse_and_render_target(rel, kind, content, None)
-        parsed_targets.append((rel, target_path, kind, content, found_versions))
+        parsed_targets.append((rel, target_path, kind, orig_bytes, mode, content, found_versions))
 
     stale_rels = list(check_stale_files) if check_stale_files else []
     stale_paths: list[tuple[str, pathlib.Path]] = []
@@ -496,7 +604,7 @@ def run_version_sync(
             )
         stale_paths.append((rel, stale_path))
 
-    canonical_previous = parsed_targets[0][4][0]
+    canonical_previous = parsed_targets[0][6][0]
     if version is not None:
         expected_version = version
     elif bump is not None:
@@ -510,14 +618,14 @@ def run_version_sync(
         expected_version = canonical_previous
 
     # Render updates in memory and validate all outputs before touching disk.
-    planned_writes: list[tuple[str, pathlib.Path, str]] = []
+    planned_writes: list[tuple[str, pathlib.Path, bytes, int, bytes]] = []
     records: list[TargetRecord] = []
     findings: list[Finding] = []
     observed_previous_versions: set[str] = set()
     if previous_version is not None:
         observed_previous_versions.add(previous_version)
 
-    for rel, target_path, kind, content, found_versions in parsed_targets:
+    for rel, target_path, kind, orig_bytes, mode, content, found_versions in parsed_targets:
         for v in found_versions:
             if v != expected_version:
                 observed_previous_versions.add(v)
@@ -525,9 +633,10 @@ def run_version_sync(
         prev_display = unique_versions[0] if len(unique_versions) == 1 else ",".join(unique_versions)
         has_drift = any(v != expected_version for v in found_versions)
         _, rendered = _parse_and_render_target(rel, kind, content, expected_version)
-        needs_write = has_drift or (rendered != content and apply)
+        rendered_bytes = rendered.encode("utf-8")
+        needs_write = has_drift or (rendered_bytes != orig_bytes and apply)
         if apply and needs_write:
-            planned_writes.append((rel, target_path, rendered))
+            planned_writes.append((rel, target_path, orig_bytes, mode, rendered_bytes))
         if not apply and has_drift:
             findings.append(
                 Finding(
@@ -549,15 +658,11 @@ def run_version_sync(
             )
         )
 
-    if apply:
-        for rel, _, _ in planned_writes:
-            _ensure_safe_target(root, rel)
-        for rel, target_path, rendered in planned_writes:
-            _ensure_safe_target(root, rel)
-            target_path.write_text(rendered, encoding="utf-8")
+    if apply and planned_writes:
+        _atomic_apply_writes(root, planned_writes)
 
     if check_stale_enabled or stale_paths:
-        scan_list = stale_paths if stale_paths else [(rel, p) for rel, p, _, _, _ in parsed_targets]
+        scan_list = stale_paths if stale_paths else [(rel, p) for rel, p, _, _, _, _, _ in parsed_targets]
         for rel, scan_path in scan_list:
             _ensure_safe_target(root, rel)
             try:

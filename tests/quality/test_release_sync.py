@@ -8,12 +8,15 @@ import http.server
 import importlib.util
 import io
 import json
+import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import threading
 import typing
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "quality" / "release_sync.py"
@@ -203,6 +206,64 @@ class ReleaseSyncTests(unittest.TestCase):
             "1.2.3",
             json.loads((repo / "package.json").read_text(encoding="utf-8"))["version"],
         )
+
+    def test_version_sync_atomic_apply_rolls_back_on_mid_batch_replace_failure(self) -> None:
+        repo = self._make_polyglot_repo("1.2.3")
+        target_rels = release_sync.discover_version_targets(repo)
+        originals = {rel: (repo / rel).read_bytes() for rel in target_rels}
+        real_replace = os.replace
+        call_count = 0
+
+        def flaky_replace(src: os.PathLike[str] | str, dst: os.PathLike[str] | str) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise OSError("simulated mid-batch os.replace failure")
+            real_replace(src, dst)
+
+        with mock.patch("os.replace", side_effect=flaky_replace):
+            code, stdout, stderr = self._run_cli(
+                "version-sync", "--root", str(repo), "--version", "2.0.0", "--apply"
+            )
+
+        self.assertEqual(2, code)
+        self.assertEqual("", stdout)
+        err_payload = json.loads(stderr)
+        self.assertFalse(err_payload["ok"])
+        self.assertEqual("write_failed", err_payload["code"])
+        for rel, orig_bytes in originals.items():
+            self.assertEqual(orig_bytes, (repo / rel).read_bytes(), f"{rel} was not rolled back")
+        leftover_temps = list(repo.rglob("*.tmp-*")) + list(repo.rglob(".*.tmp-*"))
+        self.assertEqual([], leftover_temps)
+
+    def test_version_sync_atomic_apply_cleans_staged_temps_on_stage_failure(self) -> None:
+        repo = self._make_polyglot_repo("1.2.3")
+        target_rels = release_sync.discover_version_targets(repo)
+        originals = {rel: (repo / rel).read_bytes() for rel in target_rels}
+        real_stage = release_sync._stage_sibling_temp
+        stage_calls = 0
+
+        def flaky_stage(target_path: pathlib.Path, payload: bytes, mode: int) -> pathlib.Path:
+            nonlocal stage_calls
+            stage_calls += 1
+            if stage_calls == 2:
+                raise OSError("simulated disk full during staging")
+            return real_stage(target_path, payload, mode)
+
+        with mock.patch.object(release_sync, "_stage_sibling_temp", side_effect=flaky_stage):
+            code, stdout, stderr = self._run_cli(
+                "version-sync", "--root", str(repo), "--version", "2.0.0", "--apply"
+            )
+
+        self.assertEqual(2, code)
+        self.assertEqual("", stdout)
+        err_payload = json.loads(stderr)
+        self.assertFalse(err_payload["ok"])
+        self.assertEqual("write_failed", err_payload["code"])
+        for rel, orig_bytes in originals.items():
+            self.assertEqual(orig_bytes, (repo / rel).read_bytes(), f"{rel} was modified")
+        leftover_temps = list(repo.rglob("*.tmp-*")) + list(repo.rglob(".*.tmp-*"))
+        self.assertEqual([], leftover_temps)
 
     def test_symlinked_ancestor_rejected_in_check_and_apply_without_external_writes(self) -> None:
         repo = self._make_polyglot_repo("1.2.3")
@@ -422,8 +483,88 @@ class ReleaseSyncTests(unittest.TestCase):
     def test_reusable_release_workflow_and_template_docs_exist(self) -> None:
         workflow_path = REPO / ".github" / "workflows" / "release.yml"
         self.assertTrue(workflow_path.is_file())
+        workflow_text = workflow_path.read_text(encoding="utf-8")
+        self.assertNotIn("job.workflow_repository", workflow_text)
+        self.assertNotIn("job.workflow_sha", workflow_text)
         dev_template = (REPO / "templates" / "development.md").read_text(encoding="utf-8")
         self.assertIn("## Release and live readback", dev_template)
+
+        fm_spec = importlib.util.spec_from_file_location(
+            "shared_ci_frontmatter", REPO / "scripts" / "context" / "_frontmatter.py"
+        )
+        assert fm_spec and fm_spec.loader
+        fm = importlib.util.module_from_spec(fm_spec)
+        fm_spec.loader.exec_module(fm)
+        parsed = fm.parse(workflow_text)
+        steps = parsed["jobs"]["release"]["steps"]
+        provider_step = next(s for s in steps if s.get("id") == "provider")
+
+        caller = self.root / "caller-repo"
+        caller.mkdir(parents=True, exist_ok=True)
+        (caller / ".github").mkdir(parents=True, exist_ok=True)
+        (caller / ".github" / "repo-contract.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "guide": "docs/repository-guide.md",
+                    "shared_ci": SAMPLE_SHA,
+                    "dependencies": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        git_env = {
+            k: os.environ[k]
+            for k in ("PATH", "HOME", "TMPDIR")
+            if k in os.environ
+        }
+        git_env.update(
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_SYSTEM=os.devnull,
+        )
+        subprocess.run(["git", "init", "-q"], cwd=caller, env=git_env, check=True)
+        subprocess.run(
+            ["git", "add", ".github/repo-contract.json"],
+            cwd=caller,
+            env=git_env,
+            check=True,
+        )
+
+        gh_out = self.root / "github_output.txt"
+        run_env = dict(
+            git_env,
+            GITHUB_OUTPUT=str(gh_out),
+            INPUT_REPOSITORY="LeePepe/shared-ci",
+            INPUT_SHA="",
+        )
+        res = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", provider_step["run"]],
+            cwd=caller,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, res.returncode, res.stdout + res.stderr)
+        self.assertEqual(
+            f"repository=LeePepe/shared-ci\nsha={SAMPLE_SHA}\n",
+            gh_out.read_text(encoding="utf-8"),
+        )
+
+        # Mismatched INPUT_SHA vs .github/repo-contract.json must fail closed.
+        gh_out.write_text("", encoding="utf-8")
+        bad_env = dict(run_env, INPUT_SHA=OTHER_SHA)
+        bad_res = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", provider_step["run"]],
+            cwd=caller,
+            env=bad_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, bad_res.returncode)
+        self.assertIn("does not match repository contract pin", bad_res.stdout + bad_res.stderr)
 
 
 if __name__ == "__main__":
