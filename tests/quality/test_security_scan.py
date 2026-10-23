@@ -359,6 +359,248 @@ class SecurityScanTests(unittest.TestCase):
         )
         self.assertNotEqual(0, fail_res.returncode)
 
+    def test_oversized_file_fails_closed_in_worktree_and_staged_modes(self) -> None:
+        self._git("init", "-q")
+        oversized_payload = ("A" * (security_scan.MAX_TEXT_BYTES + 128)) + "\n"
+        big_file = self.repo / "big.txt"
+        big_file.write_text(oversized_payload, encoding="utf-8")
+
+        # Worktree mode fails closed with oversized_file instead of passing as empty bytes.
+        code_wt, stdout_wt, _ = self._run_cli(
+            "--root",
+            str(self.repo),
+            "--gitleaks-bin",
+            "missing-gitleaks",
+            "--osv-bin",
+            "missing-osv",
+        )
+        self.assertEqual(1, code_wt)
+        report_wt = json.loads(stdout_wt)
+        self.assertFalse(report_wt["ok"])
+        self.assertEqual("fail", report_wt["scanners"]["identity"]["status"])
+        wt_kinds = {item["kind"] for item in report_wt["findings"]}
+        self.assertIn("oversized_file", wt_kinds)
+
+        # Staged mode also fails closed with oversized_file and writes full bytes to staged snapshot.
+        self._git("add", "big.txt")
+        stub_gitleaks_check_size = self._write_exec(
+            "gitleaks-check-size",
+            "#!/bin/sh\n"
+            "src=''; rpt=''; prev=''\n"
+            "for a in \"$@\"; do\n"
+            "  [ \"$prev\" = \"--source\" ] && src=\"$a\"\n"
+            "  [ \"$prev\" = \"--report-path\" ] && rpt=\"$a\"\n"
+            "  prev=\"$a\"\n"
+            "done\n"
+            "size=$(wc -c < \"$src/big.txt\" | tr -d ' ')\n"
+            "if [ \"$size\" -le 2000000 ]; then\n"
+            "  printf '[{\"File\":\"big.txt\",\"StartLine\":1,\"RuleID\":\"truncated-snapshot\",\"Description\":\"snapshot was truncated\"}]' > \"$rpt\"\n"
+            "  exit 1\n"
+            "fi\n"
+            "printf '[]' > \"$rpt\"\n"
+            "exit 0\n",
+        )
+        code_st, stdout_st, _ = self._run_cli(
+            "--root",
+            str(self.repo),
+            "--staged",
+            "--require-gitleaks",
+            "--gitleaks-bin",
+            str(stub_gitleaks_check_size),
+            "--osv-bin",
+            "missing-osv",
+        )
+        self.assertEqual(1, code_st)
+        report_st = json.loads(stdout_st)
+        self.assertFalse(report_st["ok"])
+        self.assertEqual("pass", report_st["scanners"]["gitleaks"]["status"])
+        st_kinds = {item["kind"] for item in report_st["findings"]}
+        self.assertIn("oversized_file", st_kinds)
+
+    def test_unparseable_gitleaks_and_osv_outputs_fail_closed(self) -> None:
+        (self.repo / "app.py").write_text("X = 1\n", encoding="utf-8")
+        (self.repo / "package-lock.json").write_text("{}\n", encoding="utf-8")
+
+        for label, body in (
+            ("missing-report", "#!/bin/sh\nexit 0\n"),
+            (
+                "empty-report",
+                "#!/bin/sh\n"
+                "prev=''\n"
+                "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && : > \"$a\"; prev=\"$a\"; done\n"
+                "exit 0\n",
+            ),
+            (
+                "malformed-json",
+                "#!/bin/sh\n"
+                "prev=''\n"
+                "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && printf '{bad' > \"$a\"; prev=\"$a\"; done\n"
+                "exit 0\n",
+            ),
+            (
+                "non-list-json",
+                "#!/bin/sh\n"
+                "prev=''\n"
+                "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && printf '{\"ok\":true}' > \"$a\"; prev=\"$a\"; done\n"
+                "exit 0\n",
+            ),
+            (
+                "non-dict-item",
+                "#!/bin/sh\n"
+                "prev=''\n"
+                "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && printf '[123]' > \"$a\"; prev=\"$a\"; done\n"
+                "exit 0\n",
+            ),
+        ):
+            with self.subTest(gitleaks_case=label):
+                stub = self._write_exec(f"gitleaks-{label}", body)
+                code, stdout, _ = self._run_cli(
+                    "--root",
+                    str(self.repo),
+                    "--require-gitleaks",
+                    "--gitleaks-bin",
+                    str(stub),
+                    "--osv-bin",
+                    "missing-osv",
+                )
+                self.assertEqual(1, code)
+                report = json.loads(stdout)
+                self.assertFalse(report["ok"])
+                self.assertEqual("fail", report["scanners"]["gitleaks"]["status"])
+                kinds = {item["kind"] for item in report["findings"]}
+                self.assertIn("gitleaks_unparseable_report", kinds)
+
+        for label, body in (
+            ("empty-stdout", "#!/bin/sh\nexit 0\n"),
+            ("malformed-json", "#!/bin/sh\nprintf '{not-json'\nexit 0\n"),
+            ("non-dict-json", "#!/bin/sh\nprintf '[]'\nexit 0\n"),
+            ("missing-results-key", "#!/bin/sh\nprintf '{\"status\":\"ok\"}'\nexit 0\n"),
+            ("non-list-results", "#!/bin/sh\nprintf '{\"results\":{}}'\nexit 0\n"),
+        ):
+            with self.subTest(osv_case=label):
+                stub = self._write_exec(f"osv-{label}", body)
+                code, stdout, _ = self._run_cli(
+                    "--root",
+                    str(self.repo),
+                    "--require-osv",
+                    "--gitleaks-bin",
+                    "missing-gitleaks",
+                    "--osv-bin",
+                    str(stub),
+                )
+                self.assertEqual(1, code)
+                report = json.loads(stdout)
+                self.assertFalse(report["ok"])
+                self.assertEqual("fail", report["scanners"]["osv"]["status"])
+                kinds = {item["kind"] for item in report["findings"]}
+                self.assertIn("osv_unparseable_output", kinds)
+
+        stub_gitleaks_nonzero = self._write_exec(
+            "gitleaks-nonzero-clean-report",
+            "#!/bin/sh\n"
+            "prev=''\n"
+            "for a in \"$@\"; do [ \"$prev\" = \"--report-path\" ] && printf '[]' > \"$a\"; prev=\"$a\"; done\n"
+            "exit 3\n",
+        )
+        code_gl_nz, stdout_gl_nz, _ = self._run_cli(
+            "--root",
+            str(self.repo),
+            "--require-gitleaks",
+            "--gitleaks-bin",
+            str(stub_gitleaks_nonzero),
+            "--osv-bin",
+            "missing-osv",
+        )
+        self.assertEqual(1, code_gl_nz)
+        report_gl_nz = json.loads(stdout_gl_nz)
+        self.assertFalse(report_gl_nz["ok"])
+        self.assertIn("gitleaks_failed", {item["kind"] for item in report_gl_nz["findings"]})
+
+        stub_osv_nonzero = self._write_exec(
+            "osv-nonzero-clean-output",
+            "#!/bin/sh\nprintf '{\"results\":[]}'\nexit 3\n",
+        )
+        code_osv_nz, stdout_osv_nz, _ = self._run_cli(
+            "--root",
+            str(self.repo),
+            "--require-osv",
+            "--gitleaks-bin",
+            "missing-gitleaks",
+            "--osv-bin",
+            str(stub_osv_nonzero),
+        )
+        self.assertEqual(1, code_osv_nz)
+        report_osv_nz = json.loads(stdout_osv_nz)
+        self.assertFalse(report_osv_nz["ok"])
+        self.assertIn("osv_failed", {item["kind"] for item in report_osv_nz["findings"]})
+
+    def test_staged_mode_ignores_untracked_symlinks_and_unstaged_dirty_lockfiles(self) -> None:
+        self._git("init", "-q")
+        (self.repo / "src.py").write_text("X = 1\n", encoding="utf-8")
+        self._git("add", "src.py")
+
+        # Create an untracked symlink and an unstaged dirty lockfile in the worktree.
+        (self.repo / "untracked-symlink").symlink_to(self.repo / "src.py")
+        (self.repo / "package-lock.json").write_text("{\"dirty\": true}\n", encoding="utf-8")
+
+        stub_osv_fail_if_called = self._write_exec(
+            "osv-fail-if-called",
+            "#!/bin/sh\n"
+            "printf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},"
+            "\"packages\":[{\"vulnerabilities\":[{\"id\":\"GHSA-unstaged\",\"summary\":\"should not scan unstaged lockfile\"}]}]}]}'\n"
+            "exit 1\n",
+        )
+        code, stdout, stderr = self._run_cli(
+            "--root",
+            str(self.repo),
+            "--staged",
+            "--require-osv",
+            "--gitleaks-bin",
+            "missing-gitleaks",
+            "--osv-bin",
+            str(stub_osv_fail_if_called),
+        )
+        self.assertEqual(0, code, stderr)
+        report = json.loads(stdout)
+        self.assertTrue(report["ok"])
+        self.assertEqual([], report["scanners"]["osv"]["lockfiles"])
+        self.assertEqual("pass", report["scanners"]["osv"]["status"])
+
+        # Now stage a clean package-lock.json while leaving dirty unstaged edits in the worktree;
+        # OSV must receive the staged index snapshot, not the unstaged worktree file.
+        (self.repo / "package-lock.json").write_text("{\"clean\": true}\n", encoding="utf-8")
+        self._git("add", "package-lock.json")
+        (self.repo / "package-lock.json").write_text("{\"dirty\": true}\n", encoding="utf-8")
+
+        stub_osv_check_snapshot = self._write_exec(
+            "osv-check-snapshot",
+            "#!/bin/sh\n"
+            "lock=''; prev=''\n"
+            "for a in \"$@\"; do [ \"$prev\" = \"--lockfile\" ] && lock=\"$a\"; prev=\"$a\"; done\n"
+            "if grep -q '\"dirty\"' \"$lock\"; then\n"
+            "  printf '{\"results\":[{\"source\":{\"path\":\"package-lock.json\"},"
+            "\"packages\":[{\"vulnerabilities\":[{\"id\":\"GHSA-dirty-worktree\",\"summary\":\"scanned worktree instead of staged snapshot\"}]}]}]}'\n"
+            "  exit 1\n"
+            "fi\n"
+            "printf '{\"results\":[]}'\n"
+            "exit 0\n",
+        )
+        code2, stdout2, stderr2 = self._run_cli(
+            "--root",
+            str(self.repo),
+            "--staged",
+            "--require-osv",
+            "--gitleaks-bin",
+            "missing-gitleaks",
+            "--osv-bin",
+            str(stub_osv_check_snapshot),
+        )
+        self.assertEqual(0, code2, stderr2)
+        report2 = json.loads(stdout2)
+        self.assertTrue(report2["ok"])
+        self.assertEqual(["package-lock.json"], report2["scanners"]["osv"]["lockfiles"])
+        self.assertEqual("pass", report2["scanners"]["osv"]["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

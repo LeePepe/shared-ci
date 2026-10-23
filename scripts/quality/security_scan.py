@@ -238,11 +238,82 @@ def _validate_binary_name(bin_arg: str, flag_name: str) -> str:
     return bin_arg
 
 
-def _load_forbidden_patterns(root: pathlib.Path) -> list[tuple[str, re.Pattern[str], str]]:
+def _read_index_blob(root: pathlib.Path, rel_path: str) -> bytes | None:
+    if not _valid_local_path(rel_path):
+        raise SecurityScanError(
+            f"unsafe_target: path must be a safe repository-relative path: {rel_path!r}",
+            code="unsafe_target",
+        )
+    ls_proc = subprocess.run(
+        ["git", "ls-files", "--stage", "-z", "--", rel_path],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if ls_proc.returncode != 0 or not ls_proc.stdout:
+        return None
+    for row in ls_proc.stdout.split(b"\0"):
+        if not row:
+            continue
+        meta, _, raw_p = row.partition(b"\t")
+        path_text = raw_p.decode("utf-8", errors="surrogateescape")
+        parts = meta.split(b" ")
+        if path_text == rel_path and len(parts) >= 3 and parts[2] == b"0":
+            mode = parts[0].decode("ascii", errors="replace")
+            if mode == "120000":
+                raise SecurityScanError(
+                    f"symlink_target: staged path {rel_path} is a symlink in git index",
+                    code="symlink_target",
+                )
+            cat_proc = subprocess.run(
+                ["git", "cat-file", "-p", f":0:{rel_path}"],
+                cwd=root,
+                capture_output=True,
+                check=False,
+            )
+            if cat_proc.returncode == 0:
+                return cat_proc.stdout
+    return None
+
+
+def _load_forbidden_patterns(
+    root: pathlib.Path,
+    *,
+    staged: bool = False,
+) -> list[tuple[str, re.Pattern[str], str]]:
     contract_entries: list[dict[str, str]] = list(DEFAULT_FORBIDDEN_PATTERNS)
     local_schema_rel = "schemas/repo-contract-v1.json"
     local_schema_candidate = root / local_schema_rel
-    if os.path.lexists(local_schema_candidate):
+    if staged and _is_git_worktree(root):
+        blob = _read_index_blob(root, local_schema_rel)
+        if blob is not None:
+            try:
+                raw = json.loads(blob.decode("utf-8"))
+                loaded = raw.get("x-contract", {}).get("forbidden_patterns")
+                if isinstance(loaded, list) and loaded:
+                    contract_entries = [
+                        {"name": str(item["name"]), "regex": str(item["regex"])}
+                        for item in loaded
+                        if isinstance(item, dict) and "name" in item and "regex" in item
+                    ]
+            except (UnicodeError, json.JSONDecodeError) as error:
+                raise SecurityScanError(
+                    f"invalid_input: cannot parse {local_schema_rel}: {error}",
+                    code="invalid_input",
+                ) from None
+        elif PROVIDER_CONTRACT_FILE.is_file():
+            try:
+                raw = json.loads(PROVIDER_CONTRACT_FILE.read_text(encoding="utf-8"))
+                loaded = raw.get("x-contract", {}).get("forbidden_patterns")
+                if isinstance(loaded, list) and loaded:
+                    contract_entries = [
+                        {"name": str(item["name"]), "regex": str(item["regex"])}
+                        for item in loaded
+                        if isinstance(item, dict) and "name" in item and "regex" in item
+                    ]
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                pass
+    elif os.path.lexists(local_schema_candidate):
         safe_schema = _ensure_safe_target(root, local_schema_rel, must_exist=True)
         try:
             raw = json.loads(safe_schema.read_text(encoding="utf-8"))
@@ -290,7 +361,7 @@ def _is_git_worktree(root: pathlib.Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
-def _walk_worktree_files(root: pathlib.Path) -> list[tuple[str, bytes]]:
+def _collect_worktree_files(root: pathlib.Path) -> list[tuple[str, bytes]]:
     discovered: list[tuple[str, bytes]] = []
 
     def _walk_dir(current_dir: pathlib.Path, rel_prefix: str) -> None:
@@ -321,18 +392,19 @@ def _walk_worktree_files(root: pathlib.Path) -> list[tuple[str, bytes]]:
                 _walk_dir(entry, rel_path)
             elif stat.S_ISREG(st.st_mode):
                 safe_file = _ensure_safe_target(root, rel_path)
-                if st.st_size <= MAX_TEXT_BYTES:
-                    discovered.append((rel_path, safe_file.read_bytes()))
-                else:
-                    discovered.append((rel_path, b""))
+                _ = safe_file.stat().st_size
+                discovered.append((rel_path, safe_file.read_bytes()))
 
     _walk_dir(root, "")
     return discovered
 
 
+_walk_worktree_files = _collect_worktree_files
+
+
 def _collect_staged_files(root: pathlib.Path) -> list[tuple[str, bytes]]:
     if not _is_git_worktree(root):
-        return _walk_worktree_files(root)
+        return _collect_worktree_files(root)
 
     diff_proc = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"],
@@ -341,7 +413,10 @@ def _collect_staged_files(root: pathlib.Path) -> list[tuple[str, bytes]]:
         check=False,
     )
     if diff_proc.returncode != 0:
-        return _walk_worktree_files(root)
+        raise SecurityScanError(
+            "invalid_input: failed to read staged files from git index",
+            code="invalid_input",
+        )
 
     raw_paths = [
         item.decode("utf-8", errors="surrogateescape")
@@ -357,50 +432,111 @@ def _collect_staged_files(root: pathlib.Path) -> list[tuple[str, bytes]]:
         capture_output=True,
         check=False,
     )
-    if ls_proc.returncode == 0:
-        for row in ls_proc.stdout.split(b"\0"):
-            if not row:
-                continue
-            meta, _, raw_p = row.partition(b"\t")
-            parts = meta.split(b" ")
-            if len(parts) >= 3 and parts[2] == b"0":
-                stage_modes[raw_p.decode("utf-8", errors="surrogateescape")] = parts[0].decode("ascii")
+    if ls_proc.returncode != 0:
+        raise SecurityScanError(
+            "invalid_input: failed to list git index stages",
+            code="invalid_input",
+        )
+    for row in ls_proc.stdout.split(b"\0"):
+        if not row:
+            continue
+        meta, _, raw_p = row.partition(b"\t")
+        parts = meta.split(b" ")
+        if len(parts) >= 3 and parts[2] == b"0":
+            stage_modes[raw_p.decode("utf-8", errors="surrogateescape")] = parts[0].decode("ascii")
 
     collected: list[tuple[str, bytes]] = []
     for rel_path in sorted(set(raw_paths)):
-        if stage_modes.get(rel_path) == "120000":
+        if not _valid_local_path(rel_path):
             raise SecurityScanError(
-                f"symlink_target: staged path {rel_path} is a symlink in git index",
-                code="symlink_target",
+                f"unsafe_target: path must be a safe repository-relative path: {rel_path!r}",
+                code="unsafe_target",
             )
-        safe_path = _ensure_safe_target(root, rel_path)
+        path_parts = rel_path.split("/")
+        for idx in range(1, len(path_parts) + 1):
+            prefix = "/".join(path_parts[:idx])
+            if stage_modes.get(prefix) == "120000":
+                raise SecurityScanError(
+                    f"symlink_target: staged path {rel_path} traverses symlink {prefix} in git index",
+                    code="symlink_target",
+                )
+        size_proc = subprocess.run(
+            ["git", "cat-file", "-s", f":0:{rel_path}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if size_proc.returncode != 0:
+            raise SecurityScanError(
+                f"invalid_input: cannot inspect staged blob size :0:{rel_path}",
+                code="invalid_input",
+            )
         cat_proc = subprocess.run(
             ["git", "cat-file", "-p", f":0:{rel_path}"],
             cwd=root,
             capture_output=True,
             check=False,
         )
-        if cat_proc.returncode == 0:
-            raw_bytes = cat_proc.stdout if len(cat_proc.stdout) <= MAX_TEXT_BYTES else b""
-        elif safe_path.is_file():
-            size = safe_path.stat().st_size
-            raw_bytes = safe_path.read_bytes() if size <= MAX_TEXT_BYTES else b""
-        else:
-            continue
-        collected.append((rel_path, raw_bytes))
+        if cat_proc.returncode != 0:
+            raise SecurityScanError(
+                f"invalid_input: cannot read staged blob :0:{rel_path}",
+                code="invalid_input",
+            )
+        collected.append((rel_path, cat_proc.stdout))
     return collected
+
+
+def _write_staged_snapshot(
+    snapshot_dir: pathlib.Path,
+    files: list[tuple[str, bytes]],
+) -> dict[str, pathlib.Path]:
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, pathlib.Path] = {}
+    for rel_path, raw_bytes in files:
+        if not _valid_local_path(rel_path):
+            raise SecurityScanError(
+                f"unsafe_target: path must be a safe repository-relative path: {rel_path!r}",
+                code="unsafe_target",
+            )
+        dest = snapshot_dir / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(raw_bytes)
+        written[rel_path] = dest
+    return written
 
 
 def _scan_identity_and_patterns(
     root: pathlib.Path,
     files: list[tuple[str, bytes]],
+    *,
+    staged: bool = False,
 ) -> tuple[dict[str, Any], list[ScanFinding]]:
-    patterns = _load_forbidden_patterns(root)
+    patterns = _load_forbidden_patterns(root, staged=staged)
     findings: list[ScanFinding] = []
     scanned_count = 0
 
     for rel_path, raw_bytes in files:
-        _ensure_safe_target(root, rel_path)
+        if not staged:
+            _ensure_safe_target(root, rel_path)
+        elif not _valid_local_path(rel_path):
+            raise SecurityScanError(
+                f"unsafe_target: path must be a safe repository-relative path: {rel_path!r}",
+                code="unsafe_target",
+            )
+        if len(raw_bytes) > MAX_TEXT_BYTES:
+            findings.append(
+                ScanFinding(
+                    scanner="identity",
+                    kind="oversized_file",
+                    path=rel_path,
+                    rule="max-text-bytes",
+                    detail=(
+                        f"file size {len(raw_bytes)} bytes exceeds maximum scan limit "
+                        f"({MAX_TEXT_BYTES} bytes)"
+                    ),
+                )
+            )
         if not raw_bytes or b"\0" in raw_bytes[:8192]:
             continue
         scanned_count += 1
@@ -440,7 +576,7 @@ def _run_gitleaks(
     config_path: pathlib.Path | None = None
     if gitleaks_config is not None:
         config_path = _ensure_safe_target(root, gitleaks_config, must_exist=True)
-    elif os.path.lexists(root / ".gitleaks.toml"):
+    elif not staged and os.path.lexists(root / ".gitleaks.toml"):
         config_path = _ensure_safe_target(root, ".gitleaks.toml", must_exist=True)
 
     resolved_bin = shutil.which(gitleaks_bin)
@@ -477,13 +613,14 @@ def _run_gitleaks(
     with tempfile.TemporaryDirectory(prefix="shared-ci-gitleaks-") as temp_dir:
         temp_path = pathlib.Path(temp_dir)
         report_file = temp_path / "gitleaks-report.json"
-        if staged and _is_git_worktree(root):
+        if staged:
             scan_source = temp_path / "staged"
-            scan_source.mkdir(parents=True, exist_ok=True)
-            for rel_path, raw_bytes in files:
-                dest = scan_source / rel_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(raw_bytes)
+            _write_staged_snapshot(scan_source, files)
+            if config_path is None and _is_git_worktree(root):
+                cfg_blob = _read_index_blob(root, ".gitleaks.toml")
+                if cfg_blob is not None:
+                    config_path = temp_path / "gitleaks-index-config.toml"
+                    config_path.write_bytes(cfg_blob)
         else:
             scan_source = root
 
@@ -512,21 +649,55 @@ def _run_gitleaks(
             timeout=120,
         )
 
-        if report_file.is_file():
+        if not report_file.is_file():
+            findings.append(
+                ScanFinding(
+                    scanner="gitleaks",
+                    kind="gitleaks_unparseable_report",
+                    path="",
+                    rule="gitleaks-report-format",
+                    detail="gitleaks did not produce a JSON report file",
+                )
+            )
+        else:
             try:
-                report_data = json.loads(report_file.read_text(encoding="utf-8"))
-                if isinstance(report_data, list):
+                raw_report = report_file.read_text(encoding="utf-8").strip()
+                if not raw_report:
+                    raise json.JSONDecodeError("empty gitleaks report", "", 0)
+                report_data = json.loads(raw_report)
+                if not isinstance(report_data, list) or any(
+                    not isinstance(item, dict) for item in report_data
+                ):
+                    findings.append(
+                        ScanFinding(
+                            scanner="gitleaks",
+                            kind="gitleaks_unparseable_report",
+                            path="",
+                            rule="gitleaks-report-format",
+                            detail="gitleaks report JSON must be a list of finding objects",
+                        )
+                    )
+                else:
                     for item in report_data:
-                        if not isinstance(item, dict):
-                            continue
                         raw_file = str(item.get("File") or "")
                         try:
-                            rel_item = pathlib.Path(raw_file).resolve().relative_to(scan_source.resolve()).as_posix()
+                            rel_item = (
+                                pathlib.Path(raw_file)
+                                .resolve()
+                                .relative_to(scan_source.resolve())
+                                .as_posix()
+                            )
                         except ValueError:
                             rel_item = raw_file
-                        line_no = int(item.get("StartLine") or 0) if isinstance(item.get("StartLine"), int) else 0
+                        line_no = (
+                            int(item.get("StartLine") or 0)
+                            if isinstance(item.get("StartLine"), int)
+                            else 0
+                        )
                         rule_id = str(item.get("RuleID") or "gitleaks-rule")
-                        desc = str(item.get("Description") or "gitleaks detected a potential secret")
+                        desc = str(
+                            item.get("Description") or "gitleaks detected a potential secret"
+                        )
                         findings.append(
                             ScanFinding(
                                 scanner="gitleaks",
@@ -537,14 +708,22 @@ def _run_gitleaks(
                                 detail=desc,
                             )
                         )
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                pass
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                findings.append(
+                    ScanFinding(
+                        scanner="gitleaks",
+                        kind="gitleaks_unparseable_report",
+                        path="",
+                        rule="gitleaks-report-format",
+                        detail=f"failed to parse gitleaks JSON report: {error}",
+                    )
+                )
 
         if proc.returncode != 0 and not findings:
             findings.append(
                 ScanFinding(
                     scanner="gitleaks",
-                    kind="secret_leak",
+                    kind="gitleaks_failed",
                     path="",
                     rule="gitleaks-exit",
                     detail=f"gitleaks exited non-zero (exit {proc.returncode})",
@@ -573,14 +752,154 @@ def _discover_lockfiles(
     lockfiles: list[str] = []
     for rel_path, _ in files:
         if pathlib.PurePosixPath(rel_path).name in LOCKFILE_NAMES:
-            _ensure_safe_target(root, rel_path)
-            lockfiles.append(rel_path)
-    if not lockfiles and staged:
-        for rel_path, _ in _walk_worktree_files(root):
-            if pathlib.PurePosixPath(rel_path).name in LOCKFILE_NAMES:
+            if not staged:
                 _ensure_safe_target(root, rel_path)
-                lockfiles.append(rel_path)
+            elif not _valid_local_path(rel_path):
+                raise SecurityScanError(
+                    f"unsafe_target: path must be a safe repository-relative path: {rel_path!r}",
+                    code="unsafe_target",
+                )
+            lockfiles.append(rel_path)
     return sorted(set(lockfiles))
+
+
+def _parse_osv_output(
+    raw_stdout: str,
+    *,
+    temp_path: pathlib.Path,
+    root: pathlib.Path,
+    lockfiles: list[str],
+) -> list[ScanFinding]:
+    default_path = lockfiles[0] if lockfiles else ""
+    stripped = raw_stdout.strip()
+    if not stripped:
+        return [
+            ScanFinding(
+                scanner="osv",
+                kind="osv_unparseable_output",
+                path=default_path,
+                rule="osv-output-format",
+                detail="osv-scanner produced empty stdout instead of a JSON result envelope",
+            )
+        ]
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError as error:
+        return [
+            ScanFinding(
+                scanner="osv",
+                kind="osv_unparseable_output",
+                path=default_path,
+                rule="osv-output-format",
+                detail=f"failed to parse osv-scanner JSON output: {error}",
+            )
+        ]
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        return [
+            ScanFinding(
+                scanner="osv",
+                kind="osv_unparseable_output",
+                path=default_path,
+                rule="osv-output-format",
+                detail="osv-scanner JSON output must be an object containing a 'results' list",
+            )
+        ]
+
+    findings: list[ScanFinding] = []
+    for result_entry in payload["results"]:
+        if not isinstance(result_entry, dict):
+            return [
+                ScanFinding(
+                    scanner="osv",
+                    kind="osv_unparseable_output",
+                    path=default_path,
+                    rule="osv-output-format",
+                    detail="osv-scanner 'results' entries must be JSON objects",
+                )
+            ]
+        src_info = result_entry.get("source")
+        if src_info is not None and not isinstance(src_info, dict):
+            return [
+                ScanFinding(
+                    scanner="osv",
+                    kind="osv_unparseable_output",
+                    path=default_path,
+                    rule="osv-output-format",
+                    detail="osv-scanner result 'source' must be a JSON object",
+                )
+            ]
+        raw_src = str((src_info or {}).get("path") or default_path)
+        rel_src = raw_src
+        for base_candidate in (temp_path / "staged", temp_path, root):
+            try:
+                rel_src = (
+                    pathlib.Path(raw_src)
+                    .resolve()
+                    .relative_to(base_candidate.resolve())
+                    .as_posix()
+                )
+                break
+            except ValueError:
+                continue
+        packages = result_entry.get("packages", [])
+        if not isinstance(packages, list):
+            return [
+                ScanFinding(
+                    scanner="osv",
+                    kind="osv_unparseable_output",
+                    path=rel_src,
+                    rule="osv-output-format",
+                    detail="osv-scanner result 'packages' must be a list",
+                )
+            ]
+        for pkg_entry in packages:
+            if not isinstance(pkg_entry, dict):
+                return [
+                    ScanFinding(
+                        scanner="osv",
+                        kind="osv_unparseable_output",
+                        path=rel_src,
+                        rule="osv-output-format",
+                        detail="osv-scanner package entry must be a JSON object",
+                    )
+                ]
+            vulns = pkg_entry.get("vulnerabilities", [])
+            if not isinstance(vulns, list):
+                return [
+                    ScanFinding(
+                        scanner="osv",
+                        kind="osv_unparseable_output",
+                        path=rel_src,
+                        rule="osv-output-format",
+                        detail="osv-scanner package 'vulnerabilities' must be a list",
+                    )
+                ]
+            for vuln in vulns:
+                if not isinstance(vuln, dict):
+                    return [
+                        ScanFinding(
+                            scanner="osv",
+                            kind="osv_unparseable_output",
+                            path=rel_src,
+                            rule="osv-output-format",
+                            detail="osv-scanner vulnerability entry must be a JSON object",
+                        )
+                    ]
+                vuln_id = str(vuln.get("id") or "OSV-UNKNOWN")
+                summary_text = str(
+                    vuln.get("summary") or "dependency vulnerability detected"
+                )
+                findings.append(
+                    ScanFinding(
+                        scanner="osv",
+                        kind="vulnerability",
+                        path=rel_src,
+                        rule=vuln_id,
+                        detail=summary_text,
+                    )
+                )
+    return findings
 
 
 def _run_osv(
@@ -596,7 +915,7 @@ def _run_osv(
     config_path: pathlib.Path | None = None
     if osv_config is not None:
         config_path = _ensure_safe_target(root, osv_config, must_exist=True)
-    elif os.path.lexists(root / "osv-scanner.toml"):
+    elif not staged and os.path.lexists(root / "osv-scanner.toml"):
         config_path = _ensure_safe_target(root, "osv-scanner.toml", must_exist=True)
 
     lockfiles = _discover_lockfiles(root, files, staged=staged)
@@ -648,18 +967,26 @@ def _run_osv(
     findings: list[ScanFinding] = []
     with tempfile.TemporaryDirectory(prefix="shared-ci-osv-") as temp_dir:
         temp_path = pathlib.Path(temp_dir)
+        if staged and config_path is None and _is_git_worktree(root):
+            cfg_blob = _read_index_blob(root, "osv-scanner.toml")
+            if cfg_blob is not None:
+                config_path = temp_path / "osv-index-config.toml"
+                config_path.write_bytes(cfg_blob)
+
         cmd = [resolved_bin, "--format", "json"]
         if config_path is not None:
             cmd.extend(["--config", str(config_path)])
 
-        for rel_lock in lockfiles:
-            safe_lock = _ensure_safe_target(root, rel_lock)
-            if staged and rel_lock in file_map:
-                staged_lock = temp_path / rel_lock
-                staged_lock.parent.mkdir(parents=True, exist_ok=True)
-                staged_lock.write_bytes(file_map[rel_lock])
-                cmd.extend(["--lockfile", str(staged_lock)])
-            else:
+        if staged:
+            staged_locks = _write_staged_snapshot(
+                temp_path / "staged",
+                [(rel_lock, file_map[rel_lock]) for rel_lock in lockfiles if rel_lock in file_map],
+            )
+            for rel_lock in lockfiles:
+                cmd.extend(["--lockfile", str(staged_locks[rel_lock])])
+        else:
+            for rel_lock in lockfiles:
+                safe_lock = _ensure_safe_target(root, rel_lock)
                 cmd.extend(["--lockfile", str(safe_lock)])
 
         proc = subprocess.run(
@@ -671,47 +998,20 @@ def _run_osv(
             timeout=180,
         )
 
-        if proc.stdout.strip():
-            try:
-                payload = json.loads(proc.stdout)
-                if isinstance(payload, dict):
-                    for result_entry in payload.get("results") or []:
-                        if not isinstance(result_entry, dict):
-                            continue
-                        src_info = result_entry.get("source") or {}
-                        raw_src = str(src_info.get("path") or (lockfiles[0] if lockfiles else ""))
-                        rel_src = raw_src
-                        for base_candidate in (temp_path, root):
-                            try:
-                                rel_src = pathlib.Path(raw_src).resolve().relative_to(base_candidate.resolve()).as_posix()
-                                break
-                            except ValueError:
-                                continue
-                        for pkg_entry in result_entry.get("packages") or []:
-                            if not isinstance(pkg_entry, dict):
-                                continue
-                            for vuln in pkg_entry.get("vulnerabilities") or []:
-                                if not isinstance(vuln, dict):
-                                    continue
-                                vuln_id = str(vuln.get("id") or "OSV-UNKNOWN")
-                                summary_text = str(vuln.get("summary") or "dependency vulnerability detected")
-                                findings.append(
-                                    ScanFinding(
-                                        scanner="osv",
-                                        kind="vulnerability",
-                                        path=rel_src,
-                                        rule=vuln_id,
-                                        detail=summary_text,
-                                    )
-                                )
-            except json.JSONDecodeError:
-                pass
+        findings.extend(
+            _parse_osv_output(
+                proc.stdout,
+                temp_path=temp_path,
+                root=root,
+                lockfiles=lockfiles,
+            )
+        )
 
         if proc.returncode != 0 and not findings:
             findings.append(
                 ScanFinding(
                     scanner="osv",
-                    kind="vulnerability",
+                    kind="osv_failed",
                     path=lockfiles[0],
                     rule="osv-exit",
                     detail=f"osv-scanner exited non-zero (exit {proc.returncode})",
@@ -746,7 +1046,9 @@ def run_security_scan(
     root = _validate_repo_root(repo_root)
     files = _collect_staged_files(root) if staged else _walk_worktree_files(root)
 
-    identity_summary, identity_findings = _scan_identity_and_patterns(root, files)
+    identity_summary, identity_findings = _scan_identity_and_patterns(
+        root, files, staged=staged
+    )
     gitleaks_summary, gitleaks_findings = _run_gitleaks(
         root,
         files,
