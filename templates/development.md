@@ -64,6 +64,12 @@ current gaps; do not treat template placeholders as proof of enforcement.
 | `G2` (Security & Policy) | Secret scan, lockfile audit, workflow-lint, repo-contract audit; missing scanner fails closed | `planned` | `scripts/verify` + `python3 -I -B scripts/quality/security_scan.py --root . --require-gitleaks --require-osv` (`.githooks/pre-commit` runs fast `<30s` staged snapshot checks) |
 | `D1` (Test Isolation) | Dedicated task worktree, per-run isolated temp state with test marker, zero prod/dev credentials | `enforced` | `scripts/verify` (hermetic per-run fixtures; document any remaining state isolation gap) |
 
+UI repositories can opt into a design-contract static gate by copying
+`templates/design-contract.md` to `docs/design-contract.md` and running
+`python3 .shared-ci/scripts/context/design_contract.py --root . --ui-path <dir>`.
+The gate checks the contract's required sections and view states, then rejects
+raw Hex/RGB colors in the selected UI sources.
+
 ## Retrospective distillation
 
 Keep detailed post-mortem and incident narratives in `Retrospective.md`. Distill
