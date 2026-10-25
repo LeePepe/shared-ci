@@ -15,11 +15,9 @@ step "syntax"
 for entry in audit audit-selected resolve layers field contexts run; do
     /bin/sh -n "scripts/context/$entry"
 done
-for script in scripts/review/*.sh scripts/ruleset/apply.sh templates/scripts/verify templates/githooks/pre-push templates/githooks/pre-commit .githooks/pre-push .githooks/pre-commit; do
-    bash -n "$script"
-done
-"$python" -I -B -c 'import ast,sys; [ast.parse(open(p).read(), p) for p in sys.argv[1:]]' $(git ls-files '*.py')
-"$python" -I -B -c 'import json,sys; [json.load(open(p)) for p in sys.argv[1:]]' $(git ls-files '*.json')
+bash -n scripts/review/*.sh scripts/ruleset/apply.sh templates/scripts/verify templates/githooks/pre-push templates/githooks/pre-commit .githooks/pre-push .githooks/pre-commit
+"$python" -I -B -c 'import ast, pathlib, py_compile, sys; [ast.parse(pathlib.Path(p).read_bytes(), p) for p in sys.argv[1:]]' $(git ls-files '*.py')
+"$python" -I -B -c 'import json, pathlib, sys; [json.loads(pathlib.Path(p).read_text(encoding="utf-8")) for p in sys.argv[1:]]' $(git ls-files '*.json')
 
 step "layer map + repository contract (selected provider, live root)"
 scripts/context/audit-selected
@@ -28,6 +26,7 @@ step "workflow-lint (self-applied)"
 "$python" -I -B scripts/lint/workflows.py --root .
 
 step "unit tests"
+run_sequential_suites() {
 for suite in context repo lint review ruleset select stuck_pr; do
     "$python" -I -B -m unittest discover -s "tests/$suite" -p 'test_*.py'
 done
@@ -38,6 +37,58 @@ done
 "$python" -I -B -m unittest discover -s tests/quality -p 'test_security_scan.py'
 "$python" -I -S -B -m unittest discover -s tests/policy -p 'test_validation.py'
 "$python" -I -S -B tests/quality/test_aggregation.py
+}
+# With python3 -c, sys.argv[0] is "-c"; the arguments after the program are sys.argv[1:].
+"$python" -I -B -c '
+import concurrent.futures
+import os
+import subprocess
+import sys
+
+python = sys.argv[1]
+jobs = int(os.environ.get("VERIFY_JOBS", "4"))
+if jobs < 1:
+    sys.stderr.write(f"[verify] VERIFY_JOBS must be >= 1: {jobs}\n")
+    sys.exit(2)
+suites = [
+    *[
+        [python, "-I", "-B", "-m", "unittest", "discover", "-s", f"tests/{suite}", "-p", "test_*.py"]
+        for suite in ("context", "repo", "lint", "review", "ruleset", "select", "stuck_pr")
+    ],
+    *[
+        [python, "-I", "-B", "-m", "unittest", "discover", "-s", "tests/quality", "-p", pattern]
+        for pattern in (
+            "test_gate.py",
+            "test_test_integrity.py",
+            "test_commit_identity.py",
+            "test_release_sync.py",
+            "test_security_scan.py",
+        )
+    ],
+    [python, "-I", "-S", "-B", "-m", "unittest", "discover", "-s", "tests/policy", "-p", "test_validation.py"],
+    [python, "-I", "-S", "-B", "tests/quality/test_aggregation.py"],
+]
+
+def run_suite(cmd: list[str]) -> tuple[int, str, str]:
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    return proc.returncode, proc.stdout, proc.stderr
+
+failed = False
+with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(suites), jobs)) as pool:
+    futures = [pool.submit(run_suite, cmd) for cmd in suites]
+    for future in futures:
+        rc, out, err = future.result()
+        if out:
+            sys.stdout.write(out)
+            sys.stdout.flush()
+        if err:
+            sys.stderr.write(err)
+            sys.stderr.flush()
+        if rc != 0:
+            failed = True
+if failed:
+    sys.exit(1)
+' "$python"
 
 step "whitespace"
 git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- . ':!*.patch' >/dev/null
