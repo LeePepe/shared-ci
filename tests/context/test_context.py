@@ -53,8 +53,9 @@ class TopologicalWavesTests(unittest.TestCase):
         }
         with self.assertRaises(layer_context.ContextError):
             layer_context._topological_waves(layers, ["Missing"])
-        with self.assertRaises(layer_context.ContextError):
-            layer_context._topological_waves(layers, ["A", "B"])
+        with self.assertRaises(layer_context.ContextError) as ctx:
+            layer_context._topological_waves(layers, ["B", "A"])
+        self.assertEqual("dependency cycle involving A, B", str(ctx.exception))
 
 
 class ParallelWaveExecutionTests(unittest.TestCase):

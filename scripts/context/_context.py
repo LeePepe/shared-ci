@@ -1120,12 +1120,11 @@ def _topological_waves(layers: dict[str, Any], order: list[str]) -> list[list[st
         stack = list(_layer_dependencies(layers[start]))
         while stack:
             dep = stack.pop()
-            if dep == start:
-                raise ContextError(f"dependency cycle involving {start}", "dependency_cycle")
             if dep in visited or dep not in layers:
                 continue
             visited.add(dep)
-            stack.extend(_layer_dependencies(layers[dep]))
+            if dep != start:
+                stack.extend(_layer_dependencies(layers[dep]))
         return visited & seen
 
     deps_by_layer = {layer_id: transitive_dependencies(layer_id) for layer_id in ordered}
@@ -1135,7 +1134,7 @@ def _topological_waves(layers: dict[str, Any], order: list[str]) -> list[list[st
     while remaining:
         wave = [layer_id for layer_id in remaining if deps_by_layer[layer_id] <= completed]
         if not wave:
-            raise ContextError("dependency cycle in selected layers", "dependency_cycle")
+            raise ContextError(f"dependency cycle involving {', '.join(sorted(remaining))}")
         waves.append(wave)
         completed.update(wave)
         remaining = [layer_id for layer_id in remaining if layer_id not in completed]

@@ -15,7 +15,9 @@ step "syntax"
 for entry in audit audit-selected resolve layers field contexts run; do
     /bin/sh -n "scripts/context/$entry"
 done
-bash -n scripts/review/*.sh scripts/ruleset/apply.sh templates/scripts/verify templates/githooks/pre-push templates/githooks/pre-commit .githooks/pre-push .githooks/pre-commit
+for script in scripts/verify scripts/review/*.sh scripts/ruleset/apply.sh templates/scripts/verify templates/githooks/pre-push templates/githooks/pre-commit .githooks/pre-push .githooks/pre-commit; do
+    bash -n "$root/$script"
+done
 "$python" -I -B -c 'import ast, pathlib, py_compile, sys; [ast.parse(pathlib.Path(p).read_bytes(), p) for p in sys.argv[1:]]' $(git ls-files '*.py')
 "$python" -I -B -c 'import json, pathlib, sys; [json.loads(pathlib.Path(p).read_text(encoding="utf-8")) for p in sys.argv[1:]]' $(git ls-files '*.json')
 
@@ -26,7 +28,12 @@ step "workflow-lint (self-applied)"
 "$python" -I -B scripts/lint/workflows.py --root .
 
 step "unit tests"
-run_sequential_suites() {
+python_bin="$python"
+suite_queue=()
+enqueue_suite() {
+    suite_queue+=("$python_bin" "$@" "")
+}
+python=enqueue_suite
 for suite in context repo lint review ruleset select stuck_pr; do
     "$python" -I -B -m unittest discover -s "tests/$suite" -p 'test_*.py'
 done
@@ -37,7 +44,7 @@ done
 "$python" -I -B -m unittest discover -s tests/quality -p 'test_security_scan.py'
 "$python" -I -S -B -m unittest discover -s tests/policy -p 'test_validation.py'
 "$python" -I -S -B tests/quality/test_aggregation.py
-}
+python="$python_bin"
 # With python3 -c, sys.argv[0] is "-c"; the arguments after the program are sys.argv[1:].
 "$python" -I -B -c '
 import concurrent.futures
@@ -45,29 +52,27 @@ import os
 import subprocess
 import sys
 
-python = sys.argv[1]
-jobs = int(os.environ.get("VERIFY_JOBS", "4"))
+raw_jobs = os.environ.get("VERIFY_JOBS", "4").strip()
+try:
+    jobs = int(raw_jobs)
+except ValueError:
+    sys.stderr.write(f"[verify] invalid VERIFY_JOBS: {raw_jobs}\n")
+    sys.exit(2)
 if jobs < 1:
     sys.stderr.write(f"[verify] VERIFY_JOBS must be >= 1: {jobs}\n")
     sys.exit(2)
-suites = [
-    *[
-        [python, "-I", "-B", "-m", "unittest", "discover", "-s", f"tests/{suite}", "-p", "test_*.py"]
-        for suite in ("context", "repo", "lint", "review", "ruleset", "select", "stuck_pr")
-    ],
-    *[
-        [python, "-I", "-B", "-m", "unittest", "discover", "-s", "tests/quality", "-p", pattern]
-        for pattern in (
-            "test_gate.py",
-            "test_test_integrity.py",
-            "test_commit_identity.py",
-            "test_release_sync.py",
-            "test_security_scan.py",
-        )
-    ],
-    [python, "-I", "-S", "-B", "-m", "unittest", "discover", "-s", "tests/policy", "-p", "test_validation.py"],
-    [python, "-I", "-S", "-B", "tests/quality/test_aggregation.py"],
-]
+
+suites: list[list[str]] = []
+current: list[str] = []
+for arg in sys.argv[1:]:
+    if arg == "":
+        if current:
+            suites.append(current)
+            current = []
+    else:
+        current.append(arg)
+if current:
+    suites.append(current)
 
 def run_suite(cmd: list[str]) -> tuple[int, str, str]:
     proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
@@ -88,7 +93,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(suites), jobs)) a
             failed = True
 if failed:
     sys.exit(1)
-' "$python"
+' "${suite_queue[@]}"
 
 step "whitespace"
 git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- . ':!*.patch' >/dev/null
