@@ -9,6 +9,7 @@ Product ownership and policy remain in caller-authored context documents.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import errno
 import json
 import os
@@ -1085,59 +1086,101 @@ def command_contexts(args: argparse.Namespace, root: pathlib.Path) -> int:
     return 0
 
 
-def command_run(args: argparse.Namespace, root: pathlib.Path) -> int:
-    layers = layer_map(root)
-    if args.layer not in layers:
-        raise ContextError(f"unknown layer: {args.layer}")
-    data = layers[args.layer]
-    if args.path is not None:
-        normalize_path(root, args.path)
-    red_lines = tuple(_list_of_strings(data, "red_lines"))
-    gates = data.get("gates", [])
-    selected = [gate for gate in gates
-                if (args.gate is None or gate.get("id") == args.gate)
-                and gate.get("mode") in {"both", args.mode}]
-    if not selected:
-        raise ContextError(f"unknown or unavailable {args.mode} gate for {args.layer}: {args.gate}")
-    owned_files: list[str] | None = None
+def _layer_dependencies(data: Any) -> list[str]:
+    if isinstance(data, dict):
+        deps = data.get("dependencies")
+        if deps is None:
+            deps = data.get("depends_on", [])
+        return [str(dep) for dep in (deps or [])]
+    deps = getattr(data, "dependencies", None)
+    if deps is None:
+        deps = getattr(data, "depends_on", ())
+    return [str(dep) for dep in (deps or ())]
 
-    def resolved_owned_files() -> list[str]:
-        nonlocal owned_files
-        if owned_files is None:
-            owned_files = []
-            for path in tracked_files(root):
-                require_utf8(path, "expanded path")
-                normalize_path(root, path)  # Unsafe tracked paths must never be skipped.
-                try:
-                    resolution = resolve(root, path)
-                except ContextError:
-                    continue
-                if resolution.classification == "leaf" and resolution.layer == args.layer:
-                    owned_files.append(path)
-        return owned_files
 
-    def expand_command(command: list[str]) -> list[str]:
-        expanded: list[str] = []
-        parent = normalize_path(root, data.get("parent", ROOT_CONTEXT))
-        test_patterns = _list_of_strings(data, "test_paths")
-        for token in command:
-            paths: list[str] = []
-            if token == "{test_paths}":
-                paths = [
-                    path for path in resolved_owned_files()
-                    if path.endswith(".py")
-                    and any(match_pattern(relative_to_context(parent, path), pattern)
-                            for pattern in test_patterns)
-                ]
-            elif token == "{owned_python_paths}":
-                paths = [path for path in resolved_owned_files() if path.endswith(".py")]
-            else:
-                expanded.append(token)
+def _topological_waves(layers: dict[str, Any], order: list[str]) -> list[list[str]]:
+    """Partition ``order`` into dependency-ordered waves.
+
+    Every layer in a wave depends only on layers from strictly earlier waves.
+    Relative order from ``order`` is preserved within each wave.
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for layer_id in order:
+        if layer_id not in layers:
+            raise ContextError(f"unknown layer: {layer_id}")
+        if layer_id not in seen:
+            seen.add(layer_id)
+            ordered.append(layer_id)
+    if not ordered:
+        return []
+
+    def transitive_dependencies(start: str) -> set[str]:
+        visited: set[str] = set()
+        stack = list(_layer_dependencies(layers[start]))
+        while stack:
+            dep = stack.pop()
+            if dep in visited or dep not in layers:
                 continue
-            if not paths:
-                raise ContextError(f"empty path placeholder for {args.layer}: {token}")
-            expanded.extend(paths)
-        return expanded
+            visited.add(dep)
+            if dep != start:
+                stack.extend(_layer_dependencies(layers[dep]))
+        return visited & seen
+
+    deps_by_layer = {layer_id: transitive_dependencies(layer_id) for layer_id in ordered}
+    remaining = list(ordered)
+    completed: set[str] = set()
+    waves: list[list[str]] = []
+    while remaining:
+        wave = [layer_id for layer_id in remaining if deps_by_layer[layer_id] <= completed]
+        if not wave:
+            raise ContextError(f"dependency cycle involving {', '.join(sorted(remaining))}")
+        waves.append(wave)
+        completed.update(wave)
+        remaining = [layer_id for layer_id in remaining if layer_id not in completed]
+    return waves
+
+
+def _resolve_max_jobs(jobs: int | None = None) -> int:
+    if jobs is not None:
+        if type(jobs) is not int or jobs < 1:
+            raise ContextError("--jobs must be a positive integer")
+        return jobs
+    raw = os.environ.get("SHARED_CI_JOBS", "").strip()
+    if raw:
+        try:
+            parsed = int(raw)
+        except ValueError as error:
+            raise ContextError(f"invalid SHARED_CI_JOBS: {raw}") from error
+        if parsed < 1:
+            raise ContextError(f"SHARED_CI_JOBS must be a positive integer: {raw}")
+        return parsed
+    return 4
+
+
+def _run_gates(
+    root: pathlib.Path,
+    selected_layers: list[str],
+    *,
+    gate: str | None = None,
+    mode: str = "local",
+    path: str | None = None,
+    jobs: int | None = None,
+    layers: dict[str, dict[str, Any]] | None = None,
+) -> int:
+    max_jobs = _resolve_max_jobs(jobs)
+    if layers is None:
+        layers = layer_map(root)
+    if not selected_layers:
+        return 0
+    for layer_id in selected_layers:
+        if layer_id not in layers:
+            raise ContextError(f"unknown layer: {layer_id}")
+    if path is not None:
+        normalize_path(root, path)
+
+    waves = _topological_waves(layers, selected_layers)
+    ordered_layers = [layer_id for wave in waves for layer_id in wave]
 
     def validate_command_paths(command: list[str]) -> None:
         positional_only = False
@@ -1168,34 +1211,158 @@ def command_run(args: argparse.Namespace, root: pathlib.Path) -> int:
             elif (root / token).is_symlink():
                 normalize_path(root, token)
 
-    def gate_log(gate: dict[str, Any], command: list[str]) -> str:
-        line = f"[context/run] {args.layer}:{gate['id']} — {' '.join(command)}"
+    def gate_log(layer_id: str, gate_obj: dict[str, Any], command: list[str]) -> str:
+        line = f"[context/run] {layer_id}:{gate_obj['id']} — {' '.join(command)}"
         require_utf8(line, "gate log")
         return line
 
-    # Check every raw command before expansion can invoke discovery Git, then
-    # check expanded paths before executing even the first selected gate.
-    for gate in selected:
-        gate_log(gate, gate["command"])
-        validate_command_paths(gate["command"])
-    prepared = [(gate, expand_command(gate["command"])) for gate in selected]
-    logs: list[str] = []
-    for gate, command in prepared:
-        validate_command_paths(command)
-        logs.append(gate_log(gate, command))
-    for (gate, command), log in zip(prepared, logs):
-        print(log, flush=True)
-        try:
-            result = subprocess.run(command, cwd=root, check=False)
-        except OSError as error:
-            Finding(args.layer, args.path or data["_context_path"], "gate_execution_failed",
-                    f"gate={gate['id']} error={error}", red_lines).emit()
-            return 1
-        if result.returncode != 0:
-            Finding(args.layer, args.path or data["_context_path"], "gate_failed",
-                    f"gate={gate['id']} exit={result.returncode}", red_lines).emit()
-            return 128 - result.returncode if result.returncode < 0 else result.returncode
+    selected_by_layer: dict[str, list[dict[str, Any]]] = {}
+    for layer_id in ordered_layers:
+        data = layers[layer_id]
+        gates = data.get("gates", [])
+        selected = [
+            gate_obj for gate_obj in gates
+            if (gate is None or gate_obj.get("id") == gate)
+            and gate_obj.get("mode") in {"both", mode}
+        ]
+        if not selected:
+            raise ContextError(f"unknown or unavailable {mode} gate for {layer_id}: {gate}")
+        selected_by_layer[layer_id] = selected
+        # Check every raw command before expansion can invoke discovery Git.
+        for gate_obj in selected:
+            gate_log(layer_id, gate_obj, gate_obj["command"])
+            validate_command_paths(gate_obj["command"])
+
+    owned_by_layer: dict[str, list[str]] | None = None
+
+    def resolved_owned_files(layer_id: str) -> list[str]:
+        nonlocal owned_by_layer
+        if owned_by_layer is None:
+            owned_by_layer = {lid: [] for lid in layers}
+            for tracked_path in tracked_files(root):
+                require_utf8(tracked_path, "expanded path")
+                normalize_path(root, tracked_path)  # Unsafe tracked paths must never be skipped.
+                try:
+                    resolution = resolve(root, tracked_path)
+                except ContextError:
+                    continue
+                if resolution.classification == "leaf" and resolution.layer in owned_by_layer:
+                    owned_by_layer[resolution.layer].append(tracked_path)
+        return owned_by_layer.get(layer_id, [])
+
+    def expand_command(layer_id: str, data: dict[str, Any], command: list[str]) -> list[str]:
+        expanded: list[str] = []
+        parent = normalize_path(root, data.get("parent", ROOT_CONTEXT))
+        test_patterns = _list_of_strings(data, "test_paths")
+        for token in command:
+            paths: list[str] = []
+            if token == "{test_paths}":
+                paths = [
+                    owned for owned in resolved_owned_files(layer_id)
+                    if owned.endswith(".py")
+                    and any(match_pattern(relative_to_context(parent, owned), pattern)
+                            for pattern in test_patterns)
+                ]
+            elif token == "{owned_python_paths}":
+                paths = [owned for owned in resolved_owned_files(layer_id) if owned.endswith(".py")]
+            else:
+                expanded.append(token)
+                continue
+            if not paths:
+                raise ContextError(f"empty path placeholder for {layer_id}: {token}")
+            expanded.extend(paths)
+        return expanded
+
+    prepared_by_layer: dict[str, tuple[dict[str, Any], tuple[str, ...], list[tuple[dict[str, Any], list[str], str]]]] = {}
+    for layer_id in ordered_layers:
+        data = layers[layer_id]
+        red_lines = tuple(_list_of_strings(data, "red_lines"))
+        prepared = [(gate_obj, expand_command(layer_id, data, gate_obj["command"]))
+                    for gate_obj in selected_by_layer[layer_id]]
+        entries: list[tuple[dict[str, Any], list[str], str]] = []
+        for gate_obj, command in prepared:
+            validate_command_paths(command)
+            entries.append((gate_obj, command, gate_log(layer_id, gate_obj, command)))
+        prepared_by_layer[layer_id] = (data, red_lines, entries)
+
+    def execute_layer(layer_id: str) -> tuple[int, str, str]:
+        data, red_lines, entries = prepared_by_layer[layer_id]
+        out_chunks: list[str] = []
+        err_chunks: list[str] = []
+        for gate_obj, command, log in entries:
+            out_chunks.append(log + "\n")
+            try:
+                result = subprocess.run(
+                    command, cwd=root, check=False, text=True, capture_output=True
+                )
+            except OSError as error:
+                finding = Finding(
+                    layer_id, path or data["_context_path"], "gate_execution_failed",
+                    f"gate={gate_obj['id']} error={error}", red_lines,
+                )
+                err_chunks.append(json.dumps({
+                    "layer": finding.layer,
+                    "path": finding.path,
+                    "kind": finding.kind,
+                    "detail": finding.detail,
+                    "red_lines": list(finding.red_lines),
+                }, ensure_ascii=False) + "\n")
+                return 1, "".join(out_chunks), "".join(err_chunks)
+            if getattr(result, "stdout", None):
+                out_chunks.append(result.stdout)
+            if getattr(result, "stderr", None):
+                err_chunks.append(result.stderr)
+            if result.returncode != 0:
+                finding = Finding(
+                    layer_id, path or data["_context_path"], "gate_failed",
+                    f"gate={gate_obj['id']} exit={result.returncode}", red_lines,
+                )
+                err_chunks.append(json.dumps({
+                    "layer": finding.layer,
+                    "path": finding.path,
+                    "kind": finding.kind,
+                    "detail": finding.detail,
+                    "red_lines": list(finding.red_lines),
+                }, ensure_ascii=False) + "\n")
+                code = 128 - result.returncode if result.returncode < 0 else result.returncode
+                return code, "".join(out_chunks), "".join(err_chunks)
+        return 0, "".join(out_chunks), "".join(err_chunks)
+
+    for wave in waves:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(wave), max_jobs)) as pool:
+            futures = {layer_id: pool.submit(execute_layer, layer_id) for layer_id in wave}
+            wave_status = 0
+            for layer_id in wave:
+                code, out_text, err_text = futures[layer_id].result()
+                if out_text:
+                    sys.stdout.write(out_text)
+                    sys.stdout.flush()
+                if err_text:
+                    sys.stderr.write(err_text)
+                    sys.stderr.flush()
+                if code != 0 and wave_status == 0:
+                    wave_status = code
+            if wave_status != 0:
+                return wave_status
     return 0
+
+
+def command_run(args: argparse.Namespace, root: pathlib.Path) -> int:
+    raw_layers = getattr(args, "layers", None)
+    if isinstance(args.layer, str):
+        selected_layers = [args.layer]
+    else:
+        selected_layers = list(args.layer)
+    if raw_layers:
+        selected_layers.extend(raw_layers)
+    return _run_gates(
+        root,
+        selected_layers,
+        gate=getattr(args, "gate", None),
+        mode=getattr(args, "mode", "local"),
+        path=getattr(args, "path", None),
+        jobs=getattr(args, "jobs", None),
+    )
 
 
 def parser_for(command_name: str) -> argparse.ArgumentParser:
@@ -1222,9 +1389,11 @@ def parser_for(command_name: str) -> argparse.ArgumentParser:
         parser.set_defaults(handler=command_contexts)
     elif command_name == "run":
         parser.add_argument("layer")
+        parser.add_argument("layers", nargs="*")
         parser.add_argument("--gate")
         parser.add_argument("--mode", choices=("local", "ci"), default="local")
         parser.add_argument("--path")
+        parser.add_argument("--jobs", type=int, default=None)
         parser.set_defaults(handler=command_run)
     else:
         raise ContextError(f"unknown context command: {command_name}")
