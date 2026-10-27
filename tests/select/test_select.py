@@ -227,8 +227,8 @@ class SelectionTests(unittest.TestCase):
     def test_unmapped_path_is_full(self):
         self.repo.write("unowned/thing.py", "x\n")
         self.repo.commit("unmapped")
+        self.assertFull(self.repo.select(), "unowned/thing.py: unmapped")
         selection = self.repo.select()
-        self.assertFull(selection, "unowned/thing.py: unmapped")
         self.assertEqual(([], []), (selection["changed_layers"], selection["unaffected_layers"]))
 
     def test_manifest_change_is_full(self):
