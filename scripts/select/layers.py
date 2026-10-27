@@ -6,8 +6,9 @@ shared-ci resolver, adds every transitive dependent (a layer B with
 `depends_on: [A]` runs when A changes), and prints one JSON selection:
 
   {"full": bool, "any_layer": bool, "layers": [...], "reason": str,
-   "triggers": [...], "changed": [...], "unmapped": [...], "all_layers": [...],
-   "event": str, "base": str, "head": str}
+  "changed_layers": [...], "unaffected_layers": [...],
+  "triggers": [...], "changed": [...], "unmapped": [...], "all_layers": [...],
+  "event": str, "base": str, "head": str}
 
 Only pull_request / pull_request_target events are selective. Everything else
 (push, schedule, workflow_dispatch, merge_group, unknown) is a full run. A PR
@@ -202,6 +203,8 @@ def select(root: pathlib.Path, *, event: str, base: str, head: str, extra_patter
         reason = "changed layers: " + ", ".join(sorted(touched)) + (
             f"; dependents: {', '.join(added)}" if added else "")
     result.update({"full": full, "any_layer": full or bool(selected), "layers": selected,
+                   "changed_layers": sorted(touched),
+                   "unaffected_layers": [] if full else sorted(set(layers) - set(selected)),
                    "reason": reason})
     return result
 
@@ -223,6 +226,7 @@ def disabled(*, event: str, base: str, head: str) -> dict[str, Any]:
     return {"mode": "disabled", "event": event, "base": base, "head": head, "changed": [],
             "unmapped": [], "all_layers": [], "triggers": ["changed-only is disabled"],
             "full": True, "any_layer": True, "layers": [],
+            "changed_layers": [], "unaffected_layers": [],
             "reason": "full run: changed-only is disabled"}
 
 
@@ -233,6 +237,10 @@ def write_outputs(path: str, selection: dict[str, Any]) -> None:
         "any-layer": "true" if selection["any_layer"] else "false",
         "layers": json.dumps(selection["layers"], separators=(",", ":")),
         "layers-space": " ".join(selection["layers"]),
+        "changed-layers": json.dumps(selection["changed_layers"], separators=(",", ":")),
+        "changed-layers-space": " ".join(selection["changed_layers"]),
+        "unaffected-layers": json.dumps(selection["unaffected_layers"], separators=(",", ":")),
+        "unaffected-layers-space": " ".join(selection["unaffected_layers"]),
         "reason": " ".join(selection["reason"].split()),
         "selection": compact,
     }
