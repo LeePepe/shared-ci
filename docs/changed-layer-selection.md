@@ -53,6 +53,10 @@ Outputs (`select.yml` and `quality.yml`'s `select` job):
 | `any-layer` | `true` when at least one layer runs (always `true` when `full`) |
 | `layers` | JSON list of selected layer IDs; on a full run, all known layers (possibly empty if loading failed or mode is disabled). `full` takes precedence over membership. |
 | `layers-space` | the same, space separated |
+| `changed-layers` | JSON list of directly touched leaf layers |
+| `changed-layers-space` | Directly touched leaf layer IDs separated by single spaces |
+| `unaffected-layers` | JSON list of known layers outside the selected transitive dependent closure; empty for full runs |
+| `unaffected-layers-space` | The same unaffected layer IDs separated by single spaces |
 | `reason` | one line, e.g. `changed layers: VoxDomain; dependents: VoxApplication, …` |
 | `selection` | full JSON record: mode, event, base, head, layers, triggers, changed/unmapped paths (capped at 200 each, with exact `*_count`) |
 
@@ -83,6 +87,11 @@ nonzero; consumers must not interpret missing output as an empty selection.
 
 The standalone `select.yml` always uses changed-only mode and accepts
 `force-full-paths` (default empty). Its workflow outputs are the table above.
+Single-scheme and SPM consumers can use `unaffected-layers` (or its
+space-separated form) to add `-skip-testing:<Target>` for unaffected SPM
+packages. Consumers can also skip UI test targets when `app` or `ui` appears
+in `unaffected-layers`; full runs intentionally leave the unaffected list
+empty so consumers do not skip work when selection is uncertain.
 In `quality.yml`, `changed-only` defaults false and the internal `select` job
 has those fields; the reusable quality workflow itself exposes only `selection`
 and `tested-sha` (the latter only after aggregate passes). Other workflow

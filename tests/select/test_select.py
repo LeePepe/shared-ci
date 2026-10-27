@@ -165,12 +165,16 @@ class SelectionTests(unittest.TestCase):
         selection = self.repo.select()
         self.assertEqual((False, True, ["App"], []), (selection["full"], selection["any_layer"],
                                                       selection["layers"], selection["triggers"]))
+        self.assertEqual(["App"], selection["changed_layers"])
+        self.assertEqual(["Domain", "Infra", "Tools"], selection["unaffected_layers"])
 
     def test_single_layer_change_adds_transitive_dependents(self):
         self.repo.change("src/domain/model.py")
         selection = self.repo.select()
         self.assertFalse(selection["full"])
         self.assertEqual(["App", "Domain", "Infra"], selection["layers"])  # Tools is standalone
+        self.assertEqual(["Domain"], selection["changed_layers"])
+        self.assertEqual(["Tools"], selection["unaffected_layers"])
         self.assertIn("dependents: App, Infra", selection["reason"])
 
     def test_middle_layer_change_adds_only_its_dependents(self):
@@ -194,6 +198,8 @@ class SelectionTests(unittest.TestCase):
         self.repo.change("docs/guide.md", "README.md")
         selection = self.repo.select()
         self.assertEqual((False, False, []), (selection["full"], selection["any_layer"], selection["layers"]))
+        self.assertEqual(([], ["App", "Domain", "Infra", "Tools"]),
+                         (selection["changed_layers"], selection["unaffected_layers"]))
         self.assertIn("only support paths changed", selection["reason"])
 
     def test_changed_gate_script_selects_its_layer(self):
@@ -222,6 +228,8 @@ class SelectionTests(unittest.TestCase):
         self.repo.write("unowned/thing.py", "x\n")
         self.repo.commit("unmapped")
         self.assertFull(self.repo.select(), "unowned/thing.py: unmapped")
+        selection = self.repo.select()
+        self.assertEqual(([], []), (selection["changed_layers"], selection["unaffected_layers"]))
 
     def test_manifest_change_is_full(self):
         for manifest in ("src/app/Package.swift", "src/app/package-lock.json", "requirements.txt"):
@@ -335,14 +343,20 @@ class SelectionTests(unittest.TestCase):
         values = dict(line.split("=", 1) for line in output.read_text().splitlines())
         self.assertEqual(("false", "true", '["App","Infra"]', "App Infra"),
                          (values["full"], values["any-layer"], values["layers"], values["layers-space"]))
+        self.assertEqual(('["Infra"]', "Infra", '["Domain","Tools"]', "Domain Tools"),
+                         (values["changed-layers"], values["changed-layers-space"],
+                          values["unaffected-layers"], values["unaffected-layers-space"]))
         record = json.loads(values["selection"])
         self.assertEqual((self.repo.rev(), "changed-only", 1), (record["head"], record["mode"], record["changed_count"]))
+        self.assertEqual((["Infra"], ["Domain", "Tools"]),
+                         (record["changed_layers"], record["unaffected_layers"]))
         self.assertIn("layer selection: changed-only", summary.read_text())
 
     def test_disabled_mode_is_full_and_reads_no_diff(self):
         result = self.repo.cli("--mode", "disabled", "--event", "pull_request", "--head", self.repo.rev())
         data = json.loads(result.stdout)
         self.assertEqual(("disabled", True, True, []), (data["mode"], data["full"], data["any_layer"], data["changed"]))
+        self.assertEqual(([], []), (data["changed_layers"], data["unaffected_layers"]))
 
     def test_output_lists_are_capped(self):
         record = select.compact_selection({"changed": ["x"] * 500, "unmapped": [], "triggers": ["t"] * 300,
