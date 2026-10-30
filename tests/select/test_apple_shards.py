@@ -60,6 +60,75 @@ final class FirstTests: XCTestCase {
         )
         self.assertNotIn("AppUITests/GeneratedTests/testLiveSmoke", apple_shards.discover_xcuitests(self.root))
 
+    def test_discovery_includes_non_final_classes_and_extensions_in_source_order(self) -> None:
+        (self.ui / "A.swift").write_text(
+            """extension OrderedTests {
+    func testExtensionBeforeClass() {}
+}
+""",
+            encoding="utf-8",
+        )
+        (self.ui / "B.swift").write_text(
+            """import XCTest
+class OrderedTests: XCTestCase {
+    func testClass() {}
+}
+""",
+            encoding="utf-8",
+        )
+        (self.ui / "C.swift").write_text(
+            """extension OrderedTests: SomeProtocol {
+    func testExtensionAfterClass() {}
+}
+""",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            apple_shards.discover_xcuitests(self.root)[:3],
+            [
+                "AppUITests/OrderedTests/testExtensionBeforeClass",
+                "AppUITests/OrderedTests/testClass",
+                "AppUITests/OrderedTests/testExtensionAfterClass",
+            ],
+        )
+
+    def test_discovery_falls_back_for_unmatched_relevant_brace(self) -> None:
+        (self.ui / "Broken.swift").write_text(
+            """import XCTest
+final class BrokenTests: XCTestCase {
+    func testBroken() {
+}
+""",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            apple_shards.discover_xcuitests(self.root),
+            ["AppUITests"],
+        )
+
+    def test_discovery_falls_back_for_unmatched_unrelated_brace(self) -> None:
+        (self.ui / "Unrelated.swift").write_text(
+            """struct Unrelated {
+    let value = 1
+""",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            apple_shards.discover_xcuitests(self.root),
+            ["AppUITests"],
+        )
+
+    def test_discovery_falls_back_for_top_level_test_method(self) -> None:
+        (self.ui / "TopLevel.swift").write_text(
+            """func testOutside() {}
+""",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            apple_shards.discover_xcuitests(self.root),
+            ["AppUITests"],
+        )
+
     def test_plan_balances_methods_and_puts_units_on_first_shard(self) -> None:
         plan = apple_shards.plan_apple_shards(self.root, max_per_shard=5)
         self.assertEqual(plan["shard_count_per_device"], 6)
@@ -98,6 +167,10 @@ final class FirstTests: XCTestCase {
         self.assertTrue(skipped["skip_all_apple_tests"])
         self.assertEqual(skipped["shards"], [])
 
+    def test_empty_devices_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "devices must not be empty"):
+            apple_shards.plan_apple_shards(self.root, devices=[])
+
     def test_cli_writes_github_outputs(self) -> None:
         with tempfile.NamedTemporaryFile() as output:
             result = subprocess.run(
@@ -122,6 +195,24 @@ final class FirstTests: XCTestCase {
             lines = dict(line.split("=", 1) for line in output.read().decode().splitlines())
             self.assertEqual(lines["skip_all_apple_tests"], "0")
             self.assertEqual(json.loads(lines["shards_matrix"]), {"include": plan["shards"]})
+
+    def test_cli_rejects_empty_devices_argument(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-B",
+                str(SCRIPT),
+                "--root",
+                str(self.root),
+                "--devices",
+                "",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

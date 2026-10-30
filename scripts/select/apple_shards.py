@@ -16,15 +16,25 @@ from typing import Dict, Iterable, List, Optional
 
 
 LIVE_SKIP_MARKER = "XCTSkipUnless(ProcessInfo.processInfo.environment["
-CLASS_PATTERN = re.compile(r"\bfinal\s+class\s+([A-Za-z_]\w*)\s*:")
+CLASS_PATTERN = re.compile(
+    r"\b(?:final\s+)?class\s+([A-Za-z_]\w*)\s*:\s*([^{}]+?)\s*\{",
+    re.MULTILINE,
+)
+EXTENSION_PATTERN = re.compile(
+    r"\bextension\s+([A-Za-z_]\w*)(?:\s*:[^{]+)?\s*\{",
+    re.MULTILINE,
+)
 METHOD_PATTERN = re.compile(r"\bfunc\s+(test\w+)\s*\(")
 
 
 def _matching_brace(text: str, opening: int) -> int:
     """Return the closing brace for ``opening``, ignoring strings/comments."""
+    if opening < 0 or opening >= len(text) or text[opening] != "{":
+        return -1
     depth = 0
     index = opening
     state = "normal"
+    block_comment_depth = 0
     while index < len(text):
         character = text[index]
         following = text[index + 1] if index + 1 < len(text) else ""
@@ -32,21 +42,34 @@ def _matching_brace(text: str, opening: int) -> int:
             if character == "\n":
                 state = "normal"
         elif state == "block_comment":
-            if character == "*" and following == "/":
-                state = "normal"
+            if character == "/" and following == "*":
+                block_comment_depth += 1
+                index += 1
+            elif character == "*" and following == "/":
+                block_comment_depth -= 1
+                if block_comment_depth == 0:
+                    state = "normal"
                 index += 1
         elif state == "string":
             if character == "\\":
                 index += 1
             elif character == '"':
                 state = "normal"
+        elif state == "multiline_string":
+            if text.startswith('"""', index):
+                state = "normal"
+                index += 2
         else:
             if character == "/" and following == "/":
                 state = "line_comment"
                 index += 1
             elif character == "/" and following == "*":
                 state = "block_comment"
+                block_comment_depth = 1
                 index += 1
+            elif text.startswith('"""', index):
+                state = "multiline_string"
+                index += 2
             elif character == '"':
                 state = "string"
             elif character == "{":
@@ -56,7 +79,60 @@ def _matching_brace(text: str, opening: int) -> int:
                 if depth == 0:
                     return index
         index += 1
-    return len(text)
+    return -1
+
+
+def _balanced_braces(text: str) -> bool:
+    """Return whether braces are balanced outside strings and comments."""
+    depth = 0
+    index = 0
+    state = "normal"
+    block_comment_depth = 0
+    while index < len(text):
+        character = text[index]
+        following = text[index + 1] if index + 1 < len(text) else ""
+        if state == "line_comment":
+            if character == "\n":
+                state = "normal"
+        elif state == "block_comment":
+            if character == "/" and following == "*":
+                block_comment_depth += 1
+                index += 1
+            elif character == "*" and following == "/":
+                block_comment_depth -= 1
+                if block_comment_depth == 0:
+                    state = "normal"
+                index += 1
+        elif state == "string":
+            if character == "\\":
+                index += 1
+            elif character == '"':
+                state = "normal"
+        elif state == "multiline_string":
+            if text.startswith('"""', index):
+                state = "normal"
+                index += 2
+        else:
+            if character == "/" and following == "/":
+                state = "line_comment"
+                index += 1
+            elif character == "/" and following == "*":
+                state = "block_comment"
+                block_comment_depth = 1
+                index += 1
+            elif text.startswith('"""', index):
+                state = "multiline_string"
+                index += 2
+            elif character == '"':
+                state = "string"
+            elif character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth < 0:
+                    return False
+        index += 1
+    return depth == 0 and state in {"normal", "line_comment"}
 
 
 def _swift_files(directory: pathlib.Path) -> Iterable[pathlib.Path]:
@@ -66,38 +142,91 @@ def _swift_files(directory: pathlib.Path) -> Iterable[pathlib.Path]:
     )
 
 
-def _discover_file(path: pathlib.Path, target_name: str) -> List[str]:
-    text = path.read_text(encoding="utf-8")
-    discovered: List[str] = []
-    for class_match in CLASS_PATTERN.finditer(text):
-        opening = text.find("{", class_match.end())
-        if opening < 0:
-            continue
-        closing = _matching_brace(text, opening)
-        class_body = text[opening + 1:closing]
-        class_name = class_match.group(1)
-        for method_match in METHOD_PATTERN.finditer(class_body):
-            method_opening = class_body.find("{", method_match.end())
-            if method_opening < 0:
-                continue
-            method_closing = _matching_brace(class_body, method_opening)
-            method_body = class_body[method_match.start():method_closing]
-            if LIVE_SKIP_MARKER in method_body:
-                continue
-            discovered.append(f"{target_name}/{class_name}/{method_match.group(1)}")
-    return discovered
+def _is_test_class(inheritance: str) -> bool:
+    return any(
+        token == "XCTestCase" or token.endswith("TestBase") or token.endswith("Tests")
+        for token in re.findall(r"[A-Za-z_]\w*", inheritance)
+    )
 
 
 def discover_xcuitests(root: pathlib.Path, ui_dir: str = "AppUITests") -> List[str]:
-    """Return active final-class XCTest methods in deterministic source order."""
+    """Return active XCTest methods, or the whole target when discovery is uncertain."""
     target_name = pathlib.Path(ui_dir).name or "AppUITests"
     directory = root / ui_dir
     if not directory.exists():
         return []
+    try:
+        swift_files = list(_swift_files(directory))
+    except OSError:
+        return [target_name]
+    if not swift_files:
+        return []
+
+    sources: List[tuple[pathlib.Path, str]] = []
+    try:
+        for path in swift_files:
+            sources.append((path, path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeError):
+        return [target_name]
+
+    if any(not _balanced_braces(text) for _, text in sources):
+        return [target_name]
+
+    test_class_names = set()
+    for _, text in sources:
+        for class_match in CLASS_PATTERN.finditer(text):
+            if _is_test_class(class_match.group(2)):
+                test_class_names.add(class_match.group(1))
+
+    bodies: List[tuple[int, int, str, int, int]] = []
+    for file_index, (_, text) in enumerate(sources):
+        for class_match in CLASS_PATTERN.finditer(text):
+            class_name = class_match.group(1)
+            if class_name not in test_class_names:
+                continue
+            opening = class_match.end() - 1
+            closing = _matching_brace(text, opening)
+            if closing < 0:
+                return [target_name]
+            bodies.append((file_index, class_match.start(), class_name, opening, closing))
+        for extension_match in EXTENSION_PATTERN.finditer(text):
+            class_name = extension_match.group(1)
+            if class_name not in test_class_names:
+                continue
+            opening = extension_match.end() - 1
+            closing = _matching_brace(text, opening)
+            if closing < 0:
+                return [target_name]
+            bodies.append((file_index, extension_match.start(), class_name, opening, closing))
+    bodies.sort(key=lambda body: (body[0], body[1]))
+
     discovered: List[str] = []
-    for path in _swift_files(directory):
-        discovered.extend(_discover_file(path, target_name))
-    return discovered
+    for file_index, (_, text) in enumerate(sources):
+        file_bodies = [body for body in bodies if body[0] == file_index]
+        for method_match in METHOD_PATTERN.finditer(text):
+            containing = next(
+                (
+                    body
+                    for body in file_bodies
+                    if body[3] < method_match.start() < body[4]
+                ),
+                None,
+            )
+            if containing is None:
+                return [target_name]
+            method_opening = text.find("{", method_match.end())
+            if method_opening < 0:
+                return [target_name]
+            method_closing = _matching_brace(text, method_opening)
+            if method_closing < 0:
+                return [target_name]
+            if LIVE_SKIP_MARKER in text[method_match.start():method_closing]:
+                continue
+            discovered.append(
+                f"{target_name}/{containing[2]}/{method_match.group(1)}"
+            )
+
+    return discovered or [target_name]
 
 
 DEFAULT_DEVICES = ["iPhone 17 Pro", "iPad Pro 11-inch (M5)"]
@@ -123,7 +252,13 @@ def plan_apple_shards(
 ) -> Dict[str, object]:
     """Build a balanced per-device matrix with unit tests on shard zero."""
     clamped_max = max(1, int(max_per_shard))
-    devices = DEFAULT_DEVICES if devices is None else devices
+    devices = (
+        list(DEFAULT_DEVICES)
+        if devices is None
+        else [d.strip() for d in devices if d and d.strip()]
+    )
+    if not devices:
+        raise ValueError("devices must not be empty")
     unit_targets = DEFAULT_UNIT_TARGETS if unit_targets is None else unit_targets
     skip_set = set(skip_targets or [])
     target_name = pathlib.Path(ui_dir).name or "AppUITests"
@@ -195,11 +330,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--skip-all", action="store_true")
     parser.add_argument("--github-output", type=pathlib.Path)
     args = parser.parse_args(argv)
+    parsed_devices = None if args.devices is None else _csv(args.devices)
     plan = plan_apple_shards(
         args.root,
         ui_dir=args.ui_dir,
         max_per_shard=args.max_per_shard,
-        devices=_csv(args.devices),
+        devices=parsed_devices,
         unit_targets=_csv(args.unit_targets),
         skip_targets=_csv(args.skip_targets),
         skip_all=args.skip_all,

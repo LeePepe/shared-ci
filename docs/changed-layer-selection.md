@@ -215,9 +215,12 @@ selector plans simulator work. Run
 [`scripts/select/apple_shards.py`](../scripts/select/apple_shards.py) with the
 consumer checkout as `--root`; its isolated regression suite is
 [`tests/select/test_apple_shards.py`](../tests/select/test_apple_shards.py).
-The planner discovers `final class` XCTest methods in lexicographical Swift
-file order, excludes opt-in live/smoke methods, balances contiguous methods
-across the configured devices, and places active unit targets on shard zero.
+The planner discovers XCTestCase (including non-final) methods in lexicographical
+Swift file/source order, including matching extensions, excludes opt-in
+live/smoke methods, balances contiguous methods across the configured devices,
+and places active unit targets on shard zero. Unreadable Swift, malformed
+relevant bodies, top-level test methods, or zero discovered methods fall back to
+the UI target itself rather than narrowing coverage.
 
 The resulting `shards_matrix={"include":[...]}` is consumed by the
 `test-without-building` lane after one `build-for-testing` job. If every unit

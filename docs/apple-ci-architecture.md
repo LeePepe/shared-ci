@@ -87,10 +87,13 @@ extracts that artifact and runs `test-without-building` with its device and
 the shard must not run `xcodegen` or restore `.spm-cache` merely to execute
 already-built products.
 
-The planner balances contiguous UI-method slices per device. Unit targets are
-attached to shard zero, and `shard_count_per_device` grows automatically when
-the discovered method count crosses a shard boundary. If no Apple target is
-affected, it emits `skip_all_apple_tests=1` and an empty matrix.
+The planner scans final and non-final XCTestCase classes plus their extensions,
+balances contiguous UI-method slices per device, and attaches unit targets to
+shard zero. `shard_count_per_device` grows automatically when the discovered
+method count crosses a shard boundary. If discovery is uncertain—such as an
+unreadable Swift file, malformed relevant braces, or a test method outside a
+matched test body—it fails closed by returning the UI target itself. If no
+Apple target is affected, it emits `skip_all_apple_tests=1` and an empty matrix.
 
 ## 6. Standalone PR CI and main release CD
 
