@@ -106,17 +106,14 @@ class FixtureLifecycleTests(unittest.TestCase):
         repo.git("config", "maintenance.autoDetach", "false")
         if automatic:
             repo.git("config", "maintenance.auto", "true")
+            repo.git("config", "maintenance.strategy", "gc")
         repo.git("config", "gc.auto", "1")
         # gc samples bucket 17. This real loose blob exceeds gc.auto=1's
         # per-bucket threshold without thousands of objects or timing guesses.
         repo.write("src/core/probe.py", "maintenance probe 80\n")
-        repo.write("src/core/probe2.py", "probe 89\n")
-        repo.git("add", "src/core/probe.py", "src/core/probe2.py")
-        blobs = [
-            repo.git("rev-parse", f":src/core/{path}").stdout.strip()
-            for path in ("probe.py", "probe2.py")
-        ]
-        self.assertTrue(all(blob.startswith("17") for blob in blobs), blobs)
+        repo.git("add", "src/core/probe.py")
+        blob = repo.git("rev-parse", ":src/core/probe.py").stdout.strip()
+        self.assertTrue(blob.startswith("17"), blob)
         with tempfile.TemporaryDirectory(prefix="fixture-trace-") as temp:
             trace = pathlib.Path(temp) / "trace.json"
             env = dict(repo.env, GIT_TRACE2_EVENT=str(trace))
@@ -129,10 +126,7 @@ class FixtureLifecycleTests(unittest.TestCase):
             children = [event["argv"] for event in
                         (json.loads(line) for line in trace.read_text().splitlines())
                         if event["event"] == "child_start"]
-        loose_exists = all(
-            (repo.root / ".git" / "objects" / blob[:2] / blob[2:]).exists()
-            for blob in blobs
-        )
+        loose_exists = (repo.root / ".git" / "objects" / blob[:2] / blob[2:]).exists()
         repo.close()
         self.assertFalse(repo.root.exists())
         return children, loose_exists
