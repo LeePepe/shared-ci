@@ -207,3 +207,20 @@ The default-on `test-integrity` input is separate: it runs even when
 `changed-only` is false and can reject previously accepted test losses that
 lack a per-file rationale. Selection compatibility is not a claim that the
 integrity gate is policy-neutral; see [test integrity](test-integrity.md).
+
+### Apple simulator selection
+
+Apple UI methods use the same fail-closed boundary, then a second deterministic
+selector plans simulator work. Run
+[`scripts/select/apple_shards.py`](../scripts/select/apple_shards.py) with the
+consumer checkout as `--root`; its isolated regression suite is
+[`tests/select/test_apple_shards.py`](../tests/select/test_apple_shards.py).
+The planner discovers `final class` XCTest methods in lexicographical Swift
+file order, excludes opt-in live/smoke methods, balances contiguous methods
+across the configured devices, and places active unit targets on shard zero.
+
+The resulting `shards_matrix={"include":[...]}` is consumed by the
+`test-without-building` lane after one `build-for-testing` job. If every unit
+and UI target is excluded, the planner emits `skip_all_apple_tests=1` and no
+matrix entries. A selector error or uncertain pull-request diff never narrows
+the Apple plan; it falls back to a full plan.
