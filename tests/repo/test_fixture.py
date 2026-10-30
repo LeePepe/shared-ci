@@ -106,6 +106,7 @@ class FixtureLifecycleTests(unittest.TestCase):
         repo.git("config", "maintenance.autoDetach", "false")
         if automatic:
             repo.git("config", "maintenance.auto", "true")
+            repo.git("config", "maintenance.strategy", "gc")
         repo.git("config", "gc.auto", "1")
         # gc samples bucket 17. This real loose blob exceeds gc.auto=1's
         # per-bucket threshold without thousands of objects or timing guesses.

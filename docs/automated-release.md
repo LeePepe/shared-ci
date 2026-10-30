@@ -191,7 +191,7 @@ Actions artifacts; do not upload the workspace indiscriminately. A current
 operator's successful GET does not establish a future collector's permission.
 Use existing failures or safe fixtures, not deliberately failing real releases.
 No new error schema/store, automatic retry, repair dispatch, notification,
-rollback/resend, AIDash collector or UI is supplied by this source slice.
+rollback/resend, collector or UI is supplied by this source slice.
 
 Local template tests execute the actual shell snippets with synthetic inputs,
 Git histories and deliberately removed-guard negative controls, including TF
@@ -205,3 +205,20 @@ generated workflows, but do not emulate Actions event evaluation, trusted
 check retrieval, content classifiers, Apple state or distribution availability.
 Those require each adapter's integration tests and authorized real-run evidence.
 Error recording, green snippet tests and uploaded bytes are not release success.
+
+## Apple CI/CD boundary
+
+The pull-request simulator gate and signed main-branch delivery are separate
+contracts. PR CI runs `build-for-testing` once and uses the dynamic
+[`apple_shards.py`](../scripts/select/apple_shards.py) matrix to run
+`test-without-building` shards. The selector and its
+[`test_apple_shards.py`](../tests/select/test_apple_shards.py) regression suite
+are stdlib-only and fail closed when no Apple target is active.
+
+The release workflow runs only after a trusted `main` push inside the protected
+`testflight` environment. It must build and sign its own Release `.ipa`;
+unsigned simulator artifacts and compile-only test products from PR CI are not
+valid signed-release inputs. This separation prevents duplicate post-merge
+simulator runs and keeps signing credentials out of pull-request jobs. See
+[`apple-ci-architecture.md`](apple-ci-architecture.md) for the complete
+six-optimization architecture.
