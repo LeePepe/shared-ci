@@ -7,9 +7,11 @@ import importlib.util
 import io
 import json
 import pathlib
+import struct
 import sys
 import tempfile
 import unittest
+import zlib
 from typing import Iterator
 
 
@@ -20,6 +22,70 @@ assert SPEC and SPEC.loader
 design_contract = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = design_contract
 SPEC.loader.exec_module(design_contract)
+
+
+def _png_chunk(tag: bytes, data: bytes) -> bytes:
+    crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+
+def _scanline_png(width: int, height: int, *, color_type: int, interlace: int) -> bytes:
+    samples = {2: 3, 6: 4}[color_type]
+    if interlace == 0:
+        raw = b"".join(
+            b"\x00" + (b"\x00" * (width * samples)) for _ in range(height)
+        )
+    else:
+        raw = _adam7_raw(width, height, samples)
+    return _png_with_idat(
+        width,
+        height,
+        zlib.compress(raw),
+        color_type=color_type,
+        interlace=interlace,
+        ancillary=True,
+    )
+
+
+def _png_with_idat(
+    width: int,
+    height: int,
+    idat: bytes,
+    *,
+    color_type: int = 6,
+    interlace: int = 0,
+    ancillary: bool = False,
+) -> bytes:
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, interlace)
+    chunks = [_png_chunk(b"IHDR", ihdr)]
+    if ancillary:
+        chunks.append(_png_chunk(b"pHYs", struct.pack(">IIB", 2835, 2835, 1)))
+    chunks.append(_png_chunk(b"IDAT", idat))
+    chunks.append(_png_chunk(b"IEND", b""))
+    return b"\x89PNG\r\n\x1a\n" + b"".join(chunks)
+
+
+def _adam7_raw(width: int, height: int, samples: int) -> bytes:
+    """Uncompressed Adam7 image bytes, including each pass's filter byte."""
+
+    passes = (
+        (0, 0, 8, 8),
+        (4, 0, 8, 8),
+        (0, 4, 4, 8),
+        (2, 0, 4, 4),
+        (0, 2, 2, 4),
+        (1, 0, 2, 2),
+        (0, 1, 1, 2),
+    )
+    parts: list[bytes] = []
+    for origin_x, origin_y, step_x, step_y in passes:
+        if origin_x >= width or origin_y >= height:
+            continue
+        pass_width = (width - origin_x + step_x - 1) // step_x
+        pass_height = (height - origin_y + step_y - 1) // step_y
+        row = b"\x00" + (b"\x00" * (pass_width * samples))
+        parts.append(row * pass_height)
+    return b"".join(parts)
 
 
 @contextlib.contextmanager
@@ -171,6 +237,169 @@ No raw colors.
         self.assertEqual(0, success)
         self.assertEqual("", stderr.getvalue())
         self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
+    def test_v1_contract_uses_seven_numbered_sections(self) -> None:
+        sections = "\n".join(f"## {number}. Section {number}" for number in range(1, 8))
+        contract = self._write(
+            "docs/design.md",
+            "---\nschema: agent-design-doc/v1\n---\n"
+            f"{sections}\n"
+            "populated empty loading error light dark\n",
+        )
+        self.assertEqual([], design_contract.audit_contract(contract))
+
+    def test_scanner_detects_new_static_rules(self) -> None:
+        self._write(
+            "UI/View.swift",
+            "let a = hsl(20, 50%, 50%)\n"
+            "let b = hsla(20, 50%, 50%, 0.5)\n"
+            ".frame(width: 380).padding(16)\n"
+            ".padding(16).frame(width: 380)\n"
+            ".font(.system(size: 7.5))\n"
+            ".minimumScaleFactor(0.55)\n",
+        )
+        findings = design_contract.scan_ui_sources(self.root, ["UI"])
+        rules = [item.rule for item in findings]
+        self.assertEqual(2, rules.count("raw-hsl-color"))
+        self.assertIn("frame-before-padding", rules)
+        self.assertIn("micro-font-size", rules)
+        self.assertIn("excessive-scale-factor", rules)
+        self.assertEqual(
+            0,
+            sum(item.rule == "frame-before-padding" and ".padding(16).frame" in item.snippet
+                for item in findings),
+        )
+
+    def test_scanner_detects_multiline_swiftui_layout_and_font_rules(self) -> None:
+        self._write(
+            "UI/Layout.swift",
+            "Text(\"Bad\")\n"
+            "    .frame(width: 380)\n"
+            "    .padding(16)\n"
+            "Text(\"Good\")\n"
+            "    .padding(16)\n"
+            "    .frame(width: 380)\n"
+            "Text(\"Micro\")\n"
+            "    .font(.system(size:\n"
+            "        7.5))\n"
+            "Text(\"Scale\")\n"
+            "    .minimumScaleFactor(\n"
+            "        0.55)\n"
+            "Text(\"Readable\")\n"
+            "    .font(.system(size:\n"
+            "        12))\n"
+            "    .minimumScaleFactor(\n"
+            "        0.9)\n"
+            "Text(\"Allowed\")\n"
+            "    .frame(width: 380) // design-contract-allow: legacy\n"
+            "    .padding(16)\n"
+            "    .font(.system(size:\n"
+            "        8)) // design-contract-allow: legacy\n",
+        )
+        findings = design_contract.scan_ui_sources(self.root, ["UI"])
+        self.assertEqual(
+            {
+                ("UI/Layout.swift", 2, "frame-before-padding"),
+                ("UI/Layout.swift", 8, "micro-font-size"),
+                ("UI/Layout.swift", 11, "excessive-scale-factor"),
+            },
+            {(item.path, item.line, item.rule) for item in findings},
+        )
+        snippets = {item.line: item.snippet for item in findings}
+        self.assertIn(".frame(width: 380)", snippets[2])
+        self.assertIn(".system(size:", snippets[8])
+        self.assertIn(".minimumScaleFactor(", snippets[11])
+
+    def test_visual_audit_checks_matrix_and_png_width(self) -> None:
+        snapshots = self.root / "snapshots"
+        snapshots.mkdir()
+        png = _scanline_png(380, 2, color_type=6, interlace=0)
+        for state in ("populated", "empty", "loading", "error"):
+            for appearance in ("light", "dark"):
+                (snapshots / f"screen-{state}-{appearance}.png").write_bytes(png)
+        errors = design_contract._visual_audit(
+            self.root,
+            ("populated", "empty", "loading", "error"),
+            ("light", "dark"),
+            None,
+            "380,760",
+        )
+        self.assertEqual([], errors)
+
+    def test_visual_audit_rejects_truncated_snapshots(self) -> None:
+        snapshots = self.root / "snapshots"
+        snapshots.mkdir()
+        complete = _scanline_png(380, 1, color_type=6, interlace=0)
+        partial_ihdr = (
+            b"\x89PNG\r\n\x1a\n"
+            + struct.pack(">I", 13)
+            + b"IHDR"
+            + struct.pack(">IIBBBBB", 380, 100, 8, 6, 0, 0, 0)
+        )
+        self.assertEqual(29, len(partial_ihdr))
+        ihdr = struct.pack(">IIBBBBB", 380, 1, 8, 6, 0, 0, 0)
+        header_only = b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", ihdr)
+        fabricated = (
+            header_only
+            + _png_chunk(b"IDAT", b"not-image-data")
+            + _png_chunk(b"IEND", b"")
+        )
+        bad_crc = bytearray(header_only)
+        bad_crc[-1] ^= 0xFF
+        scanlines = b"\x00" + (b"\x00" * (380 * 4))
+        compressed = zlib.compress(scanlines)
+        self.assertGreater(len(compressed), 6)
+        trailer_removed = _png_with_idat(380, 1, compressed[:-4])
+        intact = self.root / "intact.png"
+        intact.write_bytes(_png_with_idat(380, 1, compressed))
+        self.assertEqual(380, design_contract._png_width(intact))
+        truncated = {
+            "partial-ihdr": partial_ihdr,
+            "ihdr-only": header_only,
+            "cut-idat": complete[: len(complete) // 2],
+            "missing-iend": complete[: complete.rfind(b"IEND") - 4],
+            "truncated-crc": complete[:-1],
+            "fabricated-idat": fabricated,
+            "bad-ihdr-crc": bytes(bad_crc),
+            "zlib-trailer": trailer_removed,
+        }
+        for name, payload in truncated.items():
+            path = snapshots / f"screen-populated-light-{name}.png"
+            path.write_bytes(payload)
+            self.assertIsNone(design_contract._png_width(path), name)
+
+        wide = snapshots / "screen-populated-light.png"
+        wide.write_bytes(complete)
+        narrow = snapshots / "screen-empty-light.png"
+        narrow.write_bytes(_scanline_png(100, 1, color_type=2, interlace=0))
+        interlaced = _adam7_raw(8, 8, 3)
+        self.assertEqual(207, len(interlaced))
+        adam7 = snapshots / "screen-loading-light.png"
+        adam7.write_bytes(_scanline_png(8, 8, color_type=2, interlace=1))
+        self.assertEqual(8, design_contract._png_width(adam7))
+        self.assertEqual(380, design_contract._png_width(wide))
+
+        errors = design_contract._visual_audit(
+            self.root,
+            ("populated", "empty", "loading", "error"),
+            ("light", "dark"),
+            None,
+            "380,760",
+        )
+        self.assertTrue(errors)
+        self.assertTrue(
+            any(
+                error.startswith("invalid PNG snapshot:") and "zlib-trailer" in error
+                for error in errors
+            )
+        )
+        self.assertTrue(
+            any("unexpected pixel width" in error and "100" in error for error in errors)
+        )
+        self.assertTrue(any("missing snapshot: populated/dark" in error for error in errors))
+        self.assertFalse(
+            any("screen-populated-light.png" in error and "invalid PNG" in error for error in errors)
+        )
 
 
 if __name__ == "__main__":

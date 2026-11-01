@@ -108,6 +108,12 @@ class FixtureLifecycleTests(unittest.TestCase):
             repo.git("config", "maintenance.auto", "true")
             repo.git("config", "maintenance.strategy", "gc")
         repo.git("config", "gc.auto", "1")
+        # Git 2.56 auto-maintenance uses geometric repack and rounds a positive
+        # loose-object threshold up to a multiple of 256, so one probe no longer
+        # reaches gc.auto=1. Forcing that task packs the probe there. Older Git
+        # ignores these keys and still packs through gc.auto.
+        repo.git("config", "maintenance.geometric-repack.enabled", "true")
+        repo.git("config", "maintenance.geometric-repack.auto", "-1")
         # gc samples bucket 17. This real loose blob exceeds gc.auto=1's
         # per-bucket threshold without thousands of objects or timing guesses.
         repo.write("src/core/probe.py", "maintenance probe 80\n")
