@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import struct
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -31,6 +32,18 @@ RAW_RGB_COLOR = re.compile(
     r"(?:\b(?:Color|UIColor|NSColor)\s*\(\s*(?:red\s*:|\.sRGB\b)|"
     r"\brgba?\s*\(\s*)",
     re.DOTALL | re.MULTILINE,
+)
+RAW_HSL_COLOR = re.compile(r"\bhsla?\s*\(", re.IGNORECASE)
+FRAME_BEFORE_PADDING = re.compile(
+    r"\.frame\s*\(\s*width\s*:\s*[0-9]+(?:\.[0-9]+)?[^)]*\)"
+    r"\s*\.padding\s*\(",
+    re.DOTALL,
+)
+MICRO_FONT_SIZE = re.compile(
+    r"\.system\s*\(\s*size\s*:\s*"
+)
+SCALE_FACTOR = re.compile(
+    r"\.minimumScaleFactor\s*\(\s*"
 )
 
 
@@ -59,9 +72,14 @@ def audit_contract(contract_path: Path) -> list[str]:
     if not content.strip():
         errors.append("design contract is empty")
 
-    for heading in REQUIRED_HEADINGS:
-        if not re.search(rf"(?m)^{re.escape(heading)}\s*$", content):
-            errors.append(f"missing required section: {heading}")
+    if re.search(r"(?m)^schema:\s*agent-design-doc/v1\s*$", content):
+        for section in range(1, 8):
+            if not re.search(rf"(?m)^##\s+{section}\.\s+\S+", content):
+                errors.append(f"missing required section: ## {section}.")
+    else:
+        for heading in REQUIRED_HEADINGS:
+            if not re.search(rf"(?m)^{re.escape(heading)}\s*$", content):
+                errors.append(f"missing required section: {heading}")
 
     lowered = content.casefold()
     for state in REQUIRED_STATES:
@@ -157,6 +175,29 @@ def _scan_file(root: Path, path: Path) -> list[DesignViolation]:
             findings.append(
                 _violation(root, path, line_number, "RAW_HEX_COLOR", line)
             )
+        if not ALLOW_PATTERN.search(line):
+            for match in RAW_HSL_COLOR.finditer(line):
+                findings.append(
+                    _violation(root, path, line_number, "raw-hsl-color", line)
+                )
+            for match in FRAME_BEFORE_PADDING.finditer(line):
+                findings.append(
+                    _violation(root, path, line_number, "frame-before-padding", line)
+                )
+            for match in MICRO_FONT_SIZE.finditer(line):
+                value = _number_after_match(line, match.end())
+                if value is not None and value < 11:
+                    findings.append(
+                        _violation(root, path, line_number, "micro-font-size", line)
+                    )
+            for match in SCALE_FACTOR.finditer(line):
+                value = _number_after_match(line, match.end())
+                if value is not None and value < 0.85:
+                    findings.append(
+                        _violation(
+                            root, path, line_number, "excessive-scale-factor", line
+                        )
+                    )
     for match in RAW_RGB_COLOR.finditer(content):
         line_number = content.count("\n", 0, match.start()) + 1
         argument_line = content.count("\n", 0, match.end()) + 1
@@ -170,6 +211,11 @@ def _scan_file(root: Path, path: Path) -> list[DesignViolation]:
             _violation(root, path, line_number, "RAW_RGB_COLOR", start_text)
         )
     return findings
+
+
+def _number_after_match(line: str, position: int) -> Optional[float]:
+    match = re.match(r"\s*([0-9]+(?:\.[0-9]*)?|\.[0-9]+)", line[position:])
+    return float(match.group(1)) if match else None
 
 
 def scan_ui_sources(
@@ -229,19 +275,99 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ui-path", action="append", default=[])
     parser.add_argument("--exclude", action="append", default=[])
     parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument("--visual", action="store_true")
+    parser.add_argument(
+        "--states", default="populated,empty,loading,error"
+    )
+    parser.add_argument("--appearances", default="light,dark")
+    parser.add_argument("--snapshot-dir", type=Path)
+    parser.add_argument("--expected-pixel-width")
     return parser
+
+
+def _snapshot_dir(root: Path, configured: Optional[Path]) -> Path:
+    if configured is not None:
+        return configured if configured.is_absolute() else root / configured
+    artifacts = root / "artifacts" / "snapshots"
+    return artifacts if artifacts.is_dir() else root / "snapshots"
+
+
+def _parse_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _png_width(path: Path) -> Optional[int]:
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(24)
+    except OSError:
+        return None
+    if (
+        len(header) != 24
+        or header[:8] != b"\x89PNG\r\n\x1a\n"
+        or header[12:16] != b"IHDR"
+    ):
+        return None
+    return struct.unpack(">I", header[16:20])[0]
+
+
+def _visual_audit(
+    root: Path,
+    states: Sequence[str],
+    appearances: Sequence[str],
+    snapshot_dir: Optional[Path],
+    expected_pixel_width: Optional[str],
+) -> list[str]:
+    directory = _snapshot_dir(root, snapshot_dir)
+    if not directory.is_dir():
+        return [f"snapshot directory not found: {directory}"]
+    expected: Optional[list[int]] = None
+    if expected_pixel_width is not None:
+        try:
+            expected = [int(item) for item in _parse_csv(expected_pixel_width)]
+        except ValueError:
+            return [f"invalid expected pixel width: {expected_pixel_width}"]
+        if not expected or any(width <= 0 for width in expected):
+            return [f"invalid expected pixel width: {expected_pixel_width}"]
+
+    snapshots = sorted(directory.glob("*.png"))
+    errors: list[str] = []
+    for state in states:
+        for appearance in appearances:
+            marker = re.compile(
+                rf"(^|[-_]){re.escape(state)}[-_]{re.escape(appearance)}"
+                rf"([-. _@]|$)",
+                re.IGNORECASE,
+            )
+            matches = [path for path in snapshots if marker.search(path.stem)]
+            label = f"{state}/{appearance}"
+            if not matches:
+                errors.append(f"missing snapshot: {label}")
+                continue
+            for path in matches:
+                width = _png_width(path)
+                if width is None:
+                    errors.append(f"invalid PNG snapshot: {path}")
+                elif expected is not None and width not in expected:
+                    errors.append(
+                        f"unexpected pixel width for {path.name}: "
+                        f"{width} (expected {expected})"
+                    )
+    return errors
 
 
 def _report(
     contract_path: Path,
     contract_errors: Sequence[str],
     violations: Sequence[DesignViolation],
+    visual_errors: Sequence[str] = (),
 ) -> dict[str, object]:
     return {
-        "ok": not contract_errors and not violations,
+        "ok": not contract_errors and not violations and not visual_errors,
         "contract": contract_path.as_posix(),
         "contract_errors": list(contract_errors),
         "violations": [asdict(violation) for violation in violations],
+        "visual_errors": list(visual_errors),
     }
 
 
@@ -258,7 +384,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     violations = (
         scan_ui_sources(root, args.ui_path, args.exclude) if args.ui_path else []
     )
-    report = _report(contract_path, contract_errors, violations)
+    visual_errors = (
+        _visual_audit(
+            root,
+            _parse_csv(args.states),
+            _parse_csv(args.appearances),
+            args.snapshot_dir,
+            args.expected_pixel_width,
+        )
+        if args.visual
+        else []
+    )
+    report = _report(contract_path, contract_errors, violations, visual_errors)
 
     if args.as_json:
         sys.stdout.write(json.dumps(report, indent=2) + "\n")
@@ -272,7 +409,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"{violation.path}:{violation.line}: "
                 f"{violation.rule}: {violation.snippet}\n"
             )
-    return 0 if report["ok"] else 1
+        for error in visual_errors:
+            sys.stderr.write(f"design contract: {error}\n")
+    return 0 if not contract_errors and not violations and not visual_errors else 1
 
 
 if __name__ == "__main__":

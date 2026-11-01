@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import struct
 import sys
 import tempfile
 import unittest
@@ -171,6 +172,59 @@ No raw colors.
         self.assertEqual(0, success)
         self.assertEqual("", stderr.getvalue())
         self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
+    def test_v1_contract_uses_seven_numbered_sections(self) -> None:
+        sections = "\n".join(f"## {number}. Section {number}" for number in range(1, 8))
+        contract = self._write(
+            "docs/design.md",
+            "---\nschema: agent-design-doc/v1\n---\n"
+            f"{sections}\n"
+            "populated empty loading error light dark\n",
+        )
+        self.assertEqual([], design_contract.audit_contract(contract))
+
+    def test_scanner_detects_new_static_rules(self) -> None:
+        self._write(
+            "UI/View.swift",
+            "let a = hsl(20, 50%, 50%)\n"
+            "let b = hsla(20, 50%, 50%, 0.5)\n"
+            ".frame(width: 380).padding(16)\n"
+            ".padding(16).frame(width: 380)\n"
+            ".font(.system(size: 7.5))\n"
+            ".minimumScaleFactor(0.55)\n",
+        )
+        findings = design_contract.scan_ui_sources(self.root, ["UI"])
+        rules = [item.rule for item in findings]
+        self.assertEqual(2, rules.count("raw-hsl-color"))
+        self.assertIn("frame-before-padding", rules)
+        self.assertIn("micro-font-size", rules)
+        self.assertIn("excessive-scale-factor", rules)
+        self.assertEqual(
+            0,
+            sum(item.rule == "frame-before-padding" and ".padding(16).frame" in item.snippet
+                for item in findings),
+        )
+
+    def test_visual_audit_checks_matrix_and_png_width(self) -> None:
+        snapshots = self.root / "snapshots"
+        snapshots.mkdir()
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            + struct.pack(">I", 13)
+            + b"IHDR"
+            + struct.pack(">IIBBBBB", 380, 100, 8, 6, 0, 0, 0)
+        )
+        for state in ("populated", "empty", "loading", "error"):
+            for appearance in ("light", "dark"):
+                (snapshots / f"screen-{state}-{appearance}.png").write_bytes(png)
+        errors = design_contract._visual_audit(
+            self.root,
+            ("populated", "empty", "loading", "error"),
+            ("light", "dark"),
+            None,
+            "380,760",
+        )
+        self.assertEqual([], errors)
 
 
 if __name__ == "__main__":
