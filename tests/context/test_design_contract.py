@@ -31,20 +31,38 @@ def _png_chunk(tag: bytes, data: bytes) -> bytes:
 
 def _scanline_png(width: int, height: int, *, color_type: int, interlace: int) -> bytes:
     samples = {2: 3, 6: 4}[color_type]
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, interlace)
     if interlace == 0:
         raw = b"".join(
             b"\x00" + (b"\x00" * (width * samples)) for _ in range(height)
         )
     else:
         raw = _adam7_raw(width, height, samples)
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + _png_chunk(b"IHDR", ihdr)
-        + _png_chunk(b"pHYs", struct.pack(">IIB", 2835, 2835, 1))
-        + _png_chunk(b"IDAT", zlib.compress(raw))
-        + _png_chunk(b"IEND", b"")
+    return _png_with_idat(
+        width,
+        height,
+        zlib.compress(raw),
+        color_type=color_type,
+        interlace=interlace,
+        ancillary=True,
     )
+
+
+def _png_with_idat(
+    width: int,
+    height: int,
+    idat: bytes,
+    *,
+    color_type: int = 6,
+    interlace: int = 0,
+    ancillary: bool = False,
+) -> bytes:
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, interlace)
+    chunks = [_png_chunk(b"IHDR", ihdr)]
+    if ancillary:
+        chunks.append(_png_chunk(b"pHYs", struct.pack(">IIB", 2835, 2835, 1)))
+    chunks.append(_png_chunk(b"IDAT", idat))
+    chunks.append(_png_chunk(b"IEND", b""))
+    return b"\x89PNG\r\n\x1a\n" + b"".join(chunks)
 
 
 def _adam7_raw(width: int, height: int, samples: int) -> bytes:
@@ -328,6 +346,13 @@ No raw colors.
         )
         bad_crc = bytearray(header_only)
         bad_crc[-1] ^= 0xFF
+        scanlines = b"\x00" + (b"\x00" * (380 * 4))
+        compressed = zlib.compress(scanlines)
+        self.assertGreater(len(compressed), 6)
+        trailer_removed = _png_with_idat(380, 1, compressed[:-4])
+        intact = self.root / "intact.png"
+        intact.write_bytes(_png_with_idat(380, 1, compressed))
+        self.assertEqual(380, design_contract._png_width(intact))
         truncated = {
             "partial-ihdr": partial_ihdr,
             "ihdr-only": header_only,
@@ -336,6 +361,7 @@ No raw colors.
             "truncated-crc": complete[:-1],
             "fabricated-idat": fabricated,
             "bad-ihdr-crc": bytes(bad_crc),
+            "zlib-trailer": trailer_removed,
         }
         for name, payload in truncated.items():
             path = snapshots / f"screen-populated-light-{name}.png"
@@ -361,7 +387,12 @@ No raw colors.
             "380,760",
         )
         self.assertTrue(errors)
-        self.assertTrue(any(error.startswith("invalid PNG snapshot:") for error in errors))
+        self.assertTrue(
+            any(
+                error.startswith("invalid PNG snapshot:") and "zlib-trailer" in error
+                for error in errors
+            )
+        )
         self.assertTrue(
             any("unexpected pixel width" in error and "100" in error for error in errors)
         )

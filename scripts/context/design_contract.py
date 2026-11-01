@@ -483,7 +483,11 @@ def _zlib_exact(payload: bytes, expected: int) -> bool:
         remainder = decompressor.flush()
     except zlib.error:
         return False
-    return remainder == b"" and not decompressor.unused_data
+    return (
+        remainder == b""
+        and not decompressor.unused_data
+        and decompressor.eof
+    )
 
 
 def _png_width_from_bytes(payload: bytes) -> Optional[int]:
