@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import re
 import struct
@@ -63,23 +64,66 @@ class DesignViolation:
 
 
 def read_png_dimensions(path: Path) -> Optional[tuple[int, int]]:
-    """Return physical PNG dimensions when the file has a valid PNG header."""
+    """Return dimensions when the file has a structurally valid PNG."""
 
     try:
         data = path.read_bytes()
     except OSError:
         return None
-    if (
-        len(data) < 24
-        or data[:8] != b"\x89PNG\r\n\x1a\n"
-        or data[12:16] != b"IHDR"
-    ):
+    signature = b"\x89PNG\r\n\x1a\n"
+    if len(data) < len(signature) or data[:8] != signature:
+        return None
+
+    offset = len(signature)
+    chunks: list[tuple[bytes, bytes]] = []
+    while offset < len(data):
+        if len(data) - offset < 12:
+            return None
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        end = offset + 12 + length
+        if end > len(data):
+            return None
+        chunk_type = data[offset + 4 : offset + 8]
+        chunk_data = data[offset + 8 : offset + 8 + length]
+        stored_crc = struct.unpack(">I", data[offset + 8 + length : end])[0]
+        if zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != stored_crc:
+            return None
+        chunks.append((chunk_type, chunk_data))
+        offset = end
+
+    if not chunks or chunks[0][0] != b"IHDR" or len(chunks[0][1]) != 13:
+        return None
+    if chunks[-1][0] != b"IEND" or len(chunks[-1][1]) != 0:
+        return None
+    if b"IDAT" not in {chunk_type for chunk_type, _ in chunks}:
         return None
     try:
-        width, height = struct.unpack(">II", data[16:24])
+        width, height, bit_depth, color_type, compression, filter_method, interlace = (
+            struct.unpack(">IIBBBBB", chunks[0][1])
+        )
     except struct.error:
         return None
-    return (width, height) if width > 0 and height > 0 else None
+    if (
+        width == 0
+        or height == 0
+        or compression != 0
+        or filter_method != 0
+        or bit_depth not in {1, 2, 4, 8, 16}
+        or color_type not in {0, 2, 3, 4, 6}
+        or interlace not in {0, 1}
+    ):
+        return None
+    compressed = b"".join(
+        chunk_data for chunk_type, chunk_data in chunks if chunk_type == b"IDAT"
+    )
+    decompressor = zlib.decompressobj()
+    try:
+        decompressor.decompress(compressed)
+    except zlib.error:
+        return None
+    if not decompressor.eof or decompressor.unused_data or decompressor.unconsumed_tail:
+        return None
+    return (width, height)
 
 
 def audit_screenshot_matrix(
@@ -121,7 +165,20 @@ def audit_screenshot_matrix(
     for path in sorted(resolved_dir.rglob("*")):
         if not path.is_file() or path.suffix.casefold() != ".png":
             continue
-        if read_png_dimensions(path) is None:
+        resolved_path = path.resolve()
+        try:
+            resolved_path.relative_to(root)
+        except ValueError:
+            violations.append(
+                DesignViolation(
+                    path=_relative_path(root, path),
+                    line=0,
+                    rule="SCREENSHOT_PATH_OUTSIDE_ROOT",
+                    snippet=f"screenshot resolves outside root: {resolved_path}",
+                )
+            )
+            continue
+        if read_png_dimensions(resolved_path) is None:
             violations.append(
                 DesignViolation(
                     path=_relative_path(root, path),
@@ -131,7 +188,7 @@ def audit_screenshot_matrix(
                 )
             )
             continue
-        valid_paths.append(path)
+        valid_paths.append(resolved_path)
 
     if require_state_matrix:
         tokens_by_name = {
@@ -184,9 +241,10 @@ def _jev_score(answer: object) -> Optional[float]:
     if isinstance(answer, dict):
         answer = answer.get("value")
     try:
-        return float(answer)
+        score = float(answer)
     except (TypeError, ValueError):
         return None
+    return score if math.isfinite(score) and 0.0 <= score <= 1.0 else None
 
 
 def _jev_box(answer: object) -> object:
@@ -273,7 +331,11 @@ def scan_screenshots_with_jev(
                 raise ValueError("Jev response answers is not an object")
             for noul_key, box_key, rule, label in _JEV_CHECKS:
                 score = _jev_score(answers.get(noul_key))
-                if score is None or score < jev_threshold:
+                if score is None:
+                    raise ValueError(
+                        f"Jev response has invalid score for {noul_key}"
+                    )
+                if score < jev_threshold:
                     continue
                 box = _jev_box(answers.get(box_key))
                 finding = DesignViolation(

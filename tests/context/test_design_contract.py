@@ -130,12 +130,7 @@ No raw colors.
     ) -> pathlib.Path:
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(
-            b"\x89PNG\r\n\x1a\n"
-            + b"\x00\x00\x00\x0dIHDR"
-            + width.to_bytes(4, "big")
-            + height.to_bytes(4, "big")
-        )
+        path.write_bytes(_scanline_png(width, height, color_type=6, interlace=0))
         return path
 
     def test_template_passes_contract_audit(self) -> None:
@@ -443,6 +438,39 @@ No raw colors.
         self.assertEqual([], paths)
         self.assertEqual("SCREENSHOT_PATH_OUTSIDE_ROOT", findings[0].rule)
 
+    def test_screenshot_matrix_rejects_symlink_outside_root(self) -> None:
+        outside = pathlib.Path(tempfile.mkdtemp(prefix=".outside-design-contract-"))
+        target = outside / "secret.png"
+        target.write_bytes(_scanline_png(2, 3, color_type=6, interlace=0))
+        self.addCleanup(lambda: (target.unlink(), outside.rmdir()))
+        link = self.root / "screenshots" / "outside.png"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root, self.root / "screenshots"
+        )
+
+        self.assertEqual([], paths)
+        self.assertEqual("SCREENSHOT_PATH_OUTSIDE_ROOT", findings[0].rule)
+
+    def test_screenshot_matrix_rejects_truncated_png(self) -> None:
+        path = self.root / "screenshots" / "truncated.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + b"\x00\x00\x00\x0dIHDR"
+            + (2).to_bytes(4, "big")
+            + (3).to_bytes(4, "big")
+        )
+
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root, self.root / "screenshots"
+        )
+
+        self.assertEqual([], paths)
+        self.assertEqual("INVALID_SCREENSHOT_PNG", findings[0].rule)
+
     def test_jev_uses_box_only_when_noul_clears_threshold(self) -> None:
         screenshot = self._write_png("screenshots/workout_populated_dark.png")
         response_body = {
@@ -511,6 +539,26 @@ No raw colors.
             "JEV_VISION_UNAVAILABLE",
             report["advisory_violations"][0]["rule"],
         )
+
+    def test_jev_rejects_missing_nonfinite_and_out_of_range_scores(self) -> None:
+        screenshot = self._write_png("screenshots/workout_populated_dark.png")
+        for invalid in ({}, {"value": float("nan")}, {"value": 1.1}):
+            response_body = {"answers": dict(invalid)}
+            response = mock.Mock(status=200)
+            response.__enter__ = mock.Mock(return_value=response)
+            response.__exit__ = mock.Mock(return_value=False)
+            response.read = mock.Mock(
+                return_value=json.dumps(response_body, allow_nan=True).encode("utf-8")
+            )
+            with mock.patch.object(
+                design_contract.urllib.request, "urlopen", return_value=response
+            ):
+                violations, advisory = design_contract.scan_screenshots_with_jev(
+                    self.root, [screenshot], "http://jev.test/v1/systemone"
+                )
+
+            self.assertEqual([], advisory)
+            self.assertEqual("JEV_VISION_UNAVAILABLE", violations[0].rule)
 
 
 if __name__ == "__main__":
