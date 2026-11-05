@@ -4,14 +4,16 @@
 # Same trust model as codex-review.sh: trusted base checkout, PR head read as diff only.
 #
 # Env: PR_NUMBER BASE_SHA HEAD_SHA BASE_REPO GH_TOKEN SHARED_CI_DIR
-# Optional: KIMI_BIN, KIMI_MODEL, REVIEW_RULES_FILE, REVIEW_MAX_BYTES, REVIEW_MARKER.
+# Optional: KIMI_BIN, KIMI_MODEL, KIMI_MODEL_GROUP, KIMI_LAUNCHER,
+# REVIEW_MODEL_GROUP, REVIEW_SERVED_MODEL, REVIEW_RULES_FILE, REVIEW_MAX_BYTES,
+# REVIEW_MARKER.
 set -uo pipefail
 
 REVIEW_DIR="${SHARED_CI_DIR:-.}/scripts/review"
 MARKER="${REVIEW_MARKER:-<!-- shared-ci-kimi-review -->}"
 MAX_BYTES="${REVIEW_MAX_BYTES:-80000}"
 KIMI_BIN="${KIMI_BIN:-kimi}"
-KIMI_MODEL="${KIMI_MODEL:-kimi-code/k3}"
+KIMI_MODEL="${KIMI_MODEL:-${KIMI_MODEL_GROUP:-${REVIEW_MODEL_GROUP:-kimi-code/k3}}}"
 KIMI_MAX_ATTEMPTS="${KIMI_MAX_ATTEMPTS:-2}"
 case "$KIMI_MAX_ATTEMPTS" in
     ''|*[!0-9]*|0) KIMI_MAX_ATTEMPTS=2 ;;
@@ -32,8 +34,16 @@ advisory_unavailable() {
         printf 'kimi review unavailable: %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
     fi
     if [ -n "${PR_NUMBER:-}" ] && [ -n "${BASE_REPO:-}" ] && [ -n "${SHARED_CI_DIR:-}" ]; then
-        if [ -n "$body" ] || body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
-            --head "${HEAD_SHA:-unknown}" --unavailable "$1")"; then
+        if [ -n "$body" ]; then
+            :
+        elif [ -n "${REVIEW_SERVED_MODEL:-}" ]; then
+            body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
+                --head "${HEAD_SHA:-unknown}" --served-model "$REVIEW_SERVED_MODEL" --unavailable "$1")"
+        else
+            body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
+                --head "${HEAD_SHA:-unknown}" --unavailable "$1")"
+        fi
+        if [ -n "$body" ]; then
             # shellcheck source=scripts/review/sticky.sh
             . "$REVIEW_DIR/sticky.sh" && post_sticky "$MARKER" "$body" || true
         fi
@@ -94,12 +104,19 @@ KIMI_ATTEMPT=1
 while :; do
     : >"$WORK/out"
     : >"$WORK/err"
-    if KIMI_DISABLE_TELEMETRY=1 "$KIMI_BIN" --agent-file "$REVIEW_DIR/kimi-agent.md" \
-        --output-format stream-json -m "$KIMI_MODEL" -p "$PROMPT" >"$WORK/out" 2>"$WORK/err"; then
-        KIMI_RC=0
-        break
-    else
+    # shellcheck disable=SC2206 # intentional word split of a trusted launcher prefix
+    LAUNCHER=(${KIMI_LAUNCHER:-})
+    if [ "${#LAUNCHER[@]}" -gt 0 ]; then
+        KIMI_DISABLE_TELEMETRY=1 "${LAUNCHER[@]}" "$KIMI_BIN" --agent-file "$REVIEW_DIR/kimi-agent.md" \
+            --output-format stream-json -m "$KIMI_MODEL" -p "$PROMPT" >"$WORK/out" 2>"$WORK/err"
         KIMI_RC=$?
+    else
+        KIMI_DISABLE_TELEMETRY=1 "$KIMI_BIN" --agent-file "$REVIEW_DIR/kimi-agent.md" \
+            --output-format stream-json -m "$KIMI_MODEL" -p "$PROMPT" >"$WORK/out" 2>"$WORK/err"
+        KIMI_RC=$?
+    fi
+    if [ "$KIMI_RC" -eq 0 ]; then
+        break
     fi
     if [ "$KIMI_ATTEMPT" -ge "$KIMI_MAX_ATTEMPTS" ]; then
         break
@@ -147,9 +164,16 @@ else:
     advisory_unavailable "${KIMI_FAIL_REASON:-kimi CLI exited non-zero.}"
 fi
 
-BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
-    --head "$HEAD_SHA" --unavailable-reason-file "$WORK/unavailable" "$WORK/out")" \
-    || advisory_unavailable "Could not render the review verdict."
+RENDER_RC=0
+if [ -n "${REVIEW_SERVED_MODEL:-}" ]; then
+    BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
+        --head "$HEAD_SHA" --served-model "$REVIEW_SERVED_MODEL" \
+        --unavailable-reason-file "$WORK/unavailable" "$WORK/out")" || RENDER_RC=$?
+else
+    BODY="$(python3 -B "$REVIEW_DIR/verdict.py" --tool kimi --mode advisory --marker "$MARKER" \
+        --head "$HEAD_SHA" --unavailable-reason-file "$WORK/unavailable" "$WORK/out")" || RENDER_RC=$?
+fi
+[ "$RENDER_RC" -eq 0 ] || advisory_unavailable "Could not render the review verdict."
 # Advisory exit status stays zero; use the separate reason, not Markdown wording.
 if [ -s "$WORK/unavailable" ]; then
     REASON="$(cat "$WORK/unavailable")" || advisory_unavailable "Could not read the review diagnostic."
