@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "quality" / "security_scan.py"
@@ -39,7 +40,12 @@ class SecurityScanTests(unittest.TestCase):
     def _run_cli(self, *args: str) -> tuple[int, str, str]:
         out = io.StringIO()
         err = io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        with (
+            mock.patch.dict(os.environ, clean_env, clear=True),
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
             code = security_scan.main(list(args))
         return code, out.getvalue(), err.getvalue()
 
@@ -650,6 +656,29 @@ class SecurityScanTests(unittest.TestCase):
         self.assertTrue(report2["ok"])
         self.assertEqual(["package-lock.json"], report2["scanners"]["osv"]["lockfiles"])
         self.assertEqual("pass", report2["scanners"]["osv"]["status"])
+
+
+    def test_semantic_lint_supports_advisory_and_required_modes(self) -> None:
+        files = [("src.py", b"VALUE = 1\n")]
+        with mock.patch.object(
+            security_scan,
+            "_semantic_request",
+            return_value={
+                "noul": {"violates_layer_red_line": 0.8},
+                "primary_violation_category": "layer-red-line",
+            },
+        ):
+            summary, findings = security_scan.run_semantic_lint(
+                self.repo, files, mode="advisory", url="https://jev.example"
+            )
+        self.assertEqual("pass", summary["status"])
+        self.assertEqual("semantic_violation", findings[0].kind)
+
+        summary_required, required_findings = security_scan.run_semantic_lint(
+            self.repo, files, mode="required", url=""
+        )
+        self.assertEqual("fail", summary_required["status"])
+        self.assertEqual("semantic_scanner_unavailable", required_findings[0].kind)
 
 
 if __name__ == "__main__":

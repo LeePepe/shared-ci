@@ -599,6 +599,96 @@ class ReleaseSyncTests(unittest.TestCase):
         self.assertNotEqual(0, bad_res.returncode)
         self.assertIn("shared-ci-sha is required", bad_res.stdout + bad_res.stderr)
 
+    def test_provenance_verifies_local_run_and_required_checks(self) -> None:
+        repo = self._make_polyglot_repo()
+        run_json = repo / "run.json"
+        checks_json = repo / "checks.json"
+        run_json.write_text(
+            json.dumps(
+                {
+                    "id": 123,
+                    "path": ".github/workflows/ci.yml",
+                    "name": "CI",
+                    "repository": {"full_name": "LeePepe/shared-ci"},
+                    "head_repository": {"full_name": "LeePepe/shared-ci"},
+                    "head_branch": "main",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "head_sha": SAMPLE_SHA,
+                }
+            ),
+            encoding="utf-8",
+        )
+        checks_json.write_text(
+            json.dumps(
+                {
+                    "check_runs": [
+                        {
+                            "id": 1,
+                            "name": "quality / aggregate",
+                            "app": {"id": 42},
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        code, stdout, stderr = self._run_cli(
+            "provenance",
+            "--root",
+            str(repo),
+            "--repo",
+            "LeePepe/shared-ci",
+            "--candidate-sha",
+            SAMPLE_SHA,
+            "--expected-workflow-path",
+            ".github/workflows/ci.yml",
+            "--expected-workflow-name",
+            "CI",
+            "--require-check",
+            "quality / aggregate",
+            "--run-json",
+            "run.json",
+            "--checks-json",
+            "checks.json",
+        )
+        self.assertEqual(0, code, stderr)
+        report = json.loads(stdout)
+        self.assertTrue(report["ok"])
+        self.assertEqual("success", report["required_checks"])
+
+        run_json.write_text(
+            run_json.read_text(encoding="utf-8").replace('"head_branch": "main"', '"head_branch": "feature"'),
+            encoding="utf-8",
+        )
+        code_bad, stdout_bad, _ = self._run_cli(
+            "provenance",
+            "--root", str(repo), "--repo", "LeePepe/shared-ci",
+            "--candidate-sha", SAMPLE_SHA,
+            "--expected-workflow-path", ".github/workflows/ci.yml",
+            "--run-json", "run.json", "--checks-json", "checks.json",
+        )
+        self.assertEqual(1, code_bad)
+        self.assertIn("provenance_branch_mismatch", {f["kind"] for f in json.loads(stdout_bad)["findings"]})
+
+        run_json.write_text(
+            run_json.read_text(encoding="utf-8").replace(SAMPLE_SHA, OTHER_SHA),
+            encoding="utf-8",
+        )
+        code_mismatch, stdout_mismatch, _ = self._run_cli(
+            "provenance",
+            "--root", str(repo), "--repo", "LeePepe/shared-ci",
+            "--candidate-sha", SAMPLE_SHA,
+            "--expected-workflow-path", ".github/workflows/ci.yml",
+            "--run-json", "run.json", "--checks-json", "checks.json",
+        )
+        self.assertEqual(1, code_mismatch)
+        mismatch_kinds = {f["kind"] for f in json.loads(stdout_mismatch)["findings"]}
+        self.assertIn("provenance_sha_mismatch", mismatch_kinds)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -83,6 +86,11 @@ BUILTIN_SECRET_PATTERNS: tuple[dict[str, str], ...] = (
 )
 
 MAX_TEXT_BYTES = 2_000_000
+SEMANTIC_NUOL_KEYS: tuple[str, ...] = (
+    "violates_layer_red_line",
+    "violates_dependency_direction",
+    "leaks_unhandled_side_effect_or_mutability",
+)
 
 
 class SecurityScanError(ValueError):
@@ -1127,6 +1135,151 @@ def _run_osv(
     )
 
 
+def _semantic_endpoint(value: str) -> str:
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("semantic URL must be an absolute http(s) URL")
+    return value.rstrip("/") + "/v1/systemone"
+
+
+def _semantic_request(
+    endpoint: str,
+    *,
+    rel_path: str,
+    content: str,
+    rules_text: str,
+) -> dict[str, Any]:
+    payload = {
+        "path": rel_path,
+        "content": content,
+        "rules": rules_text,
+        "noul": list(SEMANTIC_NUOL_KEYS),
+        "choice": "primary_violation_category",
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "shared-ci-security-scan/1.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10.0) as response:
+        decoded = json.loads(response.read(2_000_000).decode("utf-8"))
+    if not isinstance(decoded, dict):
+        raise ValueError("semantic scanner response must be a JSON object")
+    return decoded
+
+
+def _semantic_score(response: dict[str, Any]) -> tuple[float, str]:
+    nested = response.get("noul")
+    scores = nested if isinstance(nested, dict) else response
+    values = [
+        (key, float(scores[key]))
+        for key in SEMANTIC_NUOL_KEYS
+        if isinstance(scores.get(key), (int, float)) and not isinstance(scores[key], bool)
+    ]
+    if not values:
+        return 0.0, ""
+    key, value = max(values, key=lambda item: item[1])
+    return value, key
+
+
+def run_semantic_lint(
+    root: pathlib.Path,
+    files: list[tuple[str, bytes]],
+    *,
+    mode: str,
+    url: str,
+    threshold: float = 0.65,
+    rules_text: str = "",
+) -> tuple[dict[str, Any], list[ScanFinding]]:
+    if mode not in ("off", "advisory", "required"):
+        raise SecurityScanError("invalid_input: invalid semantic lint mode")
+    if not 0 <= threshold <= 1:
+        raise SecurityScanError("invalid_input: semantic threshold must be between 0 and 1")
+    if mode == "off":
+        return {"status": "skipped", "files_scanned": 0, "findings_count": 0}, []
+    try:
+        endpoint = _semantic_endpoint(url)
+    except ValueError as error:
+        finding = ScanFinding(
+            scanner="semantic",
+            kind="semantic_scanner_unavailable",
+            path="",
+            rule="semantic-lint-url",
+            detail=str(error),
+        )
+        return (
+            {"status": "fail" if mode == "required" else "unavailable", "files_scanned": 0,
+             "findings_count": 1 if mode == "required" else 0},
+            [finding] if mode == "required" else [],
+        )
+
+    findings: list[ScanFinding] = []
+    scanned = 0
+    for rel_path, raw_bytes in files:
+        if not raw_bytes or b"\0" in raw_bytes[:8192]:
+            continue
+        text = raw_bytes.decode("utf-8", errors="replace")
+        scanned += 1
+        try:
+            response = _semantic_request(
+                endpoint, rel_path=rel_path, content=text, rules_text=rules_text
+            )
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError, urllib.error.URLError) as error:
+            findings.append(
+                ScanFinding(
+                    scanner="semantic",
+                    kind="semantic_scanner_unavailable",
+                    path=rel_path,
+                    rule="semantic-lint-request",
+                    detail=str(error),
+                )
+            )
+            continue
+        score, triggered = _semantic_score(response)
+        line_no = 1
+        if score >= threshold and len(text.splitlines()) > 40:
+            lines = text.splitlines()
+            best = (score, triggered, 1)
+            for start in range(0, len(lines), 40):
+                try:
+                    chunk_response = _semantic_request(
+                        endpoint,
+                        rel_path=rel_path,
+                        content="\n".join(lines[start : start + 40]),
+                        rules_text=rules_text,
+                    )
+                except (OSError, UnicodeError, ValueError, json.JSONDecodeError, urllib.error.URLError):
+                    continue
+                chunk_score, chunk_triggered = _semantic_score(chunk_response)
+                if chunk_score > best[0]:
+                    raw_line = chunk_response.get("line_no", 1)
+                    offset = raw_line - 1 if isinstance(raw_line, int) else 0
+                    best = (chunk_score, chunk_triggered, start + 1 + max(0, offset))
+            score, triggered, line_no = best
+        if score < threshold:
+            continue
+        category = response.get("primary_violation_category", triggered)
+        if not isinstance(category, str) or not category:
+            category = triggered or "semantic-violation"
+        findings.append(
+            ScanFinding(
+                scanner="semantic",
+                kind="semantic_violation",
+                path=rel_path,
+                line=line_no,
+                rule=category,
+                detail=f"noul={score:.2f} ({triggered or 'unknown'})",
+            )
+        )
+    status = "fail" if mode == "required" and findings else "pass"
+    return {"status": status, "files_scanned": scanned, "findings_count": len(findings)}, findings
+
+
 def run_security_scan(
     repo_root: pathlib.Path,
     *,
@@ -1137,6 +1290,10 @@ def run_security_scan(
     osv_bin: str = "osv-scanner",
     gitleaks_config: str | None = None,
     osv_config: str | None = None,
+    semantic_lint: str = "off",
+    semantic_url: str = "",
+    semantic_threshold: float = 0.65,
+    semantic_rules_file: str | None = None,
 ) -> dict[str, Any]:
     root = _validate_repo_root(repo_root)
     files = _collect_staged_files(root) if staged else _walk_worktree_files(root)
@@ -1160,8 +1317,27 @@ def run_security_scan(
         osv_bin=osv_bin,
         osv_config=osv_config,
     )
+    rules_text = ""
+    if semantic_rules_file is not None:
+        rules_text = _ensure_safe_target(root, semantic_rules_file, must_exist=True).read_text(
+            encoding="utf-8"
+        )
+    elif not staged:
+        context_path = root / "docs" / "architecture" / "tech-context.md"
+        if context_path.is_file():
+            rules_text = context_path.read_text(encoding="utf-8")
+    semantic_summary, semantic_findings = run_semantic_lint(
+        root,
+        files,
+        mode=semantic_lint,
+        url=semantic_url,
+        threshold=semantic_threshold,
+        rules_text=rules_text,
+    )
 
     all_findings = [*identity_findings, *gitleaks_findings, *osv_findings]
+    if semantic_lint == "required":
+        all_findings.extend(semantic_findings)
     ok = (
         len(all_findings) == 0
         and identity_summary["status"] == "pass"
@@ -1175,7 +1351,11 @@ def run_security_scan(
             "identity": identity_summary,
             "gitleaks": gitleaks_summary,
             "osv": osv_summary,
+            "semantic": semantic_summary,
         },
+        "advisory_findings": (
+            [item.as_dict() for item in semantic_findings] if semantic_lint == "advisory" else []
+        ),
         "findings": [item.as_dict() for item in all_findings],
     }
 
@@ -1221,6 +1401,19 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional repository-relative osv-scanner config path.",
     )
+    parser.add_argument(
+        "--semantic-lint",
+        choices=("off", "advisory", "required"),
+        default="off",
+        help="Enable the optional Jev semantic linter.",
+    )
+    parser.add_argument(
+        "--semantic-url",
+        default=os.environ.get("SHARED_CI_SYSTEMONE_URL", ""),
+        help="Jev SystemOne base URL.",
+    )
+    parser.add_argument("--semantic-threshold", type=float, default=0.65)
+    parser.add_argument("--semantic-rules-file", default=None)
     return parser
 
 
@@ -1244,6 +1437,10 @@ def main(argv: list[str] | None = None) -> int:
             osv_bin=args.osv_bin,
             gitleaks_config=args.gitleaks_config,
             osv_config=args.osv_config,
+            semantic_lint=args.semantic_lint,
+            semantic_url=args.semantic_url,
+            semantic_threshold=args.semantic_threshold,
+            semantic_rules_file=args.semantic_rules_file,
         )
     except SecurityScanError as error:
         print(
