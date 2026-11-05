@@ -1238,6 +1238,207 @@ def run_readback(
     }
 
 
+def _provenance_request(url: str, *, timeout: float = 10.0) -> Any:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "shared-ci-release-sync/1.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read(5_000_000).decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        raise ReleaseSyncError(
+            f"provenance_request: GitHub API returned HTTP {error.code}",
+            code="provenance_request",
+        ) from error
+    except urllib.error.URLError as error:
+        raise ReleaseSyncError(
+            f"provenance_request: GitHub API request failed: {error.reason}",
+            code="provenance_request",
+        ) from error
+    except OSError as error:
+        raise ReleaseSyncError(
+            f"provenance_request: GitHub API request failed: {error}",
+            code="provenance_request",
+        ) from error
+    except (json.JSONDecodeError, UnicodeError) as error:
+        raise ReleaseSyncError(
+            f"provenance_request: GitHub API returned invalid JSON: {error}",
+            code="provenance_request",
+        ) from error
+
+
+def _provenance_path(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized if normalized.startswith(".github/workflows/") else normalized
+
+
+def _provenance_finding(kind: str, detail: str, *, expected: str = "", actual: str = "") -> Finding:
+    return Finding(path="", kind=kind, detail=detail, expected=expected, actual=actual)
+
+
+def verify_release_provenance(
+    repo_root: pathlib.Path,
+    *,
+    repo: str,
+    candidate_sha: str,
+    expected_workflow_path: str,
+    expected_workflow_name: str | None = None,
+    expected_branch: str = "main",
+    allowed_events: list[str] | None = None,
+    source_run_id: int | None = None,
+    require_checks: list[str] | None = None,
+    run_json: str | None = None,
+    checks_json: str | None = None,
+    api_base: str = "https://api.github.com",
+) -> dict[str, Any]:
+    root = _validate_repo_root(repo_root)
+    if not SHA_RE.fullmatch(candidate_sha):
+        raise ReleaseSyncError(
+            "invalid_input: --candidate-sha must be a 40-character lowercase hex SHA",
+            code="invalid_input",
+        )
+    if not repo or "/" not in repo:
+        raise ReleaseSyncError("invalid_input: --repo must be owner/name", code="invalid_input")
+    if not _provenance_path(expected_workflow_path).startswith(".github/workflows/"):
+        raise ReleaseSyncError(
+            "invalid_input: --expected-workflow-path must be under .github/workflows/",
+            code="invalid_input",
+        )
+    events = list(allowed_events or ["push"])
+    required_checks = list(require_checks or [])
+
+    def load_json_arg(raw_path: str) -> Any:
+        rel_path, path = _resolve_readback_file(root, raw_path)
+        if not path.is_file():
+            raise ReleaseSyncError(f"invalid_input: JSON file does not exist: {rel_path}", code="invalid_input")
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ReleaseSyncError(f"invalid_input: invalid JSON in {rel_path}: {error}", code="invalid_input")
+
+    if run_json:
+        run_data = load_json_arg(run_json)
+    else:
+        base = api_base.rstrip("/")
+        if source_run_id is not None:
+            run_data = _provenance_request(f"{base}/repos/{repo}/actions/runs/{source_run_id}")
+        else:
+            run_data = _provenance_request(
+                f"{base}/repos/{repo}/actions/runs?head_sha={candidate_sha}"
+            )
+    if isinstance(run_data, list):
+        runs = run_data
+    elif isinstance(run_data, dict) and isinstance(run_data.get("workflow_runs"), list):
+        runs = run_data["workflow_runs"]
+    else:
+        runs = [run_data]
+    if source_run_id is not None:
+        runs = [item for item in runs if isinstance(item, dict) and item.get("id") == source_run_id]
+    matching = [
+        item for item in runs
+        if isinstance(item, dict) and item.get("head_sha") == candidate_sha
+    ]
+    run = matching[0] if matching else {}
+    findings: list[Finding] = []
+    if not run:
+        findings.append(_provenance_finding("provenance_sha_mismatch", "no workflow run matches candidate SHA"))
+    repository = run.get("repository") if isinstance(run.get("repository"), dict) else {}
+    head_repository = run.get("head_repository") if isinstance(run.get("head_repository"), dict) else {}
+    if repository.get("full_name") != repo or head_repository.get("full_name") != repo:
+        findings.append(_provenance_finding(
+            "provenance_repo_mismatch",
+            "workflow run repository and head repository must match the requested repository",
+            expected=repo,
+            actual=f"{repository.get('full_name', '')}/{head_repository.get('full_name', '')}",
+        ))
+    if _provenance_path(run.get("path")) != _provenance_path(expected_workflow_path):
+        findings.append(_provenance_finding(
+            "provenance_workflow_mismatch",
+            "workflow path does not match the expected workflow",
+            expected=_provenance_path(expected_workflow_path),
+            actual=_provenance_path(run.get("path")),
+        ))
+    if expected_workflow_name is not None and run.get("name") != expected_workflow_name:
+        findings.append(_provenance_finding(
+            "provenance_workflow_mismatch",
+            "workflow name does not match the expected workflow",
+            expected=expected_workflow_name,
+            actual=str(run.get("name", "")),
+        ))
+    if run.get("head_branch") != expected_branch:
+        findings.append(_provenance_finding(
+            "provenance_branch_mismatch", "workflow branch does not match the expected branch",
+            expected=expected_branch, actual=str(run.get("head_branch", "")),
+        ))
+    if run.get("event") not in events:
+        findings.append(_provenance_finding(
+            "provenance_event_mismatch", "workflow event is not allowed",
+            expected=",".join(events), actual=str(run.get("event", "")),
+        ))
+    if run.get("status") != "completed" or run.get("conclusion") != "success":
+        findings.append(_provenance_finding(
+            "provenance_run_unsuccessful", "workflow run must be completed successfully",
+            expected="completed/success",
+            actual=f"{run.get('status', '')}/{run.get('conclusion', '')}",
+        ))
+    if run.get("head_sha") != candidate_sha:
+        findings.append(_provenance_finding(
+            "provenance_sha_mismatch", "workflow head SHA does not match candidate SHA",
+            expected=candidate_sha, actual=str(run.get("head_sha", "")),
+        ))
+
+    if checks_json:
+        checks_data = load_json_arg(checks_json)
+    elif run.get("id") is not None:
+        checks_data = _provenance_request(
+            f"{api_base.rstrip('/')}/repos/{repo}/commits/{candidate_sha}/check-runs"
+        )
+    else:
+        checks_data = run.get("check_runs", [])
+    if isinstance(checks_data, dict):
+        checks = checks_data.get("check_runs", [])
+    else:
+        checks = checks_data
+    if not isinstance(checks, list):
+        checks = []
+    latest: dict[tuple[str, Any], dict[str, Any]] = {}
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        key = (str(check.get("name", "")), check.get("app", {}).get("id") if isinstance(check.get("app"), dict) else None)
+        if key not in latest or int(check.get("id", 0) or 0) > int(latest[key].get("id", 0) or 0):
+            latest[key] = check
+    for required in required_checks:
+        candidates = [item for (name, _), item in latest.items() if name == required]
+        if not candidates or any(
+            item.get("head_sha") != candidate_sha
+            or item.get("status") != "completed"
+            or item.get("conclusion") != "success"
+            for item in candidates
+        ):
+            findings.append(_provenance_finding(
+                "provenance_check_failed",
+                f"required check {required!r} is missing, from another commit, or unsuccessful",
+                expected=f"{candidate_sha}/completed/success",
+                actual="missing" if not candidates else "mismatched or unsuccessful",
+            ))
+    return {
+        "ok": not findings,
+        "mode": "provenance",
+        "repo": repo,
+        "candidate_sha": candidate_sha,
+        "source_run_id": run.get("id", source_run_id),
+        "required_checks": "success" if not findings else "failed",
+        "findings": [item.as_dict() for item in findings],
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="release_sync.py",
@@ -1342,6 +1543,22 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Number of HTTP retry attempts on transient failure (default: 0).",
     )
+    pv = subparsers.add_parser(
+        "provenance",
+        help="Verify the workflow and check-run provenance of a release candidate.",
+    )
+    pv.add_argument("--root", default=".", help="Repository root directory (default: .).")
+    pv.add_argument("--repo", required=True)
+    pv.add_argument("--candidate-sha", required=True)
+    pv.add_argument("--expected-workflow-path", required=True)
+    pv.add_argument("--expected-workflow-name", default=None)
+    pv.add_argument("--expected-branch", default="main")
+    pv.add_argument("--allowed-events", action="append", default=None)
+    pv.add_argument("--source-run-id", type=int, default=None)
+    pv.add_argument("--require-check", action="append", default=[])
+    pv.add_argument("--run-json", default=None)
+    pv.add_argument("--checks-json", default=None)
+    pv.add_argument("--api-base", default="https://api.github.com")
     return parser
 
 
@@ -1370,7 +1587,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_stale_enabled=check_stale_enabled,
                 previous_version=args.previous_version,
             )
-        else:
+        elif args.subcommand == "readback":
             report = run_readback(
                 repo_root,
                 expected_version=args.expected_version,
@@ -1382,6 +1599,21 @@ def main(argv: list[str] | None = None) -> int:
                 expected_assets=_split_csv_args(args.expected_asset),
                 timeout=args.timeout,
                 retries=args.retries,
+            )
+        else:
+            report = verify_release_provenance(
+                repo_root,
+                repo=args.repo,
+                candidate_sha=args.candidate_sha,
+                expected_workflow_path=args.expected_workflow_path,
+                expected_workflow_name=args.expected_workflow_name,
+                expected_branch=args.expected_branch,
+                allowed_events=_split_csv_args(args.allowed_events),
+                source_run_id=args.source_run_id,
+                require_checks=args.require_check,
+                run_json=args.run_json,
+                checks_json=args.checks_json,
+                api_base=args.api_base,
             )
     except ReleaseSyncError as error:
         print(

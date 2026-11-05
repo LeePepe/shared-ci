@@ -58,6 +58,15 @@ Both templates reject PR/fork sources, never check out a pull-request head and
 use no persisted checkout credential. An originating run or schedule is a
 wakeup signal, **not proof that every necessary check has passed**.
 
+The Quality-layer `release_sync.py provenance` command provides an offline-fixture
+or GitHub REST API check for that evidence. It requires an exact lowercase
+40-character candidate SHA, a same-repository workflow run (including
+`head_repository`), the expected workflow path/name, default-branch push event,
+completed-success conclusion, and exact `head_sha`; repeated `--require-check`
+arguments require the latest `(name, app.id)` check run to be completed and
+successful. It fails closed and never substitutes `github.sha` or an unrelated
+green run.
+
 The repo-owned `prepare` step must retrieve trustworthy check evidence for
 `CANDIDATE`, including all necessary workflow/check identities and their latest
 applicable attempts. Reject missing, pending, failed, cancelled, skipped,

@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import typing
+import urllib.error
 import unittest
 from unittest import mock
 
@@ -598,6 +599,151 @@ class ReleaseSyncTests(unittest.TestCase):
         )
         self.assertNotEqual(0, bad_res.returncode)
         self.assertIn("shared-ci-sha is required", bad_res.stdout + bad_res.stderr)
+
+    def test_provenance_verifies_local_run_and_required_checks(self) -> None:
+        repo = self._make_polyglot_repo()
+        run_json = repo / "run.json"
+        checks_json = repo / "checks.json"
+        run_json.write_text(
+            json.dumps(
+                {
+                    "id": 123,
+                    "path": ".github/workflows/ci.yml",
+                    "name": "CI",
+                    "repository": {"full_name": "LeePepe/shared-ci"},
+                    "head_repository": {"full_name": "LeePepe/shared-ci"},
+                    "head_branch": "main",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "head_sha": SAMPLE_SHA,
+                }
+            ),
+            encoding="utf-8",
+        )
+        checks_json.write_text(
+            json.dumps(
+                {
+                    "check_runs": [
+                        {
+                            "id": 1,
+                            "name": "quality / aggregate",
+                            "app": {"id": 42},
+                            "status": "completed",
+                            "conclusion": "success",
+                            "head_sha": SAMPLE_SHA,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        code, stdout, stderr = self._run_cli(
+            "provenance",
+            "--root",
+            str(repo),
+            "--repo",
+            "LeePepe/shared-ci",
+            "--candidate-sha",
+            SAMPLE_SHA,
+            "--expected-workflow-path",
+            ".github/workflows/ci.yml",
+            "--expected-workflow-name",
+            "CI",
+            "--require-check",
+            "quality / aggregate",
+            "--run-json",
+            "run.json",
+            "--checks-json",
+            "checks.json",
+        )
+        self.assertEqual(0, code, stderr)
+        report = json.loads(stdout)
+        self.assertTrue(report["ok"])
+        self.assertEqual("success", report["required_checks"])
+
+        run_json.write_text(
+            run_json.read_text(encoding="utf-8").replace('"head_branch": "main"', '"head_branch": "feature"'),
+            encoding="utf-8",
+        )
+        code_bad, stdout_bad, _ = self._run_cli(
+            "provenance",
+            "--root", str(repo), "--repo", "LeePepe/shared-ci",
+            "--candidate-sha", SAMPLE_SHA,
+            "--expected-workflow-path", ".github/workflows/ci.yml",
+            "--run-json", "run.json", "--checks-json", "checks.json",
+        )
+        self.assertEqual(1, code_bad)
+        self.assertIn("provenance_branch_mismatch", {f["kind"] for f in json.loads(stdout_bad)["findings"]})
+
+        run_json.write_text(
+            run_json.read_text(encoding="utf-8").replace(SAMPLE_SHA, OTHER_SHA),
+            encoding="utf-8",
+        )
+        code_mismatch, stdout_mismatch, _ = self._run_cli(
+            "provenance",
+            "--root", str(repo), "--repo", "LeePepe/shared-ci",
+            "--candidate-sha", SAMPLE_SHA,
+            "--expected-workflow-path", ".github/workflows/ci.yml",
+            "--run-json", "run.json", "--checks-json", "checks.json",
+        )
+        self.assertEqual(1, code_mismatch)
+        mismatch_kinds = {f["kind"] for f in json.loads(stdout_mismatch)["findings"]}
+        self.assertIn("provenance_sha_mismatch", mismatch_kinds)
+
+    def test_provenance_request_errors_are_reported_without_tracebacks(self) -> None:
+        failures = (
+            urllib.error.URLError("offline"),
+            urllib.error.HTTPError("https://api.github.com", 503, "unavailable", {}, None),
+            json.JSONDecodeError("invalid", "{", 0),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(
+                release_sync.urllib.request, "urlopen", side_effect=failure
+            ):
+                code, stdout, stderr = self._run_cli(
+                    "provenance",
+                    "--root",
+                    str(self.root),
+                    "--repo",
+                    "LeePepe/shared-ci",
+                    "--candidate-sha",
+                    SAMPLE_SHA,
+                    "--expected-workflow-path",
+                    ".github/workflows/ci.yml",
+                    "--api-base",
+                    "https://api.github.com",
+                )
+                self.assertEqual(2, code)
+                self.assertEqual("", stdout)
+                error = json.loads(stderr)
+                self.assertEqual("provenance_request", error["code"])
+                self.assertIn("provenance_request:", error["error"])
+
+        class ReadTimeoutResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _limit):
+                raise TimeoutError("read timed out")
+
+        with mock.patch.object(
+            release_sync.urllib.request, "urlopen", return_value=ReadTimeoutResponse()
+        ):
+            code, stdout, stderr = self._run_cli(
+                "provenance",
+                "--root", str(self.root),
+                "--repo", "LeePepe/shared-ci",
+                "--candidate-sha", SAMPLE_SHA,
+                "--expected-workflow-path", ".github/workflows/ci.yml",
+                "--api-base", "https://api.github.com",
+            )
+            self.assertEqual(2, code)
+            self.assertEqual("", stdout)
+            self.assertEqual("provenance_request", json.loads(stderr)["code"])
 
 
 if __name__ == "__main__":
