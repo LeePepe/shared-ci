@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import typing
+import urllib.error
 import unittest
 from unittest import mock
 
@@ -688,6 +689,35 @@ class ReleaseSyncTests(unittest.TestCase):
         self.assertEqual(1, code_mismatch)
         mismatch_kinds = {f["kind"] for f in json.loads(stdout_mismatch)["findings"]}
         self.assertIn("provenance_sha_mismatch", mismatch_kinds)
+
+    def test_provenance_request_errors_are_reported_without_tracebacks(self) -> None:
+        failures = (
+            urllib.error.URLError("offline"),
+            urllib.error.HTTPError("https://api.github.com", 503, "unavailable", {}, None),
+            json.JSONDecodeError("invalid", "{", 0),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(
+                release_sync.urllib.request, "urlopen", side_effect=failure
+            ):
+                code, stdout, stderr = self._run_cli(
+                    "provenance",
+                    "--root",
+                    str(self.root),
+                    "--repo",
+                    "LeePepe/shared-ci",
+                    "--candidate-sha",
+                    SAMPLE_SHA,
+                    "--expected-workflow-path",
+                    ".github/workflows/ci.yml",
+                    "--api-base",
+                    "https://api.github.com",
+                )
+                self.assertEqual(2, code)
+                self.assertEqual("", stdout)
+                error = json.loads(stderr)
+                self.assertEqual("provenance_request", error["code"])
+                self.assertIn("provenance_request:", error["error"])
 
 
 if __name__ == "__main__":

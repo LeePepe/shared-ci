@@ -1244,8 +1244,24 @@ def _provenance_request(url: str, *, timeout: float = 10.0) -> Any:
         headers={"Accept": "application/vnd.github+json", "User-Agent": "shared-ci-release-sync/1.0"},
         method="GET",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read(5_000_000).decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read(5_000_000).decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        raise ReleaseSyncError(
+            f"provenance_request: GitHub API returned HTTP {error.code}",
+            code="provenance_request",
+        ) from error
+    except urllib.error.URLError as error:
+        raise ReleaseSyncError(
+            f"provenance_request: GitHub API request failed: {error.reason}",
+            code="provenance_request",
+        ) from error
+    except (json.JSONDecodeError, UnicodeError) as error:
+        raise ReleaseSyncError(
+            f"provenance_request: GitHub API returned invalid JSON: {error}",
+            code="provenance_request",
+        ) from error
 
 
 def _provenance_path(value: Any) -> str:
