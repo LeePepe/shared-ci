@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import math
 import os
 import pathlib
 import re
@@ -1176,13 +1177,19 @@ def _semantic_request(
 def _semantic_score(response: dict[str, Any]) -> tuple[float, str]:
     nested = response.get("noul")
     scores = nested if isinstance(nested, dict) else response
-    values = [
-        (key, float(scores[key]))
-        for key in SEMANTIC_NUOL_KEYS
-        if isinstance(scores.get(key), (int, float)) and not isinstance(scores[key], bool)
-    ]
+    values: list[tuple[str, float]] = []
+    for key in SEMANTIC_NUOL_KEYS:
+        if key not in scores:
+            continue
+        value = scores[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"semantic scanner score {key!r} must be numeric")
+        numeric = float(value)
+        if not math.isfinite(numeric) or not 0 <= numeric <= 1:
+            raise ValueError(f"semantic scanner score {key!r} must be finite and between 0 and 1")
+        values.append((key, numeric))
     if not values:
-        return 0.0, ""
+        raise ValueError("semantic scanner response contains no recognized scores")
     key, value = max(values, key=lambda item: item[1])
     return value, key
 
@@ -1240,7 +1247,19 @@ def run_semantic_lint(
                 )
             )
             continue
-        score, triggered = _semantic_score(response)
+        try:
+            score, triggered = _semantic_score(response)
+        except ValueError as error:
+            findings.append(
+                ScanFinding(
+                    scanner="semantic",
+                    kind="semantic_scanner_invalid_response",
+                    path=rel_path,
+                    rule="semantic-lint-response",
+                    detail=str(error),
+                )
+            )
+            continue
         line_no = 1
         if score >= threshold and len(text.splitlines()) > 40:
             lines = text.splitlines()
@@ -1255,7 +1274,19 @@ def run_semantic_lint(
                     )
                 except (OSError, UnicodeError, ValueError, json.JSONDecodeError, urllib.error.URLError):
                     continue
-                chunk_score, chunk_triggered = _semantic_score(chunk_response)
+                try:
+                    chunk_score, chunk_triggered = _semantic_score(chunk_response)
+                except ValueError as error:
+                    findings.append(
+                        ScanFinding(
+                            scanner="semantic",
+                            kind="semantic_scanner_invalid_response",
+                            path=rel_path,
+                            rule="semantic-lint-response",
+                            detail=str(error),
+                        )
+                    )
+                    continue
                 if chunk_score > best[0]:
                     raw_line = chunk_response.get("line_no", 1)
                     offset = raw_line - 1 if isinstance(raw_line, int) else 0
@@ -1318,14 +1349,15 @@ def run_security_scan(
         osv_config=osv_config,
     )
     rules_text = ""
-    if semantic_rules_file is not None:
-        rules_text = _ensure_safe_target(root, semantic_rules_file, must_exist=True).read_text(
-            encoding="utf-8"
-        )
-    elif not staged:
-        context_path = root / "docs" / "architecture" / "tech-context.md"
-        if context_path.is_file():
-            rules_text = context_path.read_text(encoding="utf-8")
+    if semantic_lint != "off":
+        if semantic_rules_file is not None:
+            rules_text = _ensure_safe_target(root, semantic_rules_file, must_exist=True).read_text(
+                encoding="utf-8"
+            )
+        elif not staged:
+            context_path = root / "docs" / "architecture" / "tech-context.md"
+            if context_path.is_file():
+                rules_text = context_path.read_text(encoding="utf-8")
     semantic_summary, semantic_findings = run_semantic_lint(
         root,
         files,

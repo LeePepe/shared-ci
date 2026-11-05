@@ -631,6 +631,7 @@ class ReleaseSyncTests(unittest.TestCase):
                             "app": {"id": 42},
                             "status": "completed",
                             "conclusion": "success",
+                            "head_sha": SAMPLE_SHA,
                         }
                     ]
                 }
@@ -718,6 +719,31 @@ class ReleaseSyncTests(unittest.TestCase):
                 error = json.loads(stderr)
                 self.assertEqual("provenance_request", error["code"])
                 self.assertIn("provenance_request:", error["error"])
+
+        class ReadTimeoutResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _limit):
+                raise TimeoutError("read timed out")
+
+        with mock.patch.object(
+            release_sync.urllib.request, "urlopen", return_value=ReadTimeoutResponse()
+        ):
+            code, stdout, stderr = self._run_cli(
+                "provenance",
+                "--root", str(self.root),
+                "--repo", "LeePepe/shared-ci",
+                "--candidate-sha", SAMPLE_SHA,
+                "--expected-workflow-path", ".github/workflows/ci.yml",
+                "--api-base", "https://api.github.com",
+            )
+            self.assertEqual(2, code)
+            self.assertEqual("", stdout)
+            self.assertEqual("provenance_request", json.loads(stderr)["code"])
 
 
 if __name__ == "__main__":

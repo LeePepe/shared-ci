@@ -1257,6 +1257,11 @@ def _provenance_request(url: str, *, timeout: float = 10.0) -> Any:
             f"provenance_request: GitHub API request failed: {error.reason}",
             code="provenance_request",
         ) from error
+    except OSError as error:
+        raise ReleaseSyncError(
+            f"provenance_request: GitHub API request failed: {error}",
+            code="provenance_request",
+        ) from error
     except (json.JSONDecodeError, UnicodeError) as error:
         raise ReleaseSyncError(
             f"provenance_request: GitHub API returned invalid JSON: {error}",
@@ -1411,12 +1416,17 @@ def verify_release_provenance(
             latest[key] = check
     for required in required_checks:
         candidates = [item for (name, _), item in latest.items() if name == required]
-        if not candidates or any(item.get("status") != "completed" or item.get("conclusion") != "success" for item in candidates):
+        if not candidates or any(
+            item.get("head_sha") != candidate_sha
+            or item.get("status") != "completed"
+            or item.get("conclusion") != "success"
+            for item in candidates
+        ):
             findings.append(_provenance_finding(
                 "provenance_check_failed",
-                f"required check {required!r} is missing or unsuccessful",
-                expected="completed/success",
-                actual="missing" if not candidates else "unsuccessful",
+                f"required check {required!r} is missing, from another commit, or unsuccessful",
+                expected=f"{candidate_sha}/completed/success",
+                actual="missing" if not candidates else "mismatched or unsuccessful",
             ))
     return {
         "ok": not findings,

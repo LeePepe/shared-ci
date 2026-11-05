@@ -680,6 +680,16 @@ class SecurityScanTests(unittest.TestCase):
         self.assertEqual("fail", summary_required["status"])
         self.assertEqual("semantic_scanner_unavailable", required_findings[0].kind)
 
+        for response in ({}, {"noul": {"violates_layer_red_line": float("nan")}}):
+            with self.subTest(response=response), mock.patch.object(
+                security_scan, "_semantic_request", return_value=response
+            ):
+                summary, findings = security_scan.run_semantic_lint(
+                    self.repo, files, mode="required", url="https://jev.example"
+                )
+            self.assertEqual("fail", summary["status"])
+            self.assertEqual("semantic_scanner_invalid_response", findings[0].kind)
+
 
 if __name__ == "__main__":
     unittest.main()
