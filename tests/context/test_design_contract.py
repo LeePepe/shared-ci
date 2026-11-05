@@ -13,6 +13,7 @@ import tempfile
 import unittest
 import zlib
 from typing import Iterator
+from unittest import mock
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -123,6 +124,14 @@ populated, empty, loading, error
 ## Redlines & CI gate
 No raw colors.
 """
+
+    def _write_png(
+        self, relative: str, width: int = 2, height: int = 3
+    ) -> pathlib.Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_scanline_png(width, height, color_type=6, interlace=0))
+        return path
 
     def test_template_passes_contract_audit(self) -> None:
         errors = design_contract.audit_contract(REPO / "templates/design-contract.md")
@@ -400,6 +409,301 @@ No raw colors.
         self.assertFalse(
             any("screen-populated-light.png" in error and "invalid PNG" in error for error in errors)
         )
+
+    def test_screenshot_matrix_validates_pngs_and_required_combinations(self) -> None:
+        self._write_png("screenshots/workout_populated_light.png")
+        self._write_png("screenshots/workout_populated_dark.png")
+        self._write("screenshots/workout_empty_light.png", "not a png")
+
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root,
+            self.root / "screenshots",
+            require_state_matrix=True,
+        )
+
+        self.assertEqual(2, len(paths))
+        self.assertIn(
+            ("screenshots/workout_empty_light.png", "INVALID_SCREENSHOT_PNG"),
+            {(item.path, item.rule) for item in findings},
+        )
+        missing = [item for item in findings if item.rule == "MISSING_STATE_SCREENSHOT"]
+        self.assertEqual(6, len(missing))
+
+    def test_screenshot_matrix_rejects_directory_outside_root(self) -> None:
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root,
+            pathlib.Path(tempfile.gettempdir()),
+        )
+
+        self.assertEqual([], paths)
+        self.assertEqual("SCREENSHOT_PATH_OUTSIDE_ROOT", findings[0].rule)
+
+    def test_screenshot_matrix_rejects_symlink_outside_root(self) -> None:
+        outside = pathlib.Path(tempfile.mkdtemp(prefix=".outside-design-contract-"))
+        target = outside / "secret.png"
+        target.write_bytes(_scanline_png(2, 3, color_type=6, interlace=0))
+        self.addCleanup(lambda: (target.unlink(), outside.rmdir()))
+        link = self.root / "screenshots" / "outside.png"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root, self.root / "screenshots"
+        )
+
+        self.assertEqual([], paths)
+        self.assertEqual("SCREENSHOT_PATH_OUTSIDE_ROOT", findings[0].rule)
+
+    def test_screenshot_matrix_rejects_truncated_png(self) -> None:
+        path = self.root / "screenshots" / "truncated.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + b"\x00\x00\x00\x0dIHDR"
+            + (2).to_bytes(4, "big")
+            + (3).to_bytes(4, "big")
+        )
+
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root, self.root / "screenshots"
+        )
+
+        self.assertEqual([], paths)
+        self.assertEqual("INVALID_SCREENSHOT_PNG", findings[0].rule)
+
+    def test_screenshot_matrix_rejects_invalid_png_structures(self) -> None:
+        signature = b"\x89PNG\r\n\x1a\n"
+        ihdr = _png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 3, 8, 6, 0, 0, 0))
+        raw = (b"\x00" + b"\x00" * 8) * 3
+        compressed = zlib.compress(raw)
+        idat = _png_chunk(b"IDAT", compressed)
+        iend = _png_chunk(b"IEND", b"")
+        malformed = {
+            "empty-scanlines": ihdr + _png_chunk(b"IDAT", zlib.compress(b"")) + iend,
+            "short-scanlines": ihdr + _png_chunk(b"IDAT", zlib.compress(raw[:-1])) + iend,
+            "extra-scanlines": ihdr + _png_chunk(b"IDAT", zlib.compress(raw + b"\x00")) + iend,
+            "invalid-filter": ihdr + _png_chunk(b"IDAT", zlib.compress(b"\x05" + raw[1:])) + iend,
+            "duplicate-ihdr": ihdr + ihdr + idat + iend,
+            "duplicate-iend": ihdr + idat + iend + iend,
+            "early-iend": ihdr + iend + idat + iend,
+            "idat-first": idat + ihdr + iend,
+            "split-idat": (
+                ihdr + _png_chunk(b"IDAT", compressed[:4])
+                + _png_chunk(b"tEXt", b"key\x00value")
+                + _png_chunk(b"IDAT", compressed[4:]) + iend
+            ),
+            "unknown-critical": ihdr + _png_chunk(b"ABCD", b"") + idat + iend,
+            "reserved-bit": ihdr + _png_chunk(b"abca", b"") + idat + iend,
+            "extra-zlib-stream": ihdr + _png_chunk(b"IDAT", compressed * 2) + iend,
+        }
+        for color_type, depth in ((2, 4), (3, 16), (4, 1), (6, 2), (1, 8)):
+            header = struct.pack(">IIBBBBB", 2, 3, depth, color_type, 0, 0, 0)
+            malformed[f"color-{color_type}-depth-{depth}"] = (
+                _png_chunk(b"IHDR", header) + idat + iend
+            )
+        for name, chunks in malformed.items():
+            with self.subTest(name=name):
+                path = self.root / "screenshots" / f"populated_light_{name}.png"
+                path.parent.mkdir(exist_ok=True)
+                path.write_bytes(signature + chunks)
+                self.assertIsNone(design_contract.read_png_dimensions(path))
+
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root, self.root / "screenshots", require_state_matrix=True
+        )
+        self.assertEqual([], paths)
+        self.assertEqual(len(malformed), sum(
+            item.rule == "INVALID_SCREENSHOT_PNG" for item in findings
+        ))
+        self.assertEqual(8, sum(
+            item.rule == "MISSING_STATE_SCREENSHOT" for item in findings
+        ))
+
+    def test_png_dimensions_accept_legal_depths_and_validate_palettes(self) -> None:
+        signature = b"\x89PNG\r\n\x1a\n"
+        path = self.root / "image.png"
+        depths = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8),
+                  4: (8, 16), 6: (8, 16)}
+        samples = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+        for color_type, allowed in depths.items():
+            for depth in allowed:
+                with self.subTest(color_type=color_type, depth=depth):
+                    header = _png_chunk(b"IHDR", struct.pack(
+                        ">IIBBBBB", 3, 5, depth, color_type, 0, 0, 0
+                    ))
+                    palette = _png_chunk(b"PLTE", b"\x00\x00\x00") if color_type == 3 else b""
+                    row_bytes = (3 * samples[color_type] * depth + 7) // 8
+                    raw = b"".join(bytes([filter_type]) + b"\x00" * row_bytes
+                                   for filter_type in range(5))
+                    compressed = zlib.compress(raw)
+                    # Contiguous IDAT chunks and ancillary metadata are legal.
+                    image = (header + palette + _png_chunk(b"IDAT", compressed[:4])
+                             + _png_chunk(b"IDAT", compressed[4:])
+                             + _png_chunk(b"tEXt", b"key\x00value") + _png_chunk(b"IEND", b""))
+                    path.write_bytes(signature + image)
+                    self.assertEqual((3, 5), design_contract.read_png_dimensions(path))
+
+        indexed_header = _png_chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 1, 3, 0, 0, 0))
+        idat = _png_chunk(b"IDAT", zlib.compress(b"\x00\x00"))
+        iend = _png_chunk(b"IEND", b"")
+        for palette in (b"", _png_chunk(b"PLTE", b""), _png_chunk(b"PLTE", b"\x00"),
+                        _png_chunk(b"PLTE", b"\x00" * 9),
+                        _png_chunk(b"PLTE", b"\x00" * 3) * 2):
+            with self.subTest(palette=palette):
+                path.write_bytes(signature + indexed_header + palette + idat + iend)
+                self.assertIsNone(design_contract.read_png_dimensions(path))
+
+    def test_png_dimensions_validate_adam7_scanlines(self) -> None:
+        path = self.root / "interlaced.png"
+        for width, height in ((1, 1), (2, 3), (8, 8)):
+            with self.subTest(width=width, height=height):
+                raw = _adam7_raw(width, height, 3)
+                path.write_bytes(_scanline_png(width, height, color_type=2, interlace=1))
+                self.assertEqual((width, height), design_contract.read_png_dimensions(path))
+                for invalid in (raw[:-1], raw + b"\x00", b"\x05" + raw[1:]):
+                    path.write_bytes(_png_with_idat(
+                        width, height, zlib.compress(invalid), color_type=2, interlace=1
+                    ))
+                    self.assertIsNone(design_contract.read_png_dimensions(path))
+
+    def test_jev_uses_box_only_when_noul_clears_threshold(self) -> None:
+        screenshot = self._write_png("screenshots/workout_populated_dark.png")
+        response_body = {
+            "answers": {
+                "has_text_truncation": {"value": 0.84},
+                "truncation_box": {"boxes": [412, 118, 446, 360]},
+                "has_control_collision": 0.2,
+                "collision_box": {"box": [1, 2, 3, 4]},
+                "has_unreadable_contrast": {"value": 0.7},
+                "contrast_box": {"box": [5, 6, 7, 8]},
+            }
+        }
+        response = mock.Mock(status=200)
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read = mock.Mock(
+            return_value=json.dumps(response_body).encode("utf-8")
+        )
+
+        with mock.patch.object(
+            design_contract.urllib.request, "urlopen", return_value=response
+        ) as urlopen:
+            violations, advisory = design_contract.scan_screenshots_with_jev(
+                self.root, [screenshot], "http://jev.test/v1/systemone"
+            )
+
+        self.assertEqual([], advisory)
+        self.assertEqual(
+            {"UI_TEXT_TRUNCATION_BOX", "UI_UNREADABLE_CONTRAST_BOX"},
+            {item.rule for item in violations},
+        )
+        request = urlopen.call_args.args[0]
+        self.assertEqual("POST", request.get_method())
+        payload = json.loads(request.data)
+        self.assertTrue(payload["state"]["image"].startswith("data:image/png;base64,"))
+
+    def test_jev_advisory_failure_is_reported_without_changing_ok(self) -> None:
+        self._write("docs/design-contract.md", self._valid_contract())
+        self._write_png("screenshots/workout_populated_dark.png")
+
+        with mock.patch.object(
+            design_contract.urllib.request,
+            "urlopen",
+            side_effect=OSError("service unavailable"),
+        ):
+            with captured_output() as (stdout, stderr):
+                status = design_contract.main(
+                    [
+                        "--root",
+                        str(self.root),
+                        "--screenshot-dir",
+                        "screenshots",
+                        "--jev-url",
+                        "http://jev.test/v1/systemone",
+                        "--jev-mode",
+                        "advisory",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(0, status)
+        self.assertEqual("", stderr.getvalue())
+        report = json.loads(stdout.getvalue())
+        self.assertTrue(report["ok"])
+        self.assertEqual(
+            "JEV_VISION_UNAVAILABLE",
+            report["advisory_violations"][0]["rule"],
+        )
+
+    def test_jev_rejects_missing_nonfinite_and_out_of_range_scores(self) -> None:
+        screenshot = self._write_png("screenshots/workout_populated_dark.png")
+        for invalid in (None, {"value": float("nan")}, {"value": float("inf")},
+                        {"value": -0.1}, {"value": 1.1}):
+            response_body = {"answers": {
+                "has_text_truncation": invalid,
+                "has_control_collision": 0.2,
+                "has_unreadable_contrast": 0.2,
+            }}
+            response = mock.Mock(status=200)
+            response.__enter__ = mock.Mock(return_value=response)
+            response.__exit__ = mock.Mock(return_value=False)
+            response.read = mock.Mock(
+                return_value=json.dumps(response_body, allow_nan=True).encode("utf-8")
+            )
+            with mock.patch.object(
+                design_contract.urllib.request, "urlopen", return_value=response
+            ):
+                violations, advisory = design_contract.scan_screenshots_with_jev(
+                    self.root, [screenshot], "http://jev.test/v1/systemone"
+                )
+
+            self.assertEqual([], advisory)
+            self.assertEqual("JEV_VISION_UNAVAILABLE", violations[0].rule)
+            self.assertIn("invalid score for has_text_truncation", violations[0].snippet)
+
+    def test_jev_rejects_invalid_thresholds_before_requests(self) -> None:
+        screenshot = self._write_png("screenshots/workout_populated_dark.png")
+        for threshold in (float("nan"), float("inf"), -float("inf"), -0.1, 1.1):
+            for mode in ("gate", "advisory"):
+                for paths in ([screenshot], []):
+                    with self.subTest(threshold=threshold, mode=mode, paths=paths):
+                        with mock.patch.object(design_contract.urllib.request, "urlopen") as request:
+                            with self.assertRaisesRegex(ValueError, "jev_threshold must be finite"):
+                                design_contract.scan_screenshots_with_jev(
+                                    self.root, paths, "http://jev.test/v1/systemone",
+                                    jev_threshold=threshold, jev_mode=mode,
+                                )
+                            request.assert_not_called()
+
+        for threshold in ("nan", "inf", "-inf", "-0.1", "1.1"):
+            with self.subTest(cli_threshold=threshold):
+                with captured_output() as (stdout, stderr):
+                    with self.assertRaises(SystemExit) as exit_status:
+                        design_contract.main([f"--jev-threshold={threshold}"])
+                self.assertEqual(2, exit_status.exception.code)
+                self.assertEqual("", stdout.getvalue())
+                self.assertIn("Jev threshold must be finite and between 0 and 1", stderr.getvalue())
+
+    def test_jev_threshold_probability_boundaries_detect_defects(self) -> None:
+        screenshot = self._write_png("screenshots/workout_populated_dark.png")
+        response = {"answers": {
+            "has_text_truncation": {"value": 1.0},
+            "truncation_box": {"box": [1, 2, 3, 4]},
+            "has_control_collision": 0.0,
+            "has_unreadable_contrast": 0.0,
+        }}
+        for threshold in (0.0, 1.0):
+            with self.subTest(threshold=threshold):
+                self.assertEqual(threshold, design_contract._build_parser().parse_args(
+                    ["--jev-threshold", str(threshold)]
+                ).jev_threshold)
+                with mock.patch.object(design_contract, "_jev_request", return_value=response):
+                    violations, advisory = design_contract.scan_screenshots_with_jev(
+                        self.root, [screenshot], "http://jev.test/v1/systemone",
+                        jev_threshold=threshold,
+                    )
+                self.assertEqual([], advisory)
+                self.assertIn("UI_TEXT_TRUNCATION_BOX", {item.rule for item in violations})
 
 
 if __name__ == "__main__":
