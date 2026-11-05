@@ -70,60 +70,7 @@ def read_png_dimensions(path: Path) -> Optional[tuple[int, int]]:
         data = path.read_bytes()
     except OSError:
         return None
-    signature = b"\x89PNG\r\n\x1a\n"
-    if len(data) < len(signature) or data[:8] != signature:
-        return None
-
-    offset = len(signature)
-    chunks: list[tuple[bytes, bytes]] = []
-    while offset < len(data):
-        if len(data) - offset < 12:
-            return None
-        length = struct.unpack(">I", data[offset : offset + 4])[0]
-        end = offset + 12 + length
-        if end > len(data):
-            return None
-        chunk_type = data[offset + 4 : offset + 8]
-        chunk_data = data[offset + 8 : offset + 8 + length]
-        stored_crc = struct.unpack(">I", data[offset + 8 + length : end])[0]
-        if zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != stored_crc:
-            return None
-        chunks.append((chunk_type, chunk_data))
-        offset = end
-
-    if not chunks or chunks[0][0] != b"IHDR" or len(chunks[0][1]) != 13:
-        return None
-    if chunks[-1][0] != b"IEND" or len(chunks[-1][1]) != 0:
-        return None
-    if b"IDAT" not in {chunk_type for chunk_type, _ in chunks}:
-        return None
-    try:
-        width, height, bit_depth, color_type, compression, filter_method, interlace = (
-            struct.unpack(">IIBBBBB", chunks[0][1])
-        )
-    except struct.error:
-        return None
-    if (
-        width == 0
-        or height == 0
-        or compression != 0
-        or filter_method != 0
-        or bit_depth not in {1, 2, 4, 8, 16}
-        or color_type not in {0, 2, 3, 4, 6}
-        or interlace not in {0, 1}
-    ):
-        return None
-    compressed = b"".join(
-        chunk_data for chunk_type, chunk_data in chunks if chunk_type == b"IDAT"
-    )
-    decompressor = zlib.decompressobj()
-    try:
-        decompressor.decompress(compressed)
-    except zlib.error:
-        return None
-    if not decompressor.eof or decompressor.unused_data or decompressor.unconsumed_tail:
-        return None
-    return (width, height)
+    return _png_dimensions_from_bytes(data)
 
 
 def audit_screenshot_matrix(
@@ -318,6 +265,8 @@ def scan_screenshots_with_jev(
 ) -> tuple[list[DesignViolation], list[DesignViolation]]:
     """Scan valid screenshots and return gate and advisory violations."""
 
+    if _jev_score(jev_threshold) is None:
+        raise ValueError("jev_threshold must be finite and between 0 and 1")
     root = root.resolve()
     violations: list[DesignViolation] = []
     advisory_violations: list[DesignViolation] = []
@@ -653,6 +602,15 @@ def scan_ui_sources(
     return findings
 
 
+def _jev_threshold_argument(value: str) -> float:
+    score = _jev_score(value)
+    if score is None:
+        raise argparse.ArgumentTypeError(
+            "Jev threshold must be finite and between 0 and 1"
+        )
+    return score
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Audit docs/design-contract.md and scan UI sources."
@@ -667,7 +625,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--jev-url",
         default=os.environ.get("DESIGN_CONTRACT_JEV_URL", ""),
     )
-    parser.add_argument("--jev-threshold", type=float, default=0.65)
+    parser.add_argument("--jev-threshold", type=_jev_threshold_argument, default=0.65)
     parser.add_argument(
         "--jev-mode", choices=("off", "advisory", "gate"), default="off"
     )
@@ -740,7 +698,7 @@ def _png_chunk(payload: bytes, offset: int) -> Optional[tuple[bytes, bytes, int]
     actual = struct.unpack_from(">I", payload, data_end)[0]
     if actual != expected:
         return None
-    if not re.fullmatch(rb"[A-Za-z]{4}", chunk_type):
+    if not re.fullmatch(rb"[A-Za-z]{4}", chunk_type) or chunk_type[2] & 0x20:
         return None
     return chunk_type, data, crc_end
 
@@ -791,26 +749,46 @@ def _png_image_byte_count(
     return total
 
 
-def _zlib_exact(payload: bytes, expected: int) -> bool:
+def _png_scanlines_valid(
+    payload: bytes,
+    expected: int,
+    ihdr: tuple[int, int, int, int, int],
+) -> bool:
     decompressor = zlib.decompressobj()
     try:
-        produced = decompressor.decompress(payload, expected)
+        produced = decompressor.decompress(payload, expected + 1)
     except zlib.error:
         return False
-    if len(produced) != expected or decompressor.unconsumed_tail:
+    if (
+        len(produced) != expected
+        or decompressor.unconsumed_tail
+        or decompressor.unused_data
+        or not decompressor.eof
+    ):
         return False
-    try:
-        remainder = decompressor.flush()
-    except zlib.error:
-        return False
-    return (
-        remainder == b""
-        and not decompressor.unused_data
-        and decompressor.eof
-    )
+    width, height, bit_depth, color_type, interlace = ihdr
+    samples = _PNG_SAMPLES[color_type]
+    passes = ((0, 0, 1, 1),) if interlace == 0 else _ADAM7_PASSES
+    offset = 0
+    for origin_x, origin_y, step_x, step_y in passes:
+        if origin_x >= width or origin_y >= height:
+            continue
+        pass_width = (width - origin_x + step_x - 1) // step_x
+        pass_height = (height - origin_y + step_y - 1) // step_y
+        row_bytes = _png_scanline_bytes(pass_width, samples, bit_depth)
+        for _ in range(pass_height):
+            if produced[offset] > 4:
+                return False
+            offset += row_bytes
+    return offset == len(produced)
 
 
 def _png_width_from_bytes(payload: bytes) -> Optional[int]:
+    dimensions = _png_dimensions_from_bytes(payload)
+    return dimensions[0] if dimensions is not None else None
+
+
+def _png_dimensions_from_bytes(payload: bytes) -> Optional[tuple[int, int]]:
     if len(payload) < 8 or payload[:8] != _PNG_SIGNATURE:
         return None
     offset = 8
@@ -841,11 +819,11 @@ def _png_width_from_bytes(payload: bytes) -> Optional[int]:
             expected = _png_image_byte_count(
                 width, height, samples, bit_depth, interlace
             )
-            if expected is None or not _zlib_exact(bytes(idat), expected):
+            if expected is None or not _png_scanlines_valid(bytes(idat), expected, ihdr):
                 return None
-            return width
+            return width, height
         if chunk_type == b"IDAT":
-            if idat_closed:
+            if idat_closed or (ihdr[3] == 3 and not seen_plte):
                 return None
             idat_started = True
             idat.extend(data)
@@ -853,7 +831,16 @@ def _png_width_from_bytes(payload: bytes) -> Optional[int]:
         if idat_started:
             idat_closed = True
         if chunk_type == b"PLTE":
-            if seen_plte or idat_started:
+            bit_depth, color_type = ihdr[2:4]
+            if (
+                seen_plte
+                or idat_started
+                or color_type in (0, 4)
+                or not data
+                or len(data) % 3
+                or len(data) > 768
+                or (color_type == 3 and len(data) // 3 > 1 << bit_depth)
+            ):
                 return None
             seen_plte = True
             continue
