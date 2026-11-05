@@ -1,5 +1,20 @@
 # Trusted repository rules input
 
+## Local Magpie routing
+
+The review wrappers keep their existing provider defaults unless these optional
+settings are present. `REVIEW_GATEWAY_URL` enables the Codex Magpie provider
+configuration; its model defaults to `group/reviewing` and can be overridden
+with `REVIEW_MODEL_GROUP`. `REVIEW_MODEL_GROUP` alone selects a Codex model
+group without configuring a gateway. Kimi accepts the equivalent
+`KIMI_MODEL_GROUP` (which takes precedence over `REVIEW_MODEL_GROUP`) and
+`KIMI_LAUNCHER` can prefix the Kimi CLI invocation for a local gateway wrapper.
+
+When `REVIEW_SERVED_MODEL` is set, both wrappers pass it to `verdict.py` as
+`--served-model`; the rendered footer attributes the review to that served
+model after escaping mentions, HTML and code fences. With no routing or served
+model variables, command arguments and rendered output remain unchanged.
+
 The Codex and Kimi review wrappers read the selected rules file from the exact
 `BASE_SHA` Git commit, not the checkout, index, PR head or linked documents.
 `rules-file` / `REVIEW_RULES_FILE` selects a repository-root-relative path;

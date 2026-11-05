@@ -14,6 +14,7 @@
 # Optional: CODEX_BIN, CODEX_LAUNCHER (trusted base-tree argv prefix; receives CODEX_BIN and
 # the exec arguments and inserts `exec` itself), REVIEW_RULES_FILE, REVIEW_MAX_BYTES,
 # REVIEW_MARKER, CODEX_REVIEW_HOME, OWNER_DECISION_USER_ID (numeric Owner ID;
+# REVIEW_GATEWAY_URL, REVIEW_MODEL_GROUP, REVIEW_SERVED_MODEL,
 # empty/unset disables PR-scoped 'Owner decision:' comments).
 set -uo pipefail
 
@@ -32,8 +33,13 @@ trap 'rm -rf "$WORK"' EXIT
 
 fail_closed() {
     local body
-    body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
-        --head "$HEAD_SHA" --unavailable "$1")"
+    if [ -n "${REVIEW_SERVED_MODEL:-}" ]; then
+        body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
+            --head "$HEAD_SHA" --served-model "$REVIEW_SERVED_MODEL" --unavailable "$1")"
+    else
+        body="$(python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
+            --head "$HEAD_SHA" --unavailable "$1")"
+    fi
     post_sticky "$MARKER" "$body"
     echo "[codex-review] fail closed: $1" >&2
     exit 1
@@ -120,6 +126,15 @@ else
 
     EXEC_ARGS=(--output-schema "$REVIEW_DIR/verdict.schema.json" -o "$WORK/verdict.json"
         --skip-git-repo-check -c sandbox_mode=read-only -c approval_policy=never -)
+    if [ -n "${REVIEW_GATEWAY_URL:-}" ]; then
+        EXEC_ARGS+=(-c "model=${REVIEW_MODEL_GROUP:-group/reviewing}"
+            -c 'model_provider=magpie'
+            -c 'model_providers.magpie.name=Magpie'
+            -c "model_providers.magpie.base_url=$REVIEW_GATEWAY_URL"
+            -c 'model_providers.magpie.wire_api=responses')
+    elif [ -n "${REVIEW_MODEL_GROUP:-}" ]; then
+        EXEC_ARGS+=(-c "model=$REVIEW_MODEL_GROUP")
+    fi
     if [ -n "${CODEX_LAUNCHER:-}" ]; then
         # Trusted base-tree launcher (e.g. a local provider router). Contract:
         # `LAUNCHER CODEX_BIN <exec args>`; the launcher inserts `exec` itself.
@@ -136,9 +151,16 @@ else
     fi
 fi
 
-python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
-    --head "$HEAD_SHA" --scope-file "$WORK/scope.json" --round-file "$WORK/round.json" \
-    --record-file "$WORK/effective-verdict.json" "$WORK/verdict.json" >"$WORK/body"
+if [ -n "${REVIEW_SERVED_MODEL:-}" ]; then
+    python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
+        --head "$HEAD_SHA" --scope-file "$WORK/scope.json" --round-file "$WORK/round.json" \
+        --record-file "$WORK/effective-verdict.json" --served-model "$REVIEW_SERVED_MODEL" \
+        "$WORK/verdict.json" >"$WORK/body"
+else
+    python3 -B "$REVIEW_DIR/verdict.py" --tool codex --mode gate --marker "$MARKER" \
+        --head "$HEAD_SHA" --scope-file "$WORK/scope.json" --round-file "$WORK/round.json" \
+        --record-file "$WORK/effective-verdict.json" "$WORK/verdict.json" >"$WORK/body"
+fi
 STATUS=$?
 python3 -I -B "$REVIEW_DIR/round_state.py" finish "$WORK" \
     || fail_closed "Review round record preparation failed."
