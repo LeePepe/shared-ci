@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import os
 import re
 import struct
 import sys
 import zlib
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional, Sequence
@@ -56,6 +60,250 @@ class DesignViolation:
     line: int
     rule: str
     snippet: str
+
+
+def read_png_dimensions(path: Path) -> Optional[tuple[int, int]]:
+    """Return physical PNG dimensions when the file has a valid PNG header."""
+
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if (
+        len(data) < 24
+        or data[:8] != b"\x89PNG\r\n\x1a\n"
+        or data[12:16] != b"IHDR"
+    ):
+        return None
+    try:
+        width, height = struct.unpack(">II", data[16:24])
+    except struct.error:
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def audit_screenshot_matrix(
+    root: Path,
+    screenshot_dir: Path,
+    *,
+    require_state_matrix: bool = False,
+) -> tuple[list[Path], list[DesignViolation]]:
+    """Validate screenshot paths, PNG headers, and optional state coverage."""
+
+    root = root.resolve()
+    if not screenshot_dir.is_absolute():
+        screenshot_dir = root / screenshot_dir
+    resolved_dir = screenshot_dir.resolve()
+    try:
+        resolved_dir.relative_to(root)
+    except ValueError:
+        return [], [
+            DesignViolation(
+                path=resolved_dir.as_posix(),
+                line=0,
+                rule="SCREENSHOT_PATH_OUTSIDE_ROOT",
+                snippet=f"screenshot directory must be inside root: {screenshot_dir}",
+            )
+        ]
+
+    if not resolved_dir.is_dir():
+        return [], [
+            DesignViolation(
+                path=_relative_path(root, resolved_dir),
+                line=0,
+                rule="SCREENSHOT_PATH_MISSING",
+                snippet=f"screenshot directory is not a directory: {screenshot_dir}",
+            )
+        ]
+
+    valid_paths: list[Path] = []
+    violations: list[DesignViolation] = []
+    for path in sorted(resolved_dir.rglob("*")):
+        if not path.is_file() or path.suffix.casefold() != ".png":
+            continue
+        if read_png_dimensions(path) is None:
+            violations.append(
+                DesignViolation(
+                    path=_relative_path(root, path),
+                    line=0,
+                    rule="INVALID_SCREENSHOT_PNG",
+                    snippet="PNG signature or IHDR dimensions are invalid",
+                )
+            )
+            continue
+        valid_paths.append(path)
+
+    if require_state_matrix:
+        tokens_by_name = {
+            path: set(re.findall(r"[a-z0-9]+", path.stem.casefold()))
+            for path in valid_paths
+        }
+        for state in REQUIRED_STATES:
+            for appearance in ("light", "dark"):
+                if not any(
+                    state in tokens and appearance in tokens
+                    for tokens in tokens_by_name.values()
+                ):
+                    violations.append(
+                        DesignViolation(
+                            path=_relative_path(root, resolved_dir),
+                            line=0,
+                            rule="MISSING_STATE_SCREENSHOT",
+                            snippet=(
+                                f"missing screenshot for state={state} "
+                                f"appearance={appearance}"
+                            ),
+                        )
+                    )
+    return valid_paths, violations
+
+
+_JEV_CHECKS = (
+    (
+        "has_text_truncation",
+        "truncation_box",
+        "UI_TEXT_TRUNCATION_BOX",
+        "truncated or clipped UI text",
+    ),
+    (
+        "has_control_collision",
+        "collision_box",
+        "UI_CONTROL_COLLISION_BOX",
+        "overlapping or colliding UI controls",
+    ),
+    (
+        "has_unreadable_contrast",
+        "contrast_box",
+        "UI_UNREADABLE_CONTRAST_BOX",
+        "unreadable low-contrast text or icon",
+    ),
+)
+
+
+def _jev_score(answer: object) -> Optional[float]:
+    if isinstance(answer, dict):
+        answer = answer.get("value")
+    try:
+        return float(answer)
+    except (TypeError, ValueError):
+        return None
+
+
+def _jev_box(answer: object) -> object:
+    if isinstance(answer, dict):
+        if "boxes" in answer:
+            return answer["boxes"]
+        if "box" in answer:
+            return answer["box"]
+    return answer
+
+
+def _jev_request(
+    image_path: Path,
+    jev_url: str,
+    *,
+    source_key: str = "",
+) -> dict[str, object]:
+    image = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    questions: dict[str, dict[str, str]] = {}
+    statements = {
+        "has_text_truncation": (
+            "Visible UI text in this screenshot is unintentionally truncated "
+            "with an ellipsis (...) or clipped by its container boundary."
+        ),
+        "has_control_collision": (
+            "Two or more UI controls, badges, icons, or text labels overlap "
+            "or collide with each other."
+        ),
+        "has_unreadable_contrast": (
+            "Foreground text or iconography is nearly invisible against its "
+            "background surface due to wrong light/dark appearance token binding."
+        ),
+    }
+    for noul_key, box_key, _rule, label in _JEV_CHECKS:
+        questions[noul_key] = {"type": "noul", "statement": statements[noul_key]}
+        questions[box_key] = {"type": "box", "label": label}
+
+    payload = {
+        "model": "microsoft-decision-1",
+        "state": {
+            "image": f"data:image/png;base64,{image}",
+            "context": f"UI screenshot verification for {image_path.name!r}.",
+        },
+        "questions": questions,
+    }
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if source_key:
+        headers["Authorization"] = f"Bearer {source_key}"
+    request = urllib.request.Request(
+        jev_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        if getattr(response, "status", 200) != 200:
+            raise OSError(f"Jev returned HTTP {response.status}")
+        result = json.load(response)
+    if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
+        raise ValueError("Jev response is missing an answers object")
+    return result
+
+
+def scan_screenshots_with_jev(
+    root: Path,
+    screenshot_paths: Sequence[Path],
+    jev_url: str,
+    *,
+    jev_threshold: float = 0.65,
+    jev_mode: str = "gate",
+) -> tuple[list[DesignViolation], list[DesignViolation]]:
+    """Scan valid screenshots and return gate and advisory violations."""
+
+    root = root.resolve()
+    violations: list[DesignViolation] = []
+    advisory_violations: list[DesignViolation] = []
+    source_key = os.environ.get("FALCON_SOURCE_KEY", "")
+    for image_path in screenshot_paths:
+        relative = _relative_path(root, image_path)
+        try:
+            response = _jev_request(image_path, jev_url, source_key=source_key)
+            answers = response["answers"]
+            if not isinstance(answers, dict):
+                raise ValueError("Jev response answers is not an object")
+            for noul_key, box_key, rule, label in _JEV_CHECKS:
+                score = _jev_score(answers.get(noul_key))
+                if score is None or score < jev_threshold:
+                    continue
+                box = _jev_box(answers.get(box_key))
+                finding = DesignViolation(
+                    path=relative,
+                    line=0,
+                    rule=rule,
+                    snippet=f"noul={score:.2f} box={box!r} ({label})",
+                )
+                (violations if jev_mode == "gate" else advisory_violations).append(
+                    finding
+                )
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            json.JSONDecodeError,
+            UnicodeError,
+            urllib.error.URLError,
+        ) as error:
+            finding = DesignViolation(
+                path=relative,
+                line=0,
+                rule="JEV_VISION_UNAVAILABLE",
+                snippet=str(error),
+            )
+            (violations if jev_mode == "gate" else advisory_violations).append(
+                finding
+            )
+    return violations, advisory_violations
 
 
 def audit_contract(contract_path: Path) -> list[str]:
@@ -351,6 +599,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--contract", default="docs/design-contract.md")
     parser.add_argument("--ui-path", action="append", default=[])
     parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--screenshot-dir", type=Path, default=None)
+    parser.add_argument("--require-state-matrix", action="store_true")
+    parser.add_argument(
+        "--jev-url",
+        default=os.environ.get("DESIGN_CONTRACT_JEV_URL", ""),
+    )
+    parser.add_argument("--jev-threshold", type=float, default=0.65)
+    parser.add_argument(
+        "--jev-mode", choices=("off", "advisory", "gate"), default="off"
+    )
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--visual", action="store_true")
     parser.add_argument(
@@ -592,14 +850,20 @@ def _report(
     contract_errors: Sequence[str],
     violations: Sequence[DesignViolation],
     visual_errors: Sequence[str] = (),
+    advisory_violations: Optional[Sequence[DesignViolation]] = None,
 ) -> dict[str, object]:
-    return {
+    report: dict[str, object] = {
         "ok": not contract_errors and not violations and not visual_errors,
         "contract": contract_path.as_posix(),
         "contract_errors": list(contract_errors),
         "violations": [asdict(violation) for violation in violations],
         "visual_errors": list(visual_errors),
     }
+    if advisory_violations is not None:
+        report["advisory_violations"] = [
+            asdict(violation) for violation in advisory_violations
+        ]
+    return report
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -626,7 +890,46 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.visual
         else []
     )
-    report = _report(contract_path, contract_errors, violations, visual_errors)
+    screenshot_paths: list[Path] = []
+    advisory_violations: Optional[list[DesignViolation]] = None
+    if args.screenshot_dir is not None:
+        screenshot_paths, screenshot_violations = audit_screenshot_matrix(
+            root,
+            root / args.screenshot_dir
+            if not args.screenshot_dir.is_absolute()
+            else args.screenshot_dir,
+            require_state_matrix=args.require_state_matrix,
+        )
+        violations.extend(screenshot_violations)
+    elif args.require_state_matrix or args.jev_mode != "off":
+        violations.append(
+            DesignViolation(
+                path=".",
+                line=0,
+                rule="SCREENSHOT_PATH_MISSING",
+                snippet="--screenshot-dir is required for screenshot checks",
+            )
+        )
+
+    if args.jev_mode != "off" and screenshot_paths:
+        jev_violations, advisory_violations = scan_screenshots_with_jev(
+            root,
+            screenshot_paths,
+            args.jev_url,
+            jev_threshold=args.jev_threshold,
+            jev_mode=args.jev_mode,
+        )
+        violations.extend(jev_violations)
+    elif args.jev_mode == "advisory":
+        advisory_violations = []
+
+    report = _report(
+        contract_path,
+        contract_errors,
+        violations,
+        visual_errors,
+        advisory_violations,
+    )
 
     if args.as_json:
         sys.stdout.write(json.dumps(report, indent=2) + "\n")
@@ -642,7 +945,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         for error in visual_errors:
             sys.stderr.write(f"design contract: {error}\n")
-    return 0 if not contract_errors and not violations and not visual_errors else 1
+    return 0 if report["ok"] else 1
 
 
 if __name__ == "__main__":

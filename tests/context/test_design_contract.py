@@ -13,6 +13,7 @@ import tempfile
 import unittest
 import zlib
 from typing import Iterator
+from unittest import mock
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -123,6 +124,19 @@ populated, empty, loading, error
 ## Redlines & CI gate
 No raw colors.
 """
+
+    def _write_png(
+        self, relative: str, width: int = 2, height: int = 3
+    ) -> pathlib.Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + b"\x00\x00\x00\x0dIHDR"
+            + width.to_bytes(4, "big")
+            + height.to_bytes(4, "big")
+        )
+        return path
 
     def test_template_passes_contract_audit(self) -> None:
         errors = design_contract.audit_contract(REPO / "templates/design-contract.md")
@@ -399,6 +413,103 @@ No raw colors.
         self.assertTrue(any("missing snapshot: populated/dark" in error for error in errors))
         self.assertFalse(
             any("screen-populated-light.png" in error and "invalid PNG" in error for error in errors)
+        )
+
+    def test_screenshot_matrix_validates_pngs_and_required_combinations(self) -> None:
+        self._write_png("screenshots/workout_populated_light.png")
+        self._write_png("screenshots/workout_populated_dark.png")
+        self._write("screenshots/workout_empty_light.png", "not a png")
+
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root,
+            self.root / "screenshots",
+            require_state_matrix=True,
+        )
+
+        self.assertEqual(2, len(paths))
+        self.assertIn(
+            ("screenshots/workout_empty_light.png", "INVALID_SCREENSHOT_PNG"),
+            {(item.path, item.rule) for item in findings},
+        )
+        missing = [item for item in findings if item.rule == "MISSING_STATE_SCREENSHOT"]
+        self.assertEqual(6, len(missing))
+
+    def test_screenshot_matrix_rejects_directory_outside_root(self) -> None:
+        paths, findings = design_contract.audit_screenshot_matrix(
+            self.root,
+            pathlib.Path(tempfile.gettempdir()),
+        )
+
+        self.assertEqual([], paths)
+        self.assertEqual("SCREENSHOT_PATH_OUTSIDE_ROOT", findings[0].rule)
+
+    def test_jev_uses_box_only_when_noul_clears_threshold(self) -> None:
+        screenshot = self._write_png("screenshots/workout_populated_dark.png")
+        response_body = {
+            "answers": {
+                "has_text_truncation": {"value": 0.84},
+                "truncation_box": {"boxes": [412, 118, 446, 360]},
+                "has_control_collision": 0.2,
+                "collision_box": {"box": [1, 2, 3, 4]},
+                "has_unreadable_contrast": {"value": 0.7},
+                "contrast_box": {"box": [5, 6, 7, 8]},
+            }
+        }
+        response = mock.Mock(status=200)
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read = mock.Mock(
+            return_value=json.dumps(response_body).encode("utf-8")
+        )
+
+        with mock.patch.object(
+            design_contract.urllib.request, "urlopen", return_value=response
+        ) as urlopen:
+            violations, advisory = design_contract.scan_screenshots_with_jev(
+                self.root, [screenshot], "http://jev.test/v1/systemone"
+            )
+
+        self.assertEqual([], advisory)
+        self.assertEqual(
+            {"UI_TEXT_TRUNCATION_BOX", "UI_UNREADABLE_CONTRAST_BOX"},
+            {item.rule for item in violations},
+        )
+        request = urlopen.call_args.args[0]
+        self.assertEqual("POST", request.get_method())
+        payload = json.loads(request.data)
+        self.assertTrue(payload["state"]["image"].startswith("data:image/png;base64,"))
+
+    def test_jev_advisory_failure_is_reported_without_changing_ok(self) -> None:
+        self._write("docs/design-contract.md", self._valid_contract())
+        self._write_png("screenshots/workout_populated_dark.png")
+
+        with mock.patch.object(
+            design_contract.urllib.request,
+            "urlopen",
+            side_effect=OSError("service unavailable"),
+        ):
+            with captured_output() as (stdout, stderr):
+                status = design_contract.main(
+                    [
+                        "--root",
+                        str(self.root),
+                        "--screenshot-dir",
+                        "screenshots",
+                        "--jev-url",
+                        "http://jev.test/v1/systemone",
+                        "--jev-mode",
+                        "advisory",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(0, status)
+        self.assertEqual("", stderr.getvalue())
+        report = json.loads(stdout.getvalue())
+        self.assertTrue(report["ok"])
+        self.assertEqual(
+            "JEV_VISION_UNAVAILABLE",
+            report["advisory_violations"][0]["rule"],
         )
 
 

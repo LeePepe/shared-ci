@@ -49,3 +49,17 @@ Every required page and major component covers all four states:
   ```
 
 The gate must pass before a UI change is accepted.
+
+For rendered UI checks, keep PNG screenshots under the repository root and
+optionally require all `populated`, `empty`, `loading`, and `error` states in
+both `light` and `dark` appearances:
+
+```sh
+python3 .shared-ci/scripts/context/design_contract.py \
+  --root . --screenshot-dir artifacts/screenshots \
+  --require-state-matrix
+```
+
+Jev `Noul + Box` checks are opt-in. Use `--jev-mode advisory` to report
+findings without failing the gate, or `--jev-mode gate` to fail closed when
+the service is unavailable or a visual defect is detected.
