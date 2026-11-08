@@ -21,9 +21,15 @@ on:
       rules-file:
         type: string
         default: ""
+      owner-user-id:
+        description: >-
+          Numeric GitHub user ID of the human Owner account (never an App/bot account)
+          whose PR-scoped 'Owner decision:' comments are trusted review input; empty disables.
+        type: string
+        default: ""
       max-diff-bytes:
         type: number
-        default: 80000
+        default: 40000
       timeout-minutes:
         type: number
         default: 12
@@ -35,7 +41,7 @@ permissions:
 jobs:
   kimi-execute:
     name: Kimi advisory execution (not the completion check)
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     continue-on-error: true
@@ -105,6 +111,7 @@ jobs:
           KIMI_BIN: ${{ inputs.kimi-bin }}
           KIMI_MODEL: ${{ inputs.kimi-model }}
           REVIEW_RULES_FILE: ${{ inputs.rules-file }}
+          OWNER_DECISION_USER_ID: ${{ inputs.owner-user-id }}
           REVIEW_MAX_BYTES: ${{ inputs.max-diff-bytes }}
         run: bash .shared-ci/scripts/review/kimi-review.sh
 

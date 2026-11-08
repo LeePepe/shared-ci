@@ -47,13 +47,17 @@ the review job **skipped**, with an unavailable warning, step summary and sticky
 PR comment. Later review failures report **unavailable**, never pass, in the
 warning, summary and comment (when publication is possible). Neither case fails
 the workflow or blocks merge; a successful availability probe is not a review.
-The probe and wrapper run in the same execution job. The final `kimi-review`
+The probe and wrapper run in the same execution job, which skips Draft PRs (`!github.event.pull_request.draft`). The final `kimi-review`
 check runs only when that wrapper emits `completed=true` after validating an
-actual model verdict (pass or advisory findings). Missing CLI, later unavailable
+actual model verdict (pass or advisory findings), skipping a PR that already has
+a completed sticky review (once-per-PR quota guard, unless `KIMI_FORCE_RERUN=1`),
+or skipping a docs-only (`*.md`) diff. Missing CLI, later unavailable
 results and empty diffs leave that check skipped, even if the advisory execution
 job exits zero. A CLI disappearing after the probe cannot produce a successful
 review check. Comment publication remains best-effort; no caller input,
-permission or required Codex gate changes are needed.
+permission or required Codex gate changes are needed. Kimi uses `--unified=15`,
+a default 40,000-byte diff budget, `KIMI_MAX_ATTEMPTS=1`, and best-effort
+`--owner-file` / `--scope-file` prompt inputs.
 
 ## Directory-mode adoption
 
@@ -243,8 +247,7 @@ Codex optionally consumes PR issue comments as trusted, PR-scoped decisions.
 Set the reusable workflow's `owner-user-id` to the Owner's numeric GitHub user ID
 through trusted caller configuration (`OWNER_DECISION_USER_ID` for the wrapper).
 The default is empty: no Owner-decision comment read is made (Codex still reads
-its sticky round state). Kimi does not consume these
-decisions. The trusted workflow reads comments at run time with its workflow
+its sticky round state). Kimi consumes these decisions best-effort when `OWNER_DECISION_USER_ID` is set. The trusted workflow reads comments at run time with its workflow
 token; it never executes or reads PR-head code to obtain them.
 
 `owner-user-id` must be a human Owner account, never an App/bot account:
