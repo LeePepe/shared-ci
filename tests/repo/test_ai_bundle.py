@@ -48,6 +48,21 @@ class AIBundleTests(unittest.TestCase):
             "repo-contract.md#repository-development-contract)")
         self.assertIn(protocol, snapshot.replace("<40-char-sha>", pin))
 
+    def test_candidate_protocol_aligns_dev_team_with_m2_m1_steering_model(self):
+        protocol = (REPO / "ai/agent-protocol.md").read_text(encoding="utf-8")
+        section = protocol.split("## 2. Develop against the repository contract\n", 1)[1].split(
+            "\n## 3. ", 1)[0]
+        for expected in (
+                "`M2-Dispatcher` (`m2-dispatcher`) aligns and freezes the Goal",
+                "`M1-Steering` (`team-lead`) coordinates `Writer` and `Reviewer`",
+                "`1 Goal = 1 Branch / 最多 1 PR`, with no standalone `Planner` loop",
+                "`Writer` implements assigned tasks; a spec gap returns through `M1-Steering`.",
+                "a Dev Team Goal/Task ledger is not required."):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, section)
+        self.assertNotIn("Planner maps requirements/spec acceptance", section)
+        self.assertNotIn("TL dispatches FS", section)
+
     def test_plan_guidance_keeps_existing_process_and_separate_responsibilities(self):
         # Text-contract guards, not proof of an agent's planning behavior.
         text = (REPO / "ai/repo-contract.md").read_text()

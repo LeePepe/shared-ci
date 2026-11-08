@@ -25,12 +25,13 @@ When it conflicts with the repository's own red lines, the stricter rule wins.
   [repository development contract](repo-contract.md#repository-development-contract).
   Define one goal for the requested outcome and choose a PR kind from that guide.
   Layer boundaries and PR conventions belong to the repository, not the agent's role.
-- **Dev Team:** Planner maps requirements/spec acceptance to single-goal tasks,
-  passes the existing spec/plan gate, and TL dispatches FS. FS implements
-  the assigned task; a gap returns through TL to Planner. A task cannot redefine
-  the repository's architecture or PR policy.
+- **Dev Team:** `M2-Dispatcher` (`m2-dispatcher`) aligns and freezes the Goal
+  spec, and `M1-Steering` (`team-lead`) coordinates `Writer` and `Reviewer`
+  slices (`1 Goal = 1 Branch / 最多 1 PR`, with no standalone `Planner` loop).
+  `Writer` implements assigned tasks; a spec gap returns through `M1-Steering`.
+  A task cannot redefine the repository's architecture or PR policy.
 - **Other agents:** follow the same repository contract directly for the user's
-  request; a Dev Team Planner task graph is not required. If repository rules are
+  request; a Dev Team Goal/Task ledger is not required. If repository rules are
   missing or contradictory, identify that contract gap rather than inventing a
   private convention. Existing authorization and review protections still apply.
 - Use `scripts/context/resolve <path> --format layer` and the owning layer's
