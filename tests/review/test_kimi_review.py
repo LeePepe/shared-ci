@@ -3,11 +3,32 @@ and best-effort owner/target-scope wiring in scripts/review/kimi-review.sh."""
 from __future__ import annotations
 
 import json
-import pathlib
 import unittest
 
 import test_review
 from test_review import PASS, REVIEW
+
+
+def _graphql_comments(body: str, *, author: str = "github-actions", editor: str | None = None, edited: bool = False) -> str:
+    node = {
+        "body": body,
+        "author": {"login": author},
+        "editor": {"login": editor} if editor is not None else None,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-02T00:00:00Z" if edited else "2026-01-01T00:00:00Z",
+    }
+    return json.dumps({
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "comments": {
+                        "nodes": [node],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            }
+        }
+    })
 
 
 class KimiReviewQuotaAndSlimTests(unittest.TestCase):
@@ -22,20 +43,8 @@ class KimiReviewQuotaAndSlimTests(unittest.TestCase):
         self.out = self.fixture.out
         self.run_script = self.fixture.run_script
         self.owner_comment = self.fixture.owner_comment
-        # Extend gh stub so `--paginate` body queries return STUB_EXISTING_STICKY when set,
-        # while id queries (`| .id`) continue returning STUB_COMMENT_ID.
-        gh_path = self.tools / "gh"
-        gh_text = gh_path.read_text(encoding="utf-8")
-        gh_text = gh_text.replace(
-            '  *"--paginate"*) echo "${STUB_COMMENT_ID:-}" ;;',
-            '  *"--paginate"*".body // empty"*)\n'
-            '    printf "%s" "${STUB_EXISTING_STICKY:-}"\n'
-            '    ;;\n'
-            '  *"--paginate"*) echo "${STUB_COMMENT_ID:-}" ;;',
-        )
-        gh_path.write_text(gh_text, encoding="utf-8")
 
-    def test_once_per_pr_skips_when_completed_sticky_exists(self):
+    def test_once_per_pr_skips_when_bot_authored_completed_sticky_exists(self):
         for body in (
             "<!-- shared-ci-kimi-review -->\n## kimi advisory review: pass\n\nReviewed head: `abc`\n",
             "<!-- shared-ci-kimi-review -->\n## kimi advisory review: findings\n\nReviewed head: `abc`\n",
@@ -48,7 +57,7 @@ class KimiReviewQuotaAndSlimTests(unittest.TestCase):
                 result, comment = self.run_script(
                     "kimi-review.sh",
                     json.dumps(PASS),
-                    STUB_EXISTING_STICKY=body,
+                    STUB_STATE_JSON=_graphql_comments(body),
                     GITHUB_OUTPUT=str(output_file),
                 )
                 self.assertEqual(0, result.returncode, result.stderr)
@@ -58,7 +67,26 @@ class KimiReviewQuotaAndSlimTests(unittest.TestCase):
                 )
                 self.assertFalse((self.out / "prompt").exists(), "kimi binary must not be invoked")
                 self.assertEqual("", comment, "existing sticky comment must not be overwritten")
-                self.assertIn("completed=true", output_file.read_text(encoding="utf-8").splitlines())
+                self.assertEqual(["completed=false"], output_file.read_text(encoding="utf-8").splitlines())
+
+    def test_once_per_pr_rejects_non_bot_or_human_edited_sticky_comments(self):
+        completed_body = (
+            "<!-- shared-ci-kimi-review -->\n## kimi advisory review: pass\n\nReviewed head: `abc`\n"
+        )
+        for state_json in (
+            _graphql_comments(completed_body, author="malicious-user"),
+            _graphql_comments(completed_body, author="github-actions", editor="malicious-user", edited=True),
+            _graphql_comments(completed_body, author="github-actions", editor=None, edited=True),
+        ):
+            with self.subTest(state_json=state_json):
+                result, comment = self.run_script(
+                    "kimi-review.sh",
+                    json.dumps(PASS),
+                    STUB_STATE_JSON=state_json,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertTrue((self.out / "prompt").exists(), "forged or human-edited sticky must not skip review")
+                self.assertIn("kimi advisory review: pass", comment)
 
     def test_once_per_pr_reruns_when_previous_sticky_was_unavailable_or_forced(self):
         unavailable_body = (
@@ -67,27 +95,26 @@ class KimiReviewQuotaAndSlimTests(unittest.TestCase):
         result, comment = self.run_script(
             "kimi-review.sh",
             json.dumps(PASS),
-            STUB_EXISTING_STICKY=unavailable_body,
+            STUB_STATE_JSON=_graphql_comments(unavailable_body),
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue((self.out / "prompt").exists())
         self.assertIn("kimi advisory review: pass", comment)
 
-        # Force rerun overrides completed sticky guard
         completed_body = (
             "<!-- shared-ci-kimi-review -->\n## kimi advisory review: pass\n\nReviewed head: `abc`\n"
         )
         result, comment = self.run_script(
             "kimi-review.sh",
             json.dumps(PASS),
-            STUB_EXISTING_STICKY=completed_body,
+            STUB_STATE_JSON=_graphql_comments(completed_body),
             KIMI_FORCE_RERUN="1",
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue((self.out / "prompt").exists())
         self.assertIn("kimi advisory review: pass", comment)
 
-    def test_docs_only_diff_skips_kimi_invocation_and_marks_completed(self):
+    def test_docs_only_diff_skips_kimi_invocation_without_claiming_model_completion(self):
         self.repo.git("checkout", "-q", self.base)
         self.repo.write("docs/notes.md", "# Updated documentation\n")
         self.repo.git("add", "docs/notes.md")
@@ -105,7 +132,7 @@ class KimiReviewQuotaAndSlimTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse((self.out / "prompt").exists(), "kimi binary must not be invoked on docs-only diff")
         self.assertIn("No non-documentation code changes; skipped Kimi LLM invocation to conserve quota.", comment)
-        self.assertIn("completed=true", output_file.read_text(encoding="utf-8").splitlines())
+        self.assertEqual(["completed=false"], output_file.read_text(encoding="utf-8").splitlines())
 
     def test_slim_diff_defaults_and_single_attempt(self):
         source = (REVIEW / "kimi-review.sh").read_text(encoding="utf-8")

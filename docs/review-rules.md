@@ -49,10 +49,12 @@ warning, summary and comment (when publication is possible). Neither case fails
 the workflow or blocks merge; a successful availability probe is not a review.
 The probe and wrapper run in the same execution job, which skips Draft PRs (`!github.event.pull_request.draft`). The final `kimi-review`
 check runs only when that wrapper emits `completed=true` after validating an
-actual model verdict (pass or advisory findings), skipping a PR that already has
-a completed sticky review (once-per-PR quota guard, unless `KIMI_FORCE_RERUN=1`),
-or skipping a docs-only (`*.md`) diff. Missing CLI, later unavailable
-results and empty diffs leave that check skipped, even if the advisory execution
+actual model verdict (pass or advisory findings). When the wrapper skips Kimi
+invocation because a bot-authored completed sticky review already exists on the
+PR (once-per-PR quota guard, unless `KIMI_FORCE_RERUN=1`) or because all changed
+files are documentation (`*.md`), it leaves `completed=false` so the completion
+check stays skipped without claiming a fresh model verdict for the head. Missing CLI, later unavailable
+results and empty diffs likewise leave that check skipped, even if the advisory execution
 job exits zero. A CLI disappearing after the probe cannot produce a successful
 review check. Comment publication remains best-effort; no caller input,
 permission or required Codex gate changes are needed. Kimi uses `--unified=15`,
