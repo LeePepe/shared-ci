@@ -927,7 +927,7 @@ exec "$STUB_PYTHON" "$@"
         )
         flaky_kimi.chmod(0o755)
         result, comment = self.run_script(
-            "kimi-review.sh", json.dumps(PASS), KIMI_BIN=str(flaky_kimi)
+            "kimi-review.sh", json.dumps(PASS), KIMI_BIN=str(flaky_kimi), KIMI_MAX_ATTEMPTS="2"
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("2", (self.out / "kimi-attempts").read_text(encoding="utf-8"))
@@ -958,7 +958,7 @@ exec "$STUB_PYTHON" "$@"
             "kimi CLI exited non-zero (exit 17: "
             "HTTP 429 rate limit for token=[redacted] at [path] ＠reviewer ‹b> ´x´)."
         )
-        self.assertEqual("2", (self.out / "kimi-diag-attempts").read_text(encoding="utf-8"))
+        self.assertEqual("1", (self.out / "kimi-diag-attempts").read_text(encoding="utf-8"))
         self.assert_kimi_unavailable(result, comment, expected_reason)
         self.assertIn(expected_reason, comment)
         for surface in (result.stdout, comment, (self.out / "summary").read_text(encoding="utf-8")):

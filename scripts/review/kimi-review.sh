@@ -11,12 +11,12 @@ set -uo pipefail
 
 REVIEW_DIR="${SHARED_CI_DIR:-.}/scripts/review"
 MARKER="${REVIEW_MARKER:-<!-- shared-ci-kimi-review -->}"
-MAX_BYTES="${REVIEW_MAX_BYTES:-80000}"
+MAX_BYTES="${REVIEW_MAX_BYTES:-40000}"
 KIMI_BIN="${KIMI_BIN:-kimi}"
 KIMI_MODEL="${KIMI_MODEL:-${KIMI_MODEL_GROUP:-${REVIEW_MODEL_GROUP:-kimi-code/k3}}}"
-KIMI_MAX_ATTEMPTS="${KIMI_MAX_ATTEMPTS:-2}"
+KIMI_MAX_ATTEMPTS="${KIMI_MAX_ATTEMPTS:-1}"
 case "$KIMI_MAX_ATTEMPTS" in
-    ''|*[!0-9]*|0) KIMI_MAX_ATTEMPTS=2 ;;
+    ''|*[!0-9]*|0) KIMI_MAX_ATTEMPTS=1 ;;
 esac
 
 # Exit 0 is advisory, not proof of model completion. Only a validated model
@@ -62,6 +62,79 @@ trap 'rm -rf "$WORK"' EXIT
 # shellcheck source=scripts/review/sticky.sh
 . "$REVIEW_DIR/sticky.sh" || advisory_unavailable "Review comment helper is unavailable."
 
+if [ "${KIMI_FORCE_RERUN:-}" != "1" ]; then
+    if python3 -I -B -c '
+import json
+import os
+import re
+import subprocess
+import sys
+
+marker = sys.argv[1]
+legacy = "<!-- kimi-advisory-review -->"
+completed = (
+    "kimi advisory review: pass",
+    "kimi advisory review: findings",
+    "## \u2705 Kimi advisory review",
+    "## \u26a0\ufe0f Kimi advisory review",
+    "## \U0001f534 Kimi advisory review",
+)
+bots = {"github-actions", "github-actions[bot]"}
+repo = os.environ.get("BASE_REPO", "")
+pr = os.environ.get("PR_NUMBER", "")
+if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or not re.fullmatch(r"[1-9][0-9]*", pr):
+    sys.exit(1)
+owner, name = repo.split("/", 1)
+query = """query($owner:String!,$name:String!,$number:Int!,$cursor:String) {
+  repository(owner:$owner,name:$name) { pullRequest(number:$number) {
+    comments(first:100,after:$cursor) {
+      nodes { body author { login } editor { login } createdAt updatedAt }
+      pageInfo { hasNextPage endCursor }
+    }
+  } }
+}"""
+cursor, latest = None, None
+while True:
+    args = ["gh", "api", "graphql", "-f", "query=" + query,
+            "-f", "owner=" + owner, "-f", "name=" + name, "-F", "number=" + pr]
+    if cursor:
+        args += ["-f", "cursor=" + cursor]
+    proc = subprocess.run(args, capture_output=True, encoding="utf-8", timeout=60)
+    if proc.returncode != 0:
+        sys.exit(1)
+    data = json.loads(proc.stdout)
+    if data.get("errors"):
+        sys.exit(1)
+    page = data["data"]["repository"]["pullRequest"]["comments"]
+    for comment in page["nodes"]:
+        body = comment.get("body") or ""
+        if marker in body or legacy in body:
+            latest = comment
+    info = page["pageInfo"]
+    if not info["hasNextPage"]:
+        break
+    if not info["endCursor"] or cursor == info["endCursor"]:
+        sys.exit(1)
+    cursor = info["endCursor"]
+if latest is None:
+    sys.exit(1)
+editor = latest.get("editor")
+if ((latest.get("author") or {}).get("login") not in bots
+        or (editor is not None and editor.get("login") not in bots)
+        or (latest.get("createdAt") != latest.get("updatedAt") and editor is None)):
+    sys.exit(1)
+body = latest.get("body") or ""
+if "unavailable" in body.lower():
+    sys.exit(1)
+if any(token in body for token in completed):
+    sys.exit(0)
+sys.exit(1)
+' "$MARKER" >/dev/null 2>&1; then
+        echo "[kimi-review] PR #$PR_NUMBER already has a completed Kimi review; skipping per once-per-PR quota policy."
+        exit 0
+    fi
+fi
+
 command -v "$KIMI_BIN" >/dev/null 2>&1 || advisory_unavailable "kimi CLI is not installed on the runner."
 git fetch --no-tags --depth=200 origin "$BASE_SHA" "$HEAD_SHA" >/dev/null 2>&1 \
     || advisory_unavailable "Could not fetch the exact PR revisions."
@@ -70,17 +143,41 @@ python3 -B "$REVIEW_DIR/rules_input.py" "$BASE_SHA" "${REVIEW_RULES_FILE:-AGENTS
     || advisory_unavailable "Trusted-base repository rules are missing or invalid."
 
 PROMPT_ARGS=(--rules-file "$WORK/rules")
-if python3 -I -B "$REVIEW_DIR/pr_text.py" >"$WORK/pr"; then
+if python3 -I -B "$REVIEW_DIR/owner_decisions.py" >"$WORK/owner" 2>/dev/null; then
+    PROMPT_ARGS+=(--owner-file "$WORK/owner")
+fi
+PR_OK=0
+if python3 -I -B "$REVIEW_DIR/pr_text.py" --record-file "$WORK/pr.json" >"$WORK/pr" 2>/dev/null; then
+    PROMPT_ARGS+=(--pr-file "$WORK/pr")
+    PR_OK=1
+elif python3 -I -B "$REVIEW_DIR/pr_text.py" >"$WORK/pr" 2>/dev/null; then
     PROMPT_ARGS+=(--pr-file "$WORK/pr")
 fi
 
-git diff --no-ext-diff --find-renames --unified=40 "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
+git diff --no-ext-diff --find-renames --unified=15 "$BASE_SHA...$HEAD_SHA" >"$WORK/diff" 2>/dev/null \
     || advisory_unavailable "Could not compute the PR diff."
 git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$WORK/changed" 2>/dev/null || true
 [ -s "$WORK/changed" ] || { post_sticky "$MARKER" "$MARKER
 ## kimi advisory review: pass
 
 No committed diff." || true; exit 0; }
+if ! grep -vqE '\.md$' "$WORK/changed"; then
+    post_sticky "$MARKER" "$MARKER
+## kimi advisory review: pass
+
+Reviewed head: \`$HEAD_SHA\`
+
+No non-documentation code changes; skipped Kimi LLM invocation to conserve quota.
+
+<sub>Advisory only: this check never blocks merge.</sub>" || true
+    echo "[kimi-review] docs-only diff; skipped Kimi LLM invocation to conserve quota"
+    exit 0
+fi
+if [ "$PR_OK" -eq 1 ] && git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" >"$WORK/changed.nul" 2>/dev/null; then
+    if python3 -I -B "$REVIEW_DIR/target_scope.py" "$WORK/pr.json" "$WORK/changed.nul" "$WORK/scope.json" >"$WORK/scope-prompt" 2>/dev/null; then
+        PROMPT_ARGS+=(--scope-file "$WORK/scope-prompt")
+    fi
+fi
 
 TRUNCATED=""
 if [ "$(wc -c <"$WORK/diff")" -gt "$MAX_BYTES" ]; then

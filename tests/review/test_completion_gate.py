@@ -138,7 +138,7 @@ class KimiAvailabilityWorkflowTests(unittest.TestCase):
         probe, review = jobs["kimi-execute"], jobs["kimi-review"]
         guard = ("github.event_name == 'pull_request_target' && "
                  "github.event.pull_request.head.repo.full_name == github.repository")
-        self.assertEqual(guard, probe["if"])
+        self.assertEqual(guard + " && !github.event.pull_request.draft", probe["if"])
         self.assertEqual(["kimi-execute"], review["needs"])
         self.assertEqual(guard + " && needs.kimi-execute.outputs.completed == 'true'", review["if"])
         self.assertEqual({"completed": "${{ steps.review.outputs.completed }}"}, probe["outputs"])
@@ -182,7 +182,8 @@ class KimiAvailabilityWorkflowTests(unittest.TestCase):
         self.assertEqual("steps.probe.outputs.available == 'false'", publish["if"])
         inputs = workflow["on"]["workflow_call"]["inputs"]
         self.assertEqual({"runs-on", "kimi-bin", "kimi-model", "rules-file",
-                          "max-diff-bytes", "timeout-minutes"}, set(inputs))
+                          "owner-user-id", "max-diff-bytes", "timeout-minutes"}, set(inputs))
+        self.assertEqual(40000, inputs["max-diff-bytes"]["default"])
         self.assertTrue(all(not value.get("required", False) for value in inputs.values()))
 
     def test_actual_probe_shell_and_unavailable_sticky_comment(self):
