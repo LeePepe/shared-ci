@@ -684,6 +684,41 @@ No raw colors.
                 self.assertEqual("", stdout.getvalue())
                 self.assertIn("Jev threshold must be finite and between 0 and 1", stderr.getvalue())
 
+    def test_new_audit_code_gate_has_positive_and_negative_results(self) -> None:
+        self._write("UI/Good.swift", "Text(\"ok\")\n")
+        with captured_output() as (stdout, _):
+            self.assertEqual(0, design_contract.main(["--root", str(self.root), "--audit-code", "UI", "--platform", "desktop", "--json"]))
+        self.assertTrue(json.loads(stdout.getvalue())["ok"])
+        self._write("UI/Bad.swift", "Text(\"bad\").hoverEffect()\n")
+        with captured_output() as (stdout, _):
+            self.assertEqual(1, design_contract.main(["--root", str(self.root), "--audit-code", "UI", "--platform", "desktop", "--json"]))
+        self.assertIn("HIG-MACOS-HOVER-EFFECT", stdout.getvalue())
+
+    def test_new_audit_l10n_gate_has_positive_and_negative_results(self) -> None:
+        self._write("Localizable.xcstrings", json.dumps({"strings": {"screen.title": {"localizations": {"en": {"stringUnit": {"value": "Hello"}}, "zh-Hans": {"stringUnit": {"value": "你好"}}}}}}))
+        self._write("UI/View.swift", 'Text(localized: "screen.title")\n')
+        self.assertEqual([], design_contract.audit_l10n(self.root, [], ["en", "zh-Hans"]))
+        self._write("UI/View.swift", 'Text(localized: "missing.title")\n')
+        self.assertIn("L10N-UNREGISTERED-KEY", {item.rule for item in design_contract.audit_l10n(self.root, [], ["en"])})
+
+    def test_new_edge_clipping_gate_has_positive_and_negative_results(self) -> None:
+        image = self._write_png("shots/clean.png", width=12, height=12)
+        self.assertEqual([], design_contract.check_edge_clipping(image, "12", 1.0))
+        self.assertIn("edge clipping path not found", design_contract.check_edge_clipping(self.root / "missing.png", None, 1.0)[0])
+
+    def test_new_geometry_gate_has_positive_and_negative_results(self) -> None:
+        good = self._write("good.json", json.dumps({"viewportWidth": 200, "children": [{"role": "button", "interactive": True, "frame": {"x": 0, "y": 0, "width": 44, "height": 44}}]}))
+        self.assertEqual([], design_contract.audit_geometry(good, "mobile"))
+        bad = self._write("bad.json", json.dumps({"viewportWidth": 100, "children": [{"numeric": True, "text": "12...", "interactive": True, "frame": {"x": 98, "y": 0, "width": 5, "height": 5}}]}))
+        self.assertEqual({"GEOM_VIEWPORT_OVERFLOW", "GEOM_NUMERIC_TRUNCATION", "GEOM_HIT_TARGET_TOO_SMALL"}, set(design_contract.audit_geometry(bad, "mobile")))
+
+    def test_composable_gate_invocation_matches_tech_context_shape(self) -> None:
+        self._write("UI/View.swift", "Text(\"ok\")\n")
+        with captured_output() as (stdout, _):
+            status = design_contract.main(["--root", str(self.root), "--audit-code", "UI", "--platform", "mobile", "--audit-l10n", str(self.root), "--json"])
+        self.assertEqual(0, status)
+        self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
     def test_jev_threshold_probability_boundaries_detect_defects(self) -> None:
         screenshot = self._write_png("screenshots/workout_populated_dark.png")
         response = {"answers": {

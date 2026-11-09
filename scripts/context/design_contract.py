@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 
 REQUIRED_HEADINGS = (
@@ -51,6 +51,26 @@ MICRO_FONT_SIZE = re.compile(
 SCALE_FACTOR = re.compile(
     r"\.minimumScaleFactor\s*\(\s*"
 )
+
+AUDIT_CODE_RULES = (
+    ("HIG-LG-CONTENT", ("desktop", "mobile"), re.compile(r"(List|Form|Table|ForEach)\s*\{[\s\S]{0,240}?\.glassEffect\(")),
+    ("HIG-IOS-SCREEN-BOUNDS", ("desktop", "mobile"), re.compile(r"\bUIScreen\.main\b|\buserInterfaceIdiom\s*==\s*\.phone\b|\binterfaceOrientation\.(?:isLandscape|isPortrait)\b")),
+    ("HIG-COLOR-RAW-HEX", ("desktop", "mobile"), re.compile(r"Color\(\s*red\s*:[^)]+green\s*:[^)]+blue\s*:")),
+    ("HIG-COMPAT-FLAG", ("desktop", "mobile"), re.compile(r"UIDesignRequiresCompatibility")),
+    ("SLOP-PURPLE-GRADIENT", ("desktop", "mobile"), re.compile(r"LinearGradient\([^)]*colors\s*:\s*\[\s*(?:\.purple\s*,\s*\.blue|\.blue\s*,\s*\.purple|\.indigo\s*,\s*\.purple)")),
+    ("SLOP-LEFT-ACCENT-STRIPE", ("desktop", "mobile"), re.compile(r"Rectangle\(\)\s*\.fill\([^)]+\)\s*\.frame\(\s*width\s*:\s*[3-6]\b")),
+    ("HIG-MACOS-HOVER-EFFECT", ("desktop",), re.compile(r"\.hoverEffect\s*\(")),
+    ("SLOP-MUDDY-BLACK-GRADIENT", ("desktop", "mobile"), re.compile(r"LinearGradient\([^)]*colors\s*:\s*\[[^\]]*\.black\b")),
+    ("DC-001", ("desktop", "mobile"), re.compile(r"struct\s+SWWallet\b[\s\S]{0,600}?VStack[^{]*\{\s*ForEach")),
+    ("DC-002", ("desktop", "mobile"), re.compile(r"(?:SWDonutChart|SectorMark)[\s\S]{0,800}?ProgressView\(\s*value\s*:")),
+    ("DC-003", ("mobile",), re.compile(r"var\s+\w+\s*:\s*some\s+View\s*\{\s*HStack(?:\s*\([^)]*\))?\s*\{\s*ForEach\b")),
+    ("DC-004", ("desktop", "mobile"), re.compile(r"Lazy(?:V|H)Stack[^{]*\{[\s\S]{0,220}?ForEach\([^)]*\)\s*\{\s*\w+\s+in\s+if\b")),
+    ("DC-005", ("desktop", "mobile"), re.compile(r"var\s+\w*[Hh]eader\w*\s*:\s*some\s+View\s*\{[\s\S]{0,450}?HStack[\s\S]{0,350}?maxWidth\s*:\s*\.infinity[\s\S]{0,600}?var\s+\w*[Rr]ow\w*\s*:\s*some\s+View\s*\{(?![\s\S]{0,450}?maxWidth\s*:\s*\.infinity)[\s\S]{0,450}?HStack[\s\S]{0,350}?\.frame\(\s*width\s*:")),
+    ("HIG-APPKIT-LEGACY-MOUSELOOP", ("desktop",), re.compile(r"override\s+func\s+mouseDown\b[\s\S]{0,300}?nextEvent\(\s*matching\s*:")),
+    ("HIG-DRAG-WILL-BEGIN-UI", ("desktop", "mobile"), re.compile(r"dragInteraction\([^)]*sessionWillBegin[\s\S]{0,240}?(?:present\(|UIAlertController|withAnimation)")),
+)
+LOCALIZATION_CALL = re.compile(r"(?:[A-Za-z0-9_]*L10n\.(?:tr|format)|NSLocalizedString|LocalizedStringKey|localized)\s*(?:\(|:)\s*\"([a-z0-9_]+(?:\.[a-z0-9_]+)+(?:\s*%[@lld]+)?)\"", re.I)
+FORMAT_SPECIFIER = re.compile(r"%(?:@|lld|ld|d|f|s)")
 
 
 @dataclass(frozen=True)
@@ -602,6 +622,197 @@ def scan_ui_sources(
     return findings
 
 
+def _audit_paths(root: Path, paths: Sequence[str], suffixes: Optional[set[str]] = None) -> list[Path]:
+    candidates = [root] if not paths else [Path(item) if Path(item).is_absolute() else root / item for item in paths]
+    result: list[Path] = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate.is_file():
+            if suffixes is None or candidate.suffix.casefold() in suffixes:
+                result.append(candidate)
+        elif candidate.is_dir():
+            for path in sorted(candidate.rglob("*")):
+                if path.is_file() and (suffixes is None or path.suffix.casefold() in suffixes):
+                    result.append(path.resolve())
+    return result
+
+
+def audit_code(paths: Sequence[Path], platform: str) -> list[DesignViolation]:
+    findings: list[DesignViolation] = []
+    active = {"desktop", "mobile", "web"} if platform == "all" else {platform}
+    for path in paths:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            findings.append(DesignViolation(path.as_posix(), 0, "UNREADABLE_UI_SOURCE", "unable to read source as UTF-8"))
+            continue
+        for rule, platforms, pattern in AUDIT_CODE_RULES:
+            if not active.intersection(platforms):
+                continue
+            for match in pattern.finditer(content):
+                findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, rule, content.splitlines()[content.count("\n", 0, match.start())].strip()[:240]))
+        for pattern, rule in ((RAW_HEX_COLOR, "RAW_HEX_COLOR"), (RAW_RGB_COLOR, "RAW_RGB_COLOR"), (RAW_HSL_COLOR, "raw-hsl-color")):
+            if platform != "web" and rule != "RAW_HEX_COLOR":
+                continue
+            for match in pattern.finditer(content):
+                findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, rule, content.splitlines()[content.count("\n", 0, match.start())].strip()[:240]))
+        for finding in _swiftui_violations(Path("."), path, content, content.splitlines()):
+            findings.append(finding)
+    return findings
+
+
+def _string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [item for item in value.values() if isinstance(item, str)]
+    return []
+
+
+def audit_l10n(root: Path, paths: Sequence[str], locales: Sequence[str]) -> list[DesignViolation]:
+    findings: list[DesignViolation] = []
+    xcstrings = _audit_paths(root, paths, {".xcstrings"})
+    source_paths = _audit_paths(root, paths, SUPPORTED_SUFFIXES | {".m", ".mm", ".plist"})
+    registered: set[str] = set()
+    for path in xcstrings:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            findings.append(DesignViolation(path.as_posix(), 0, "L10N-INVALID-XCSTRINGS", "invalid localization catalog"))
+            continue
+        for key, entry in document.get("strings", {}).items():
+            registered.add(key)
+            localizations = entry.get("localizations", {}) if isinstance(entry, dict) else {}
+            missing = [locale for locale in locales if locale not in localizations]
+            if missing:
+                findings.append(DesignViolation(path.as_posix(), 0, "L10N-MISSING-LOCALE", f"{key}: missing {', '.join(missing)}"))
+            source = entry.get("localizations", {}).get("en", {}).get("stringUnit", {}).get("value", key) if isinstance(entry, dict) else key
+            for locale, localized in localizations.items():
+                value = localized.get("stringUnit", {}).get("value", "") if isinstance(localized, dict) else ""
+                if FORMAT_SPECIFIER.findall(str(source)) != FORMAT_SPECIFIER.findall(str(value)):
+                    findings.append(DesignViolation(path.as_posix(), 0, "L10N-FORMAT-MISMATCH", f"{key}: {locale}"))
+    for path in source_paths:
+        if path.suffix == ".plist":
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            match = re.search(r"CFBundleLocalizations.*?(?:<array>(.*?)</array>|\\n\\s*\\(?(.*?)\\)?\\n)", content, re.S)
+            if match and locales and any(locale not in (match.group(1) or match.group(2) or "") for locale in locales):
+                findings.append(DesignViolation(path.as_posix(), 0, "L10N-INFOPLIST-LOCALES", f"expected {', '.join(locales)}"))
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for raw in re.finditer(r"[\"']([a-z0-9_]+(?:\\.[a-z0-9_]+)+)[\"']", content, re.I):
+            if not LOCALIZATION_CALL.search(content[max(0, raw.start() - 48):raw.end() + 1]):
+                findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, raw.start()) + 1, "L10N-RAW-KEY-LEAK", raw.group(1)))
+        for match in LOCALIZATION_CALL.finditer(content):
+            key = match.group(1)
+            if key and key not in registered:
+                findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, "L10N-UNREGISTERED-KEY", key))
+    return findings
+
+
+def _png_rgba(path: Path) -> tuple[int, int, list[tuple[int, int, int]]]:
+    data = path.read_bytes()
+    width, height, pixels, channels = _decode_png(data)
+    return width, height, [tuple(pixels[index:index + 3]) for index in range(0, len(pixels), channels)]
+
+
+def _decode_png(data: bytes) -> tuple[int, int, bytes, int]:
+    if data[:8] != _PNG_SIGNATURE:
+        raise ValueError("not a PNG")
+    width, height, bit_depth, color_type, _, _, _ = struct.unpack(">IIBBBBB", data[16:29])
+    if bit_depth != 8 or color_type not in (2, 6):
+        raise ValueError("unsupported PNG format")
+    raw = bytearray(); offset = 8
+    while offset < len(data):
+        length = struct.unpack(">I", data[offset:offset + 4])[0]
+        kind = data[offset + 4:offset + 8]
+        if kind == b"IDAT": raw.extend(data[offset + 8:offset + 8 + length])
+        offset += 12 + length
+    decoded = zlib.decompress(bytes(raw)); channels = 3 if color_type == 2 else 4; stride = width * channels
+    rows: list[bytes] = []; cursor = 0; prior = bytearray(stride)
+    for _ in range(height):
+        filter_type = decoded[cursor]; cursor += 1; row = bytearray(decoded[cursor:cursor + stride]); cursor += stride
+        for index in range(stride):
+            left = row[index - channels] if index >= channels else 0; up = prior[index]; upper = prior[index - channels] if index >= channels else 0
+            if filter_type == 1: row[index] = (row[index] + left) & 255
+            elif filter_type == 2: row[index] = (row[index] + up) & 255
+            elif filter_type == 3: row[index] = (row[index] + (left + up) // 2) & 255
+            elif filter_type == 4:
+                estimate = left + up - upper; pa, pb, pc = abs(estimate-left), abs(estimate-up), abs(estimate-upper)
+                row[index] = (row[index] + (left if pa <= pb and pa <= pc else up if pb <= pc else upper)) & 255
+        rows.append(bytes(row)); prior = row
+    return width, height, b"".join(rows), channels
+
+
+def check_edge_clipping(path: Path, expected_width: Optional[str], scale: float) -> list[str]:
+    errors: list[str] = []
+    images = [path] if path.is_file() else sorted(path.glob("*.png")) if path.is_dir() else []
+    if not images: return [f"edge clipping path not found: {path}"]
+    for image in images:
+        try:
+            width, height, pixels, channels = _decode_png(image.read_bytes())
+            if expected_width is not None and width != round(float(expected_width) * scale):
+                errors.append(f"{image}: EDGE_PIXEL_WIDTH expected {round(float(expected_width) * scale)}, got {width}")
+            start, end = int(height * .14), max(int(height * .14) + 1, int(height * .86))
+            def rgb(y: int, x: int) -> tuple[int, int, int]:
+                base = (y * width + x) * channels; return tuple(pixels[base:base + 3])
+            corners = [rgb(start, 0), rgb(start, width - 1), rgb(end - 1, 0), rgb(end - 1, width - 1)]
+            background = tuple(sorted(channel[index] for channel in corners)[2] for index in range(3))
+            left = sum(any(max(abs(rgb(y, x)[i] - background[i]) for i in range(3)) >= 28 for x in range(min(2, width))) for y in range(start, end)) / max(1, end - start)
+            right = sum(any(max(abs(rgb(y, width - 1 - x)[i] - background[i]) for i in range(3)) >= 28 for x in range(min(2, width))) for y in range(start, end)) / max(1, end - start)
+            if left >= .06: errors.append(f"{image}: EDGE_CLIPPING_LEFT")
+            if right >= .06: errors.append(f"{image}: EDGE_CLIPPING_RIGHT")
+        except (OSError, ValueError, struct.error, zlib.error) as error:
+            errors.append(f"{image}: invalid PNG: {error}")
+    return errors
+
+
+def audit_geometry(path: Path, platform: str) -> list[str]:
+    try: document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error: return [f"GEOM_INVALID: {error}"]
+    viewport = float(document.get("viewportWidth", document.get("viewport", {}).get("width", 0)))
+    nodes: list[dict[str, Any]] = []
+    def visit(value: Any, parent: Optional[dict[str, Any]] = None) -> None:
+        if isinstance(value, dict):
+            if isinstance(value.get("frame"), dict):
+                item = dict(value); item["_parent"] = parent; nodes.append(item)
+            for child in value.get("children", []): visit(child, value)
+        elif isinstance(value, list):
+            for child in value: visit(child, parent)
+    visit(document)
+    errors: list[str] = []
+    for node in nodes:
+        frame = node["frame"]; x, y = float(frame.get("minX", frame.get("x", 0))), float(frame.get("minY", frame.get("y", 0))); width, height = float(frame.get("width", 0)), float(frame.get("height", 0)); max_x, max_y = x + width, y + height
+        if viewport and (x < 0 or max_x > viewport): errors.append("GEOM_VIEWPORT_OVERFLOW")
+        text = str(node.get("text", node.get("label", "")))
+        if node.get("numeric") and ("…" in text or "..." in text): errors.append("GEOM_NUMERIC_TRUNCATION")
+        if node.get("interactive") and (width < (44 if platform == "mobile" else 28) or height < (44 if platform == "mobile" else 28)): errors.append("GEOM_HIT_TARGET_TOO_SMALL")
+    for parent in {id(node.get("_parent")): node.get("_parent") for node in nodes if node.get("_parent")}.values():
+        siblings = [node for node in nodes if node.get("_parent") is parent]
+        for index, first in enumerate(siblings):
+            a = first["frame"]; ax, ay = float(a.get("minX", a.get("x", 0))), float(a.get("minY", a.get("y", 0))); ar, ab = ax + float(a.get("width", 0)), ay + float(a.get("height", 0))
+            for second in siblings[index + 1:]:
+                b = second["frame"]; bx, by = float(b.get("minX", b.get("x", 0))), float(b.get("minY", b.get("y", 0))); br, bb = bx + float(b.get("width", 0)), by + float(b.get("height", 0))
+                if min(ar, br) > max(ax, bx) and min(ab, bb) > max(ay, by): errors.append("GEOM_SIBLING_OVERLAP")
+    groups: dict[Any, list[dict[str, Any]]] = {}
+    for node in nodes:
+        if node.get("role") in {"tableHeader", "tableRow", "bento"} or node.get("kind") in {"tableHeader", "tableRow", "bento"}: groups.setdefault(node.get("group", node.get("role")), []).append(node)
+    headers = [node for node in nodes if node.get("role") == "tableHeader" or node.get("kind") == "tableHeader"]
+    rows = [node for node in nodes if node.get("role") == "tableRow" or node.get("kind") == "tableRow"]
+    for header in headers:
+        for row in rows:
+            hf, rf = header["frame"], row["frame"]
+            if abs(float(hf.get("minX", hf.get("x", 0))) - float(rf.get("minX", rf.get("x", 0)))) > 1 or abs(float(hf.get("width", 0)) - float(rf.get("width", 0))) > 1: errors.append("GEOM_COLUMN_MISALIGNED")
+    for group in groups.values():
+        if len(group) > 1 and len({round(float(node["frame"].get("minY", node["frame"].get("y", 0))) + float(node["frame"].get("height", 0)), 1) for node in group}) > 1: errors.append("GEOM_BENTO_BOTTOM_MISALIGNED")
+    return list(dict.fromkeys(errors))
+
+
 def _jev_threshold_argument(value: str) -> float:
     score = _jev_score(value)
     if score is None:
@@ -637,6 +848,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--appearances", default="light,dark")
     parser.add_argument("--snapshot-dir", type=Path)
     parser.add_argument("--expected-pixel-width")
+    parser.add_argument("--audit-code", nargs="*", default=None, metavar="PATH")
+    parser.add_argument("--platform", choices=("desktop", "mobile", "web", "all"), default="desktop")
+    parser.add_argument("--audit-l10n", nargs="?", const=".", default=None, metavar="PATH")
+    parser.add_argument("--locales", default="en,zh-Hans")
+    parser.add_argument("--check-edge-clipping", metavar="PNG_OR_DIR")
+    parser.add_argument("--scale", type=float, default=1.0)
+    parser.add_argument("--audit-geometry", metavar="GEOMETRY_JSON")
     return parser
 
 
@@ -924,21 +1142,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     contract_path = (
         contract_arg.resolve() if contract_arg.is_absolute() else root / contract_arg
     )
-    contract_errors = audit_contract(contract_path)
+    targeted = any(value is not None for value in (args.audit_code, args.audit_l10n, args.check_edge_clipping, args.audit_geometry))
+    contract_errors = [] if targeted and args.contract == "docs/design-contract.md" and not contract_path.is_file() else audit_contract(contract_path)
     violations = (
         scan_ui_sources(root, args.ui_path, args.exclude) if args.ui_path else []
     )
-    visual_errors = (
-        _visual_audit(
-            root,
-            _parse_csv(args.states),
-            _parse_csv(args.appearances),
-            args.snapshot_dir,
-            args.expected_pixel_width,
+    if args.audit_code is not None:
+        audit_paths = _audit_paths(root, args.audit_code, SUPPORTED_SUFFIXES)
+        violations.extend(audit_code(audit_paths, args.platform))
+    if args.audit_l10n is not None:
+        l10n_target = [args.audit_l10n] if args.audit_l10n != "." else []
+        violations.extend(audit_l10n(root, l10n_target, _parse_csv(args.locales)))
+    visual_errors: list[str] = []
+    if args.check_edge_clipping:
+        target = Path(args.check_edge_clipping)
+        target = target if target.is_absolute() else root / target
+        visual_errors.extend(check_edge_clipping(target, args.expected_pixel_width, args.scale))
+    if args.audit_geometry:
+        target = Path(args.audit_geometry)
+        target = target if target.is_absolute() else root / target
+        visual_errors.extend(audit_geometry(target, args.platform))
+    if args.visual:
+        visual_errors.extend(
+            _visual_audit(
+                root,
+                _parse_csv(args.states),
+                _parse_csv(args.appearances),
+                args.snapshot_dir,
+                args.expected_pixel_width,
+            )
         )
-        if args.visual
-        else []
-    )
     screenshot_paths: list[Path] = []
     advisory_violations: Optional[list[DesignViolation]] = None
     if args.screenshot_dir is not None:
