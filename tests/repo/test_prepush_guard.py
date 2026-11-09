@@ -67,6 +67,16 @@ class PrePushGuardTests(unittest.TestCase):
     def test_feature_is_allowed(self):
         self.assert_allowed(self.hook(self.update("refs/heads/feature/x")))
 
+    def test_master_is_refused_and_allow_main_push_override_allows(self):
+        self.assert_refused(self.hook(self.update("refs/heads/master")), branch="master")
+        override_env = dict(self.env, ALLOW_MAIN_PUSH="1")
+        self.marker.unlink(missing_ok=True)
+        res = subprocess.run(["bash", str(HOOK), "origin", URL],
+                             input=self.update("refs/heads/main"),
+                             cwd=self.root, env=override_env,
+                             capture_output=True, text=True, timeout=20)
+        self.assert_allowed(res)
+
     def test_mixed_refs_are_refused_in_either_order(self):
         feature = self.update("refs/heads/feature/x")
         main = self.update("refs/heads/main")
