@@ -321,7 +321,7 @@ class SecurityScanTests(unittest.TestCase):
             self.assertEqual(0o111, hook.stat().st_mode & 0o111)
             self.assertTrue(os.access(hook, os.X_OK))
 
-        self._git("init", "-q")
+        self._git("init", "-q", "-b", "feat/test-branch")
         (self.repo / "clean.py").write_text("A = 1\n", encoding="utf-8")
         self._git("add", "clean.py")
         self._git(
@@ -351,6 +351,31 @@ class SecurityScanTests(unittest.TestCase):
             timeout=20,
         )
         self.assertEqual(0, pass_res.returncode, pass_res.stdout + pass_res.stderr)
+
+        # Direct commits on main/master are blocked unless ALLOW_MAIN_COMMIT=1 is set.
+        self._git("checkout", "-q", "-b", "main")
+        main_block_res = subprocess.run(
+            ["bash", str(TEMPLATE_PRECOMMIT)],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertNotEqual(0, main_block_res.returncode)
+        self.assertIn("Direct commits to 'main' are forbidden", main_block_res.stderr)
+
+        env_override = dict(env, ALLOW_MAIN_COMMIT="1")
+        main_override_res = subprocess.run(
+            ["bash", str(TEMPLATE_PRECOMMIT)],
+            cwd=self.repo,
+            env=env_override,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(0, main_override_res.returncode, main_override_res.stdout + main_override_res.stderr)
+        self._git("checkout", "-q", "feat/test-branch")
 
         # Staging the forbidden modification causes pre-commit to fail closed.
         (self.repo / "clean.py").write_text(f"A = '{bad_home}'\n", encoding="utf-8")

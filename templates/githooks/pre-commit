@@ -5,6 +5,14 @@ set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
+
+branch="$(git branch --show-current 2>/dev/null || true)"
+if { [ "$branch" = "main" ] || [ "$branch" = "master" ]; } && [ "${ALLOW_MAIN_COMMIT:-0}" != "1" ]; then
+    echo "❌ [pre-commit] Direct commits to '$branch' are forbidden." >&2
+    echo "   Create a feature/fix branch or worktree and deliver via PR (or set ALLOW_MAIN_COMMIT=1 for emergency override)." >&2
+    exit 1
+fi
+
 python="${PYTHON:-python3}"
 
 git diff --cached --check
