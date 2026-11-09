@@ -3,6 +3,7 @@
 ## Read first
 
 - Before changing files: [Repository guide](docs/repository-guide.md)
+- For M2 spec-only and worktree skill orchestration: [Workflow orchestration](https://github.com/LeePepe/user-skills/blob/main/skills/m2-dispatcher/SKILL.md)
 - For ownership and dependencies: [Layer map](docs/architecture/tech-context.md)
 - For development and goal-based PR kinds: [Development guide](docs/development.md#pr-kinds)
 

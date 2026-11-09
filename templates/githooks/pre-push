@@ -13,8 +13,8 @@ fi
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     # All-zero object IDs are deletions, independent of hash length.
-    if [[ "$local_sha" == *[!0]* ]] &&
-       [[ "$remote_ref" == refs/heads/main || "$remote_ref" == "refs/heads/$default_branch" ]]; then
+    if [[ "$local_sha" == *[!0]* ]] && [[ "${ALLOW_MAIN_PUSH:-0}" != "1" ]] &&
+       [[ "$remote_ref" == refs/heads/main || "$remote_ref" == refs/heads/master || "$remote_ref" == "refs/heads/$default_branch" ]]; then
         branch="${remote_ref#refs/heads/}"
         {
             printf '[pre-push] direct pushes to %s are not allowed; open a PR\n' "$branch"
