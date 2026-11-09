@@ -721,6 +721,17 @@ No raw colors.
         self.assertEqual({"CASE-001"}, {item.rule for item in findings})
         self.assertTrue(findings[0].path.endswith("/UI/Bad.swift"))
 
+    def test_audit_code_fails_closed_on_missing_or_invalid_cases_file(self) -> None:
+        source = self._write("UI/Good.swift", "Text(\"ok\")\n")
+        missing_findings = design_contract.audit_code([source], "desktop", self.root / "missing-cases.json")
+        self.assertEqual(["INVALID_CASES_FILE"], [item.rule for item in missing_findings])
+        broken = self._write("broken-cases.json", "{not-json")
+        broken_findings = design_contract.audit_code([source], "desktop", broken)
+        self.assertEqual(["INVALID_CASES_FILE"], [item.rule for item in broken_findings])
+        bad_regex = self._write("bad-regex.json", json.dumps({"rules": [{"id": "CASE-BAD", "platforms": ["desktop"], "regex": "("}]}))
+        regex_findings = design_contract.audit_code([source], "desktop", bad_regex)
+        self.assertEqual(["INVALID_CASES_FILE"], [item.rule for item in regex_findings])
+
     def test_l10n_detects_raw_keys_only_in_ui_and_supports_localization_calls(self) -> None:
         self._write("Localizable.xcstrings", json.dumps({"strings": {"dashboard.metric.title": {"localizations": {"en": {"stringUnit": {"value": "dashboard.metric.title"}}}}}}))
         self._write("UI/View.swift", 'Text("dashboard.metric.title")\nString(localized: "dashboard.metric.title")\nNSLocalizedString("dashboard.metric.title", comment: "")\nFooL10n.format("dashboard.metric.title")\nlet arbitrary = "not.a.ui.key"\n')

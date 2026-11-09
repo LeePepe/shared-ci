@@ -61,13 +61,13 @@ AUDIT_CODE_RULES = (
     ("SLOP-LEFT-ACCENT-STRIPE", ("desktop", "mobile"), re.compile(r"Rectangle\(\)\s*\.fill\([^)]+\)\s*\.frame\(\s*width\s*:\s*[3-6]\b")),
     ("HIG-MACOS-HOVER-EFFECT", ("desktop",), re.compile(r"\.hoverEffect\s*\(")),
     ("SLOP-MUDDY-BLACK-GRADIENT", ("desktop", "mobile"), re.compile(r"LinearGradient\([^)]*colors\s*:\s*\[[^\]]*\.black\b")),
-    ("DC-001", ("desktop", "mobile"), re.compile(r"struct\s+SWWallet\b[\s\S]{0,600}?VStack[^{]*\{\s*ForEach")),
-    ("DC-002", ("desktop", "mobile"), re.compile(r"(?:SWDonutChart|SectorMark)[\s\S]{0,800}?ProgressView\(\s*value\s*:")),
+    ("DC-001", ("desktop", "mobile"), re.compile(r"struct\s+\w*CardStack\w*\b[\s\S]{0,600}?VStack[^{]*\{\s*ForEach")),
+    ("DC-002", ("desktop", "mobile"), re.compile(r"SectorMark[\s\S]{0,800}?ProgressView\(\s*value\s*:")),
     ("DC-003", ("mobile",), re.compile(r"var\s+\w+\s*:\s*some\s+View\s*\{\s*HStack(?:\s*\([^)]*\))?\s*\{\s*ForEach\b")),
     ("DC-004", ("desktop", "mobile"), re.compile(r"Lazy(?:V|H)Stack[^{]*\{[\s\S]{0,220}?ForEach\([^)]*\)\s*\{\s*\w+\s+in\s+if\b")),
     ("DC-005", ("desktop", "mobile"), re.compile(r"var\s+\w*[Hh]eader\w*\s*:\s*some\s+View\s*\{[\s\S]{0,450}?HStack[\s\S]{0,350}?maxWidth\s*:\s*\.infinity[\s\S]{0,600}?var\s+\w*[Rr]ow\w*\s*:\s*some\s+View\s*\{(?![\s\S]{0,450}?maxWidth\s*:\s*\.infinity)[\s\S]{0,450}?HStack[\s\S]{0,350}?\.frame\(\s*width\s*:")),
-    ("SHIPSWIFT-SWWALLET-FLATTENED", ("desktop", "mobile"), re.compile(r"struct\s+SWWallet\b[\s\S]{0,600}?VStack[^{]*\{\s*ForEach")),
-    ("SLOP-DUPLICATE-DATA-REPRESENTATION", ("desktop", "mobile"), re.compile(r"(?:SWDonutChart|SectorMark)[\s\S]{0,800}?ProgressView\(\s*value\s*:")),
+    ("HIG-CARD-STACK-FLATTENED", ("desktop", "mobile"), re.compile(r"struct\s+\w*CardStack\w*\b[\s\S]{0,600}?VStack[^{]*\{\s*ForEach")),
+    ("SLOP-DUPLICATE-DATA-REPRESENTATION", ("desktop", "mobile"), re.compile(r"SectorMark[\s\S]{0,800}?ProgressView\(\s*value\s*:")),
     ("HIG-LAYOUT-OVERFLOW", ("mobile",), re.compile(r"var\s+\w+\s*:\s*some\s+View\s*\{\s*HStack(?:\s*\([^)]*\))?\s*\{\s*ForEach\b")),
     ("HIG-LAZY-LEAF-CONDITIONAL", ("desktop", "mobile"), re.compile(r"Lazy(?:V|H)Stack[^{]*\{[\s\S]{0,220}?ForEach\([^)]*\)\s*\{\s*\w+\s+in\s+if\b")),
     ("HIG-TABLE-COLUMN-MISMATCH", ("desktop", "mobile"), re.compile(r"var\s+\w*[Hh]eader\w*\s*:\s*some\s+View\s*\{[\s\S]{0,450}?HStack[\s\S]{0,350}?maxWidth\s*:\s*\.infinity[\s\S]{0,600}?var\s+\w*[Rr]ow\w*\s*:\s*some\s+View\s*\{(?![\s\S]{0,450}?maxWidth\s*:\s*\.infinity)[\s\S]{0,450}?HStack[\s\S]{0,350}?\.frame\(\s*width\s*:")),
@@ -642,34 +642,87 @@ def _audit_paths(root: Path, paths: Sequence[str], suffixes: Optional[set[str]] 
     return result
 
 
-def _load_code_rules(cases_file: Optional[Path]) -> list[tuple[str, tuple[str, ...], re.Pattern[str]]]:
+def _load_code_rules(
+    cases_file: Optional[Path],
+) -> tuple[list[tuple[str, tuple[str, ...], re.Pattern[str]]], list[DesignViolation]]:
     rules = list(AUDIT_CODE_RULES)
     if cases_file is None:
-        return rules
+        return rules, []
     try:
         payload = json.loads(cases_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return rules
-    entries = payload.get("rules", payload) if isinstance(payload, dict) else payload
-    if not isinstance(entries, list):
-        return rules
-    for entry in entries:
-        if not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) for key in ("id", "regex")):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return rules, [
+            DesignViolation(
+                cases_file.as_posix(),
+                0,
+                "INVALID_CASES_FILE",
+                f"unable to load cases file: {error}",
+            )
+        ]
+    if isinstance(payload, dict):
+        entries = payload.get("rules", payload.get("cases"))
+    else:
+        entries = payload
+    if not isinstance(entries, list) or not entries:
+        return rules, [
+            DesignViolation(
+                cases_file.as_posix(),
+                0,
+                "INVALID_CASES_FILE",
+                "cases file must contain a non-empty list of rules",
+            )
+        ]
+    errors: list[DesignViolation] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not all(
+            isinstance(entry.get(key), str) and entry.get(key).strip()
+            for key in ("id", "regex")
+        ):
+            errors.append(
+                DesignViolation(
+                    cases_file.as_posix(),
+                    0,
+                    "INVALID_CASES_FILE",
+                    f"entry {index} must define non-empty string 'id' and 'regex'",
+                )
+            )
             continue
         platforms = entry.get("platforms", ["desktop", "mobile", "web"])
         if isinstance(platforms, str):
             platforms = [platforms]
-        if not isinstance(platforms, list) or not all(isinstance(item, str) for item in platforms):
+        if (
+            not isinstance(platforms, list)
+            or not platforms
+            or not all(
+                isinstance(item, str) and item in ("desktop", "mobile", "web", "all")
+                for item in platforms
+            )
+        ):
+            errors.append(
+                DesignViolation(
+                    cases_file.as_posix(),
+                    0,
+                    "INVALID_CASES_FILE",
+                    f"entry {entry['id']} has invalid platforms",
+                )
+            )
             continue
         try:
             rules.append((entry["id"], tuple(platforms), re.compile(entry["regex"])))
-        except re.error:
-            continue
-    return rules
+        except re.error as error:
+            errors.append(
+                DesignViolation(
+                    cases_file.as_posix(),
+                    0,
+                    "INVALID_CASES_FILE",
+                    f"entry {entry['id']} has invalid regex: {error}",
+                )
+            )
+    return rules, errors
 
 
 def audit_code(paths: Sequence[Path], platform: str, cases_file: Optional[Path] = None) -> list[DesignViolation]:
-    findings: list[DesignViolation] = []
+    rules, findings = _load_code_rules(cases_file)
     active = {"desktop", "mobile", "web"} if platform == "all" else {platform}
     for path in paths:
         if _is_skipped_source(Path("."), path):
@@ -680,13 +733,18 @@ def audit_code(paths: Sequence[Path], platform: str, cases_file: Optional[Path] 
             findings.append(DesignViolation(path.as_posix(), 0, "UNREADABLE_UI_SOURCE", "unable to read source as UTF-8"))
             continue
         lines = content.splitlines()
-        for rule, platforms, pattern in _load_code_rules(cases_file):
-            if not active.intersection(platforms):
+        for rule, platforms, pattern in rules:
+            if "all" not in platforms and not active.intersection(platforms):
                 continue
             for match in pattern.finditer(content):
                 line_number = content.count("\n", 0, match.start()) + 1
+                end_line = content.count("\n", 0, max(match.start(), match.end() - 1)) + 1
+                spanned = "\n".join(lines[line_number - 1 : end_line])
                 line = lines[line_number - 1] if line_number <= len(lines) else ""
-                if re.search(rf"design-contract-allow:\s*{re.escape(rule)}\b", line, re.I) or re.search(r"design-contract:\s*allow\b", line, re.I):
+                if (
+                    re.search(rf"design-contract-allow:\s*{re.escape(rule)}\b", spanned, re.I)
+                    or ALLOW_PATTERN.search(spanned)
+                ):
                     continue
                 findings.append(DesignViolation(path.as_posix(), line_number, rule, line.strip()[:240]))
         for pattern, rule in ((RAW_HEX_COLOR, "RAW_HEX_COLOR"), (RAW_RGB_COLOR, "RAW_RGB_COLOR"), (RAW_HSL_COLOR, "raw-hsl-color")):
@@ -695,7 +753,7 @@ def audit_code(paths: Sequence[Path], platform: str, cases_file: Optional[Path] 
             for match in pattern.finditer(content):
                 line_number = content.count("\n", 0, match.start()) + 1
                 line = lines[line_number - 1] if line_number <= len(lines) else ""
-                if re.search(r"design-contract:\s*allow\b", line, re.I):
+                if ALLOW_PATTERN.search(line):
                     continue
                 findings.append(DesignViolation(path.as_posix(), line_number, rule, line.strip()[:240]))
         findings.extend(_swiftui_violations(Path("."), path, content, lines))
@@ -753,25 +811,40 @@ def audit_l10n(root: Path, paths: Sequence[str], locales: Sequence[str]) -> list
     return findings
 
 
-def _png_rgba(path: Path) -> tuple[int, int, list[tuple[int, int, int]]]:
-    data = path.read_bytes()
-    width, height, pixels, channels = _decode_png(data)
-    return width, height, [tuple(pixels[index:index + 3]) for index in range(0, len(pixels), channels)]
-
-
 def _decode_png(data: bytes) -> tuple[int, int, bytes, int]:
-    if data[:8] != _PNG_SIGNATURE:
+    if len(data) < 29 or data[:8] != _PNG_SIGNATURE:
         raise ValueError("not a PNG")
-    width, height, bit_depth, color_type, _, _, _ = struct.unpack(">IIBBBBB", data[16:29])
-    if bit_depth != 8 or color_type not in (2, 6):
+    ihdr = _parse_ihdr(data[16:29])
+    if ihdr is None:
+        raise ValueError("invalid PNG IHDR")
+    width, height, bit_depth, color_type, interlace = ihdr
+    if bit_depth != 8 or color_type not in (2, 6) or interlace != 0:
         raise ValueError("unsupported PNG format")
-    raw = bytearray(); offset = 8
+    channels = 3 if color_type == 2 else 4
+    expected = _png_image_byte_count(width, height, channels, bit_depth, interlace)
+    if expected is None:
+        raise ValueError("PNG image exceeds byte limit")
+    raw = bytearray()
+    offset = 8
     while offset < len(data):
-        length = struct.unpack(">I", data[offset:offset + 4])[0]
-        kind = data[offset + 4:offset + 8]
-        if kind == b"IDAT": raw.extend(data[offset + 8:offset + 8 + length])
-        offset += 12 + length
-    decoded = zlib.decompress(bytes(raw)); channels = 3 if color_type == 2 else 4; stride = width * channels
+        chunk = _png_chunk(data, offset)
+        if chunk is None:
+            raise ValueError("invalid PNG chunk")
+        kind, chunk_data, offset = chunk
+        if kind == b"IDAT":
+            if len(raw) + len(chunk_data) > _MAX_PNG_IMAGE_BYTES:
+                raise ValueError("PNG IDAT exceeds limit")
+            raw.extend(chunk_data)
+    decompressor = zlib.decompressobj()
+    decoded = decompressor.decompress(bytes(raw), expected + 1)
+    if (
+        len(decoded) != expected
+        or decompressor.unconsumed_tail
+        or decompressor.unused_data
+        or not decompressor.eof
+    ):
+        raise ValueError("invalid PNG scanline payload")
+    stride = width * channels
     rows: list[bytes] = []; cursor = 0; prior = bytearray(stride)
     for _ in range(height):
         filter_type = decoded[cursor]; cursor += 1; row = bytearray(decoded[cursor:cursor + stride]); cursor += stride
@@ -899,7 +972,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Audit docs/design-contract.md and scan UI sources."
     )
     parser.add_argument("--root", type=Path, default=Path("."))
-    parser.add_argument("--contract", default="docs/design-contract.md")
+    parser.add_argument(
+        "--contract",
+        default="docs/design-contract.md",
+        help="Path to design contract markdown (skipped if absent when standalone gate flags are used).",
+    )
     parser.add_argument("--ui-path", action="append", default=[])
     parser.add_argument("--exclude", action="append", default=[])
     parser.add_argument("--screenshot-dir", type=Path, default=None)
