@@ -66,10 +66,15 @@ AUDIT_CODE_RULES = (
     ("DC-003", ("mobile",), re.compile(r"var\s+\w+\s*:\s*some\s+View\s*\{\s*HStack(?:\s*\([^)]*\))?\s*\{\s*ForEach\b")),
     ("DC-004", ("desktop", "mobile"), re.compile(r"Lazy(?:V|H)Stack[^{]*\{[\s\S]{0,220}?ForEach\([^)]*\)\s*\{\s*\w+\s+in\s+if\b")),
     ("DC-005", ("desktop", "mobile"), re.compile(r"var\s+\w*[Hh]eader\w*\s*:\s*some\s+View\s*\{[\s\S]{0,450}?HStack[\s\S]{0,350}?maxWidth\s*:\s*\.infinity[\s\S]{0,600}?var\s+\w*[Rr]ow\w*\s*:\s*some\s+View\s*\{(?![\s\S]{0,450}?maxWidth\s*:\s*\.infinity)[\s\S]{0,450}?HStack[\s\S]{0,350}?\.frame\(\s*width\s*:")),
+    ("SHIPSWIFT-SWWALLET-FLATTENED", ("desktop", "mobile"), re.compile(r"struct\s+SWWallet\b[\s\S]{0,600}?VStack[^{]*\{\s*ForEach")),
+    ("SLOP-DUPLICATE-DATA-REPRESENTATION", ("desktop", "mobile"), re.compile(r"(?:SWDonutChart|SectorMark)[\s\S]{0,800}?ProgressView\(\s*value\s*:")),
+    ("HIG-LAYOUT-OVERFLOW", ("mobile",), re.compile(r"var\s+\w+\s*:\s*some\s+View\s*\{\s*HStack(?:\s*\([^)]*\))?\s*\{\s*ForEach\b")),
+    ("HIG-LAZY-LEAF-CONDITIONAL", ("desktop", "mobile"), re.compile(r"Lazy(?:V|H)Stack[^{]*\{[\s\S]{0,220}?ForEach\([^)]*\)\s*\{\s*\w+\s+in\s+if\b")),
+    ("HIG-TABLE-COLUMN-MISMATCH", ("desktop", "mobile"), re.compile(r"var\s+\w*[Hh]eader\w*\s*:\s*some\s+View\s*\{[\s\S]{0,450}?HStack[\s\S]{0,350}?maxWidth\s*:\s*\.infinity[\s\S]{0,600}?var\s+\w*[Rr]ow\w*\s*:\s*some\s+View\s*\{(?![\s\S]{0,450}?maxWidth\s*:\s*\.infinity)[\s\S]{0,450}?HStack[\s\S]{0,350}?\.frame\(\s*width\s*:")),
     ("HIG-APPKIT-LEGACY-MOUSELOOP", ("desktop",), re.compile(r"override\s+func\s+mouseDown\b[\s\S]{0,300}?nextEvent\(\s*matching\s*:")),
     ("HIG-DRAG-WILL-BEGIN-UI", ("desktop", "mobile"), re.compile(r"dragInteraction\([^)]*sessionWillBegin[\s\S]{0,240}?(?:present\(|UIAlertController|withAnimation)")),
 )
-LOCALIZATION_CALL = re.compile(r"(?:[A-Za-z0-9_]*L10n\.(?:tr|format)|NSLocalizedString|LocalizedStringKey|localized)\s*(?:\(|:)\s*\"([a-z0-9_]+(?:\.[a-z0-9_]+)+(?:\s*%[@lld]+)?)\"", re.I)
+LOCALIZATION_CALL = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*L10n\.(?:tr|format)|NSLocalizedString|LocalizedStringKey|String\s*\(\s*localized|localized)\s*(?:\(|:)\s*\"([a-z0-9_]+(?:\.[a-z0-9_]+)+(?:\s*%[@lld]+)?)\"", re.I)
 FORMAT_SPECIFIER = re.compile(r"%(?:@|lld|ld|d|f|s)")
 
 
@@ -637,27 +642,63 @@ def _audit_paths(root: Path, paths: Sequence[str], suffixes: Optional[set[str]] 
     return result
 
 
-def audit_code(paths: Sequence[Path], platform: str) -> list[DesignViolation]:
+def _load_code_rules(cases_file: Optional[Path]) -> list[tuple[str, tuple[str, ...], re.Pattern[str]]]:
+    rules = list(AUDIT_CODE_RULES)
+    if cases_file is None:
+        return rules
+    try:
+        payload = json.loads(cases_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return rules
+    entries = payload.get("rules", payload) if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return rules
+    for entry in entries:
+        if not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) for key in ("id", "regex")):
+            continue
+        platforms = entry.get("platforms", ["desktop", "mobile", "web"])
+        if isinstance(platforms, str):
+            platforms = [platforms]
+        if not isinstance(platforms, list) or not all(isinstance(item, str) for item in platforms):
+            continue
+        try:
+            rules.append((entry["id"], tuple(platforms), re.compile(entry["regex"])))
+        except re.error:
+            continue
+    return rules
+
+
+def audit_code(paths: Sequence[Path], platform: str, cases_file: Optional[Path] = None) -> list[DesignViolation]:
     findings: list[DesignViolation] = []
     active = {"desktop", "mobile", "web"} if platform == "all" else {platform}
     for path in paths:
+        if _is_skipped_source(Path("."), path):
+            continue
         try:
             content = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             findings.append(DesignViolation(path.as_posix(), 0, "UNREADABLE_UI_SOURCE", "unable to read source as UTF-8"))
             continue
-        for rule, platforms, pattern in AUDIT_CODE_RULES:
+        lines = content.splitlines()
+        for rule, platforms, pattern in _load_code_rules(cases_file):
             if not active.intersection(platforms):
                 continue
             for match in pattern.finditer(content):
-                findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, rule, content.splitlines()[content.count("\n", 0, match.start())].strip()[:240]))
+                line_number = content.count("\n", 0, match.start()) + 1
+                line = lines[line_number - 1] if line_number <= len(lines) else ""
+                if re.search(rf"design-contract-allow:\s*{re.escape(rule)}\b", line, re.I) or re.search(r"design-contract:\s*allow\b", line, re.I):
+                    continue
+                findings.append(DesignViolation(path.as_posix(), line_number, rule, line.strip()[:240]))
         for pattern, rule in ((RAW_HEX_COLOR, "RAW_HEX_COLOR"), (RAW_RGB_COLOR, "RAW_RGB_COLOR"), (RAW_HSL_COLOR, "raw-hsl-color")):
             if platform != "web" and rule != "RAW_HEX_COLOR":
                 continue
             for match in pattern.finditer(content):
-                findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, rule, content.splitlines()[content.count("\n", 0, match.start())].strip()[:240]))
-        for finding in _swiftui_violations(Path("."), path, content, content.splitlines()):
-            findings.append(finding)
+                line_number = content.count("\n", 0, match.start()) + 1
+                line = lines[line_number - 1] if line_number <= len(lines) else ""
+                if re.search(r"design-contract:\s*allow\b", line, re.I):
+                    continue
+                findings.append(DesignViolation(path.as_posix(), line_number, rule, line.strip()[:240]))
+        findings.extend(_swiftui_violations(Path("."), path, content, lines))
     return findings
 
 
@@ -672,7 +713,7 @@ def _string_values(value: Any) -> list[str]:
 def audit_l10n(root: Path, paths: Sequence[str], locales: Sequence[str]) -> list[DesignViolation]:
     findings: list[DesignViolation] = []
     xcstrings = _audit_paths(root, paths, {".xcstrings"})
-    source_paths = _audit_paths(root, paths, SUPPORTED_SUFFIXES | {".m", ".mm", ".plist"})
+    source_paths = [path for path in _audit_paths(root, paths, SUPPORTED_SUFFIXES | {".m", ".mm", ".plist"}) if not _is_skipped_source(root, path)]
     registered: set[str] = set()
     for path in xcstrings:
         try:
@@ -686,32 +727,29 @@ def audit_l10n(root: Path, paths: Sequence[str], locales: Sequence[str]) -> list
             missing = [locale for locale in locales if locale not in localizations]
             if missing:
                 findings.append(DesignViolation(path.as_posix(), 0, "L10N-MISSING-LOCALE", f"{key}: missing {', '.join(missing)}"))
-            source = entry.get("localizations", {}).get("en", {}).get("stringUnit", {}).get("value", key) if isinstance(entry, dict) else key
+            source = localizations.get("en", {}).get("stringUnit", {}).get("value", key) if isinstance(localizations, dict) else key
             for locale, localized in localizations.items():
                 value = localized.get("stringUnit", {}).get("value", "") if isinstance(localized, dict) else ""
+                if "." in key and value == key:
+                    findings.append(DesignViolation(path.as_posix(), 0, "L10N-RAW-KEY-LEAK", f"{key}: {locale}"))
                 if FORMAT_SPECIFIER.findall(str(source)) != FORMAT_SPECIFIER.findall(str(value)):
                     findings.append(DesignViolation(path.as_posix(), 0, "L10N-FORMAT-MISMATCH", f"{key}: {locale}"))
     for path in source_paths:
-        if path.suffix == ".plist":
-            try:
-                content = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            match = re.search(r"CFBundleLocalizations.*?(?:<array>(.*?)</array>|\\n\\s*\\(?(.*?)\\)?\\n)", content, re.S)
-            if match and locales and any(locale not in (match.group(1) or match.group(2) or "") for locale in locales):
-                findings.append(DesignViolation(path.as_posix(), 0, "L10N-INFOPLIST-LOCALES", f"expected {', '.join(locales)}"))
-            continue
         try:
             content = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for raw in re.finditer(r"[\"']([a-z0-9_]+(?:\\.[a-z0-9_]+)+)[\"']", content, re.I):
-            if not LOCALIZATION_CALL.search(content[max(0, raw.start() - 48):raw.end() + 1]):
-                findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, raw.start()) + 1, "L10N-RAW-KEY-LEAK", raw.group(1)))
+        if path.suffix.casefold() == ".plist":
+            localization_section = content.split("CFBundleLocalizations", 1)[1] if "CFBundleLocalizations" in content else ""
+            if not localization_section or any(locale not in localization_section for locale in locales):
+                findings.append(DesignViolation(path.as_posix(), 0, "L10N-INFOPLIST-LOCALES", f"expected {', '.join(locales)}"))
+            continue
         for match in LOCALIZATION_CALL.finditer(content):
             key = match.group(1)
             if key and key not in registered:
                 findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, "L10N-UNREGISTERED-KEY", key))
+        for match in re.finditer(r"\b(?:Text|Label)\s*\(\s*[\"']([a-z0-9_]+(?:\.[a-z0-9_]+)+)[\"']", content, re.I):
+            findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, "L10N-RAW-KEY-LEAK", match.group(1)))
     return findings
 
 
@@ -749,7 +787,7 @@ def _decode_png(data: bytes) -> tuple[int, int, bytes, int]:
     return width, height, b"".join(rows), channels
 
 
-def check_edge_clipping(path: Path, expected_width: Optional[str], scale: float) -> list[str]:
+def check_edge_clipping(path: Path, expected_width: Optional[str], scale: float, check_polarity: bool = False) -> list[str]:
     errors: list[str] = []
     images = [path] if path.is_file() else sorted(path.glob("*.png")) if path.is_dir() else []
     if not images: return [f"edge clipping path not found: {path}"]
@@ -767,6 +805,14 @@ def check_edge_clipping(path: Path, expected_width: Optional[str], scale: float)
             right = sum(any(max(abs(rgb(y, width - 1 - x)[i] - background[i]) for i in range(3)) >= 28 for x in range(min(2, width))) for y in range(start, end)) / max(1, end - start)
             if left >= .06: errors.append(f"{image}: EDGE_CLIPPING_LEFT")
             if right >= .06: errors.append(f"{image}: EDGE_CLIPPING_RIGHT")
+            polarity = check_polarity or image.stem.casefold().endswith(("_light", "_dark"))
+            if polarity:
+                mean_luma = sum(0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b in (tuple(pixels[index:index + 3]) for index in range(0, len(pixels), channels))) / max(1, width * height)
+                stem = image.stem.casefold()
+                if stem.endswith("_light") and mean_luma < 85:
+                    errors.append(f"{image}: POLARITY_MISMATCH")
+                if stem.endswith("_dark") and mean_luma > 170:
+                    errors.append(f"{image}: POLARITY_MISMATCH")
         except (OSError, ValueError, struct.error, zlib.error) as error:
             errors.append(f"{image}: invalid PNG: {error}")
     return errors
@@ -799,17 +845,43 @@ def audit_geometry(path: Path, platform: str) -> list[str]:
             for second in siblings[index + 1:]:
                 b = second["frame"]; bx, by = float(b.get("minX", b.get("x", 0))), float(b.get("minY", b.get("y", 0))); br, bb = bx + float(b.get("width", 0)), by + float(b.get("height", 0))
                 if min(ar, br) > max(ax, bx) and min(ab, bb) > max(ay, by): errors.append("GEOM_SIBLING_OVERLAP")
-    groups: dict[Any, list[dict[str, Any]]] = {}
-    for node in nodes:
-        if node.get("role") in {"tableHeader", "tableRow", "bento"} or node.get("kind") in {"tableHeader", "tableRow", "bento"}: groups.setdefault(node.get("group", node.get("role")), []).append(node)
-    headers = [node for node in nodes if node.get("role") == "tableHeader" or node.get("kind") == "tableHeader"]
-    rows = [node for node in nodes if node.get("role") == "tableRow" or node.get("kind") == "tableRow"]
-    for header in headers:
-        for row in rows:
+    def role(node: dict[str, Any], wanted: str) -> bool:
+        return node.get("role") == wanted or node.get("kind") == wanted
+
+    headers = [node for node in nodes if role(node, "tableHeader")]
+    rows = [node for node in nodes if role(node, "tableRow")]
+    def scope(node: dict[str, Any]) -> Any:
+        return node.get("tableId", node.get("group", id(node.get("_parent"))))
+    def column(node: dict[str, Any], index: int) -> Any:
+        return next((node[key] for key in ("col", "columnIndex", "column") if key in node), index)
+    header_groups: dict[Any, list[dict[str, Any]]] = {}
+    row_groups: dict[Any, list[dict[str, Any]]] = {}
+    for node in headers:
+        header_groups.setdefault(scope(node), []).append(node)
+    for node in rows:
+        row_groups.setdefault(scope(node), []).append(node)
+    for key, header_group in header_groups.items():
+        row_group = row_groups.get(key, [])
+        row_by_column = {column(node, index): node for index, node in enumerate(row_group)}
+        for index, header in enumerate(header_group):
+            row = row_by_column.get(column(header, index))
+            if row is None:
+                continue
             hf, rf = header["frame"], row["frame"]
-            if abs(float(hf.get("minX", hf.get("x", 0))) - float(rf.get("minX", rf.get("x", 0)))) > 1 or abs(float(hf.get("width", 0)) - float(rf.get("width", 0))) > 1: errors.append("GEOM_COLUMN_MISALIGNED")
-    for group in groups.values():
-        if len(group) > 1 and len({round(float(node["frame"].get("minY", node["frame"].get("y", 0))) + float(node["frame"].get("height", 0)), 1) for node in group}) > 1: errors.append("GEOM_BENTO_BOTTOM_MISALIGNED")
+            if abs(float(hf.get("minX", hf.get("x", 0))) - float(rf.get("minX", rf.get("x", 0)))) > 1 or abs(float(hf.get("width", 0)) - float(rf.get("width", 0))) > 1:
+                errors.append("GEOM_COLUMN_MISALIGNED")
+
+    bento = [node for node in nodes if node.get("role") == "bento"]
+    for index, first in enumerate(bento):
+        a = first["frame"]
+        ay = float(a.get("minY", a.get("y", 0)))
+        ab = ay + float(a.get("height", 0))
+        for second in bento[index + 1:]:
+            b = second["frame"]
+            by = float(b.get("minY", b.get("y", 0)))
+            same_group = first.get("row", first.get("group")) is not None and first.get("row", first.get("group")) == second.get("row", second.get("group"))
+            if (same_group or abs(ay - by) <= 20.0) and abs(ab - (by + float(b.get("height", 0)))) > 1.0:
+                errors.append("GEOM_BENTO_BOTTOM_MISALIGNED")
     return list(dict.fromkeys(errors))
 
 
@@ -849,10 +921,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--snapshot-dir", type=Path)
     parser.add_argument("--expected-pixel-width")
     parser.add_argument("--audit-code", nargs="*", default=None, metavar="PATH")
+    parser.add_argument("--cases-file", type=Path, default=None, metavar="JSON")
     parser.add_argument("--platform", choices=("desktop", "mobile", "web", "all"), default="desktop")
     parser.add_argument("--audit-l10n", nargs="?", const=".", default=None, metavar="PATH")
     parser.add_argument("--locales", default="en,zh-Hans")
     parser.add_argument("--check-edge-clipping", metavar="PNG_OR_DIR")
+    parser.add_argument("--check-polarity", action="store_true")
     parser.add_argument("--scale", type=float, default=1.0)
     parser.add_argument("--audit-geometry", metavar="GEOMETRY_JSON")
     return parser
@@ -1149,7 +1223,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     if args.audit_code is not None:
         audit_paths = _audit_paths(root, args.audit_code, SUPPORTED_SUFFIXES)
-        violations.extend(audit_code(audit_paths, args.platform))
+        cases_file = args.cases_file if args.cases_file is None or args.cases_file.is_absolute() else root / args.cases_file
+        violations.extend(audit_code(audit_paths, args.platform, cases_file))
     if args.audit_l10n is not None:
         l10n_target = [args.audit_l10n] if args.audit_l10n != "." else []
         violations.extend(audit_l10n(root, l10n_target, _parse_csv(args.locales)))
@@ -1157,7 +1232,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.check_edge_clipping:
         target = Path(args.check_edge_clipping)
         target = target if target.is_absolute() else root / target
-        visual_errors.extend(check_edge_clipping(target, args.expected_pixel_width, args.scale))
+        visual_errors.extend(check_edge_clipping(target, args.expected_pixel_width, args.scale, args.check_polarity))
     if args.audit_geometry:
         target = Path(args.audit_geometry)
         target = target if target.is_absolute() else root / target

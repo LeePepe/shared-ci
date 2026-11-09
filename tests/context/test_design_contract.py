@@ -712,6 +712,52 @@ No raw colors.
         bad = self._write("bad.json", json.dumps({"viewportWidth": 100, "children": [{"numeric": True, "text": "12...", "interactive": True, "frame": {"x": 98, "y": 0, "width": 5, "height": 5}}]}))
         self.assertEqual({"GEOM_VIEWPORT_OVERFLOW", "GEOM_NUMERIC_TRUNCATION", "GEOM_HIT_TARGET_TOO_SMALL"}, set(design_contract.audit_geometry(bad, "mobile")))
 
+    def test_audit_code_loads_cases_skips_sources_and_honors_allow_comments(self) -> None:
+        self._write("UI/Bad.swift", "let value = Marker()\n")
+        self._write("Tests/Bad.swift", "let value = Marker()\n")
+        self._write("UI/Allowed.swift", "let value = Marker() // design-contract-allow: CASE-001\n")
+        cases = self._write("cases.json", json.dumps({"rules": [{"id": "CASE-001", "title": "marker", "severity": "P1", "platforms": ["desktop"], "regex": r"Marker\(", "remediation": "remove marker"}]}))
+        findings = design_contract.audit_code([self.root / "UI/Bad.swift", self.root / "Tests/Bad.swift", self.root / "UI/Allowed.swift"], "desktop", cases)
+        self.assertEqual({"CASE-001"}, {item.rule for item in findings})
+        self.assertTrue(findings[0].path.endswith("/UI/Bad.swift"))
+
+    def test_l10n_detects_raw_keys_only_in_ui_and_supports_localization_calls(self) -> None:
+        self._write("Localizable.xcstrings", json.dumps({"strings": {"dashboard.metric.title": {"localizations": {"en": {"stringUnit": {"value": "dashboard.metric.title"}}}}}}))
+        self._write("UI/View.swift", 'Text("dashboard.metric.title")\nString(localized: "dashboard.metric.title")\nNSLocalizedString("dashboard.metric.title", comment: "")\nFooL10n.format("dashboard.metric.title")\nlet arbitrary = "not.a.ui.key"\n')
+        self._write("Tests/View.swift", 'Text("test.raw.key")\n')
+        findings = design_contract.audit_l10n(self.root, [], ["en"])
+        raw = [item for item in findings if item.rule == "L10N-RAW-KEY-LEAK"]
+        self.assertEqual(2, len(raw))
+        self.assertEqual(0, sum(item.rule == "L10N-UNREGISTERED-KEY" for item in findings))
+
+    def test_l10n_requires_infoplist_locales_when_key_is_missing_or_incomplete(self) -> None:
+        plist = self._write("Info.plist", "<plist><dict><key>CFBundleName</key><string>App</string></dict></plist>")
+        self.assertIn("L10N-INFOPLIST-LOCALES", {item.rule for item in design_contract.audit_l10n(self.root, ["Info.plist"], ["en"])})
+        plist.write_text("<key>CFBundleLocalizations</key><array><string>en</string></array>", encoding="utf-8")
+        self.assertEqual([], design_contract.audit_l10n(self.root, ["Info.plist"], ["en"]))
+
+    def test_geometry_matches_columns_by_index_and_aligns_only_bento_rows(self) -> None:
+        geometry = self._write("geometry.json", json.dumps({"viewportWidth": 300, "children": [
+            {"role": "tableHeader", "tableId": "t", "col": 0, "frame": {"x": 0, "y": 0, "width": 100, "height": 20}},
+            {"role": "tableHeader", "tableId": "t", "col": 1, "frame": {"x": 100, "y": 0, "width": 100, "height": 20}},
+            {"role": "tableRow", "tableId": "t", "col": 0, "frame": {"x": 0, "y": 30, "width": 100, "height": 20}},
+            {"role": "tableRow", "tableId": "t", "col": 1, "frame": {"x": 100, "y": 30, "width": 100, "height": 20}},
+            {"role": "tableHeader", "group": "other", "frame": {"x": 0, "y": 80, "width": 50, "height": 20}},
+            {"role": "tableRow", "group": "other-row", "frame": {"x": 50, "y": 110, "width": 50, "height": 20}},
+            {"role": "bento", "row": 1, "frame": {"x": 0, "y": 150, "width": 50, "height": 40}},
+            {"role": "bento", "row": 1, "frame": {"x": 60, "y": 150, "width": 50, "height": 30}},
+            {"role": "tableHeader", "group": "headers", "frame": {"x": 0, "y": 200, "width": 50, "height": 10}},
+            {"role": "tableRow", "group": "headers", "frame": {"x": 0, "y": 220, "width": 50, "height": 10}},
+        ]}))
+        errors = set(design_contract.audit_geometry(geometry, "desktop"))
+        self.assertEqual({"GEOM_BENTO_BOTTOM_MISALIGNED"}, errors)
+
+    def test_edge_clipping_checks_filename_polarity(self) -> None:
+        dark_light = self._write_png("shots/home_light.png")
+        self.assertTrue(any("POLARITY_MISMATCH" in error for error in design_contract.check_edge_clipping(dark_light, None, 1.0)))
+        normal = self._write_png("shots/home.png")
+        self.assertNotIn("POLARITY_MISMATCH", design_contract.check_edge_clipping(normal, None, 1.0))
+
     def test_composable_gate_invocation_matches_tech_context_shape(self) -> None:
         self._write("UI/View.swift", "Text(\"ok\")\n")
         with captured_output() as (stdout, _):
