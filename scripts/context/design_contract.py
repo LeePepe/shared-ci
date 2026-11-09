@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 
 REQUIRED_HEADINGS = (
@@ -51,6 +51,31 @@ MICRO_FONT_SIZE = re.compile(
 SCALE_FACTOR = re.compile(
     r"\.minimumScaleFactor\s*\(\s*"
 )
+
+AUDIT_CODE_RULES = (
+    ("HIG-LG-CONTENT", ("desktop", "mobile"), re.compile(r"(List|Form|Table|ForEach)\s*\{[\s\S]{0,240}?\.glassEffect\(")),
+    ("HIG-IOS-SCREEN-BOUNDS", ("desktop", "mobile"), re.compile(r"\bUIScreen\.main\b|\buserInterfaceIdiom\s*==\s*\.phone\b|\binterfaceOrientation\.(?:isLandscape|isPortrait)\b")),
+    ("HIG-COLOR-RAW-HEX", ("desktop", "mobile"), re.compile(r"Color\(\s*red\s*:[^)]+green\s*:[^)]+blue\s*:")),
+    ("HIG-COMPAT-FLAG", ("desktop", "mobile"), re.compile(r"UIDesignRequiresCompatibility")),
+    ("SLOP-PURPLE-GRADIENT", ("desktop", "mobile"), re.compile(r"LinearGradient\([^)]*colors\s*:\s*\[\s*(?:\.purple\s*,\s*\.blue|\.blue\s*,\s*\.purple|\.indigo\s*,\s*\.purple)")),
+    ("SLOP-LEFT-ACCENT-STRIPE", ("desktop", "mobile"), re.compile(r"Rectangle\(\)\s*\.fill\([^)]+\)\s*\.frame\(\s*width\s*:\s*[3-6]\b")),
+    ("HIG-MACOS-HOVER-EFFECT", ("desktop",), re.compile(r"\.hoverEffect\s*\(")),
+    ("SLOP-MUDDY-BLACK-GRADIENT", ("desktop", "mobile"), re.compile(r"LinearGradient\([^)]*colors\s*:\s*\[[^\]]*\.black\b")),
+    ("DC-001", ("desktop", "mobile"), re.compile(r"struct\s+\w*CardStack\w*\b[\s\S]{0,600}?VStack[^{]*\{\s*ForEach")),
+    ("DC-002", ("desktop", "mobile"), re.compile(r"SectorMark[\s\S]{0,800}?ProgressView\(\s*value\s*:")),
+    ("DC-003", ("mobile",), re.compile(r"var\s+\w+\s*:\s*some\s+View\s*\{\s*HStack(?:\s*\([^)]*\))?\s*\{\s*ForEach\b")),
+    ("DC-004", ("desktop", "mobile"), re.compile(r"Lazy(?:V|H)Stack[^{]*\{[\s\S]{0,220}?ForEach\([^)]*\)\s*\{\s*\w+\s+in\s+if\b")),
+    ("DC-005", ("desktop", "mobile"), re.compile(r"var\s+\w*[Hh]eader\w*\s*:\s*some\s+View\s*\{[\s\S]{0,450}?HStack[\s\S]{0,350}?maxWidth\s*:\s*\.infinity[\s\S]{0,600}?var\s+\w*[Rr]ow\w*\s*:\s*some\s+View\s*\{(?![\s\S]{0,450}?maxWidth\s*:\s*\.infinity)[\s\S]{0,450}?HStack[\s\S]{0,350}?\.frame\(\s*width\s*:")),
+    ("HIG-CARD-STACK-FLATTENED", ("desktop", "mobile"), re.compile(r"struct\s+\w*CardStack\w*\b[\s\S]{0,600}?VStack[^{]*\{\s*ForEach")),
+    ("SLOP-DUPLICATE-DATA-REPRESENTATION", ("desktop", "mobile"), re.compile(r"SectorMark[\s\S]{0,800}?ProgressView\(\s*value\s*:")),
+    ("HIG-LAYOUT-OVERFLOW", ("mobile",), re.compile(r"var\s+\w+\s*:\s*some\s+View\s*\{\s*HStack(?:\s*\([^)]*\))?\s*\{\s*ForEach\b")),
+    ("HIG-LAZY-LEAF-CONDITIONAL", ("desktop", "mobile"), re.compile(r"Lazy(?:V|H)Stack[^{]*\{[\s\S]{0,220}?ForEach\([^)]*\)\s*\{\s*\w+\s+in\s+if\b")),
+    ("HIG-TABLE-COLUMN-MISMATCH", ("desktop", "mobile"), re.compile(r"var\s+\w*[Hh]eader\w*\s*:\s*some\s+View\s*\{[\s\S]{0,450}?HStack[\s\S]{0,350}?maxWidth\s*:\s*\.infinity[\s\S]{0,600}?var\s+\w*[Rr]ow\w*\s*:\s*some\s+View\s*\{(?![\s\S]{0,450}?maxWidth\s*:\s*\.infinity)[\s\S]{0,450}?HStack[\s\S]{0,350}?\.frame\(\s*width\s*:")),
+    ("HIG-APPKIT-LEGACY-MOUSELOOP", ("desktop",), re.compile(r"override\s+func\s+mouseDown\b[\s\S]{0,300}?nextEvent\(\s*matching\s*:")),
+    ("HIG-DRAG-WILL-BEGIN-UI", ("desktop", "mobile"), re.compile(r"dragInteraction\([^)]*sessionWillBegin[\s\S]{0,240}?(?:present\(|UIAlertController|withAnimation)")),
+)
+LOCALIZATION_CALL = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*L10n\.(?:tr|format)|NSLocalizedString|LocalizedStringKey|String\s*\(\s*localized|localized)\s*(?:\(|:)\s*\"([a-z0-9_]+(?:\.[a-z0-9_]+)+(?:\s*%[@lld]+)?)\"", re.I)
+FORMAT_SPECIFIER = re.compile(r"%(?:@|lld|ld|d|f|s)")
 
 
 @dataclass(frozen=True)
@@ -602,6 +627,337 @@ def scan_ui_sources(
     return findings
 
 
+def _audit_paths(root: Path, paths: Sequence[str], suffixes: Optional[set[str]] = None) -> list[Path]:
+    candidates = [root] if not paths else [Path(item) if Path(item).is_absolute() else root / item for item in paths]
+    result: list[Path] = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate.is_file():
+            if suffixes is None or candidate.suffix.casefold() in suffixes:
+                result.append(candidate)
+        elif candidate.is_dir():
+            for path in sorted(candidate.rglob("*")):
+                if path.is_file() and (suffixes is None or path.suffix.casefold() in suffixes):
+                    result.append(path.resolve())
+    return result
+
+
+def _load_code_rules(
+    cases_file: Optional[Path],
+) -> tuple[list[tuple[str, tuple[str, ...], re.Pattern[str]]], list[DesignViolation]]:
+    rules = list(AUDIT_CODE_RULES)
+    if cases_file is None:
+        return rules, []
+    try:
+        payload = json.loads(cases_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return rules, [
+            DesignViolation(
+                cases_file.as_posix(),
+                0,
+                "INVALID_CASES_FILE",
+                f"unable to load cases file: {error}",
+            )
+        ]
+    if isinstance(payload, dict):
+        entries = payload.get("rules", payload.get("cases"))
+    else:
+        entries = payload
+    if not isinstance(entries, list) or not entries:
+        return rules, [
+            DesignViolation(
+                cases_file.as_posix(),
+                0,
+                "INVALID_CASES_FILE",
+                "cases file must contain a non-empty list of rules",
+            )
+        ]
+    errors: list[DesignViolation] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not all(
+            isinstance(entry.get(key), str) and entry.get(key).strip()
+            for key in ("id", "regex")
+        ):
+            errors.append(
+                DesignViolation(
+                    cases_file.as_posix(),
+                    0,
+                    "INVALID_CASES_FILE",
+                    f"entry {index} must define non-empty string 'id' and 'regex'",
+                )
+            )
+            continue
+        platforms = entry.get("platforms", ["desktop", "mobile", "web"])
+        if isinstance(platforms, str):
+            platforms = [platforms]
+        if (
+            not isinstance(platforms, list)
+            or not platforms
+            or not all(
+                isinstance(item, str) and item in ("desktop", "mobile", "web", "all")
+                for item in platforms
+            )
+        ):
+            errors.append(
+                DesignViolation(
+                    cases_file.as_posix(),
+                    0,
+                    "INVALID_CASES_FILE",
+                    f"entry {entry['id']} has invalid platforms",
+                )
+            )
+            continue
+        try:
+            rules.append((entry["id"], tuple(platforms), re.compile(entry["regex"])))
+        except re.error as error:
+            errors.append(
+                DesignViolation(
+                    cases_file.as_posix(),
+                    0,
+                    "INVALID_CASES_FILE",
+                    f"entry {entry['id']} has invalid regex: {error}",
+                )
+            )
+    return rules, errors
+
+
+def audit_code(paths: Sequence[Path], platform: str, cases_file: Optional[Path] = None) -> list[DesignViolation]:
+    rules, findings = _load_code_rules(cases_file)
+    active = {"desktop", "mobile", "web"} if platform == "all" else {platform}
+    for path in paths:
+        if _is_skipped_source(Path("."), path):
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            findings.append(DesignViolation(path.as_posix(), 0, "UNREADABLE_UI_SOURCE", "unable to read source as UTF-8"))
+            continue
+        lines = content.splitlines()
+        for rule, platforms, pattern in rules:
+            if "all" not in platforms and not active.intersection(platforms):
+                continue
+            for match in pattern.finditer(content):
+                line_number = content.count("\n", 0, match.start()) + 1
+                end_line = content.count("\n", 0, max(match.start(), match.end() - 1)) + 1
+                spanned = "\n".join(lines[line_number - 1 : end_line])
+                line = lines[line_number - 1] if line_number <= len(lines) else ""
+                if (
+                    re.search(rf"design-contract-allow:\s*{re.escape(rule)}\b", spanned, re.I)
+                    or ALLOW_PATTERN.search(spanned)
+                ):
+                    continue
+                findings.append(DesignViolation(path.as_posix(), line_number, rule, line.strip()[:240]))
+        for pattern, rule in ((RAW_HEX_COLOR, "RAW_HEX_COLOR"), (RAW_RGB_COLOR, "RAW_RGB_COLOR"), (RAW_HSL_COLOR, "raw-hsl-color")):
+            if platform != "web" and rule != "RAW_HEX_COLOR":
+                continue
+            for match in pattern.finditer(content):
+                line_number = content.count("\n", 0, match.start()) + 1
+                line = lines[line_number - 1] if line_number <= len(lines) else ""
+                if ALLOW_PATTERN.search(line):
+                    continue
+                findings.append(DesignViolation(path.as_posix(), line_number, rule, line.strip()[:240]))
+        findings.extend(_swiftui_violations(Path("."), path, content, lines))
+    return findings
+
+
+def _string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [item for item in value.values() if isinstance(item, str)]
+    return []
+
+
+def audit_l10n(root: Path, paths: Sequence[str], locales: Sequence[str]) -> list[DesignViolation]:
+    findings: list[DesignViolation] = []
+    xcstrings = _audit_paths(root, paths, {".xcstrings"})
+    source_paths = [path for path in _audit_paths(root, paths, SUPPORTED_SUFFIXES | {".m", ".mm", ".plist"}) if not _is_skipped_source(root, path)]
+    registered: set[str] = set()
+    for path in xcstrings:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            findings.append(DesignViolation(path.as_posix(), 0, "L10N-INVALID-XCSTRINGS", "invalid localization catalog"))
+            continue
+        for key, entry in document.get("strings", {}).items():
+            registered.add(key)
+            localizations = entry.get("localizations", {}) if isinstance(entry, dict) else {}
+            missing = [locale for locale in locales if locale not in localizations]
+            if missing:
+                findings.append(DesignViolation(path.as_posix(), 0, "L10N-MISSING-LOCALE", f"{key}: missing {', '.join(missing)}"))
+            source = localizations.get("en", {}).get("stringUnit", {}).get("value", key) if isinstance(localizations, dict) else key
+            for locale, localized in localizations.items():
+                value = localized.get("stringUnit", {}).get("value", "") if isinstance(localized, dict) else ""
+                if "." in key and value == key:
+                    findings.append(DesignViolation(path.as_posix(), 0, "L10N-RAW-KEY-LEAK", f"{key}: {locale}"))
+                if FORMAT_SPECIFIER.findall(str(source)) != FORMAT_SPECIFIER.findall(str(value)):
+                    findings.append(DesignViolation(path.as_posix(), 0, "L10N-FORMAT-MISMATCH", f"{key}: {locale}"))
+    for path in source_paths:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if path.suffix.casefold() == ".plist":
+            localization_section = content.split("CFBundleLocalizations", 1)[1] if "CFBundleLocalizations" in content else ""
+            if not localization_section or any(locale not in localization_section for locale in locales):
+                findings.append(DesignViolation(path.as_posix(), 0, "L10N-INFOPLIST-LOCALES", f"expected {', '.join(locales)}"))
+            continue
+        for match in LOCALIZATION_CALL.finditer(content):
+            key = match.group(1)
+            if key and key not in registered:
+                findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, "L10N-UNREGISTERED-KEY", key))
+        for match in re.finditer(r"\b(?:Text|Label)\s*\(\s*[\"']([a-z0-9_]+(?:\.[a-z0-9_]+)+)[\"']", content, re.I):
+            findings.append(DesignViolation(path.as_posix(), content.count("\n", 0, match.start()) + 1, "L10N-RAW-KEY-LEAK", match.group(1)))
+    return findings
+
+
+def _decode_png(data: bytes) -> tuple[int, int, bytes, int]:
+    if len(data) < 29 or data[:8] != _PNG_SIGNATURE:
+        raise ValueError("not a PNG")
+    ihdr = _parse_ihdr(data[16:29])
+    if ihdr is None:
+        raise ValueError("invalid PNG IHDR")
+    width, height, bit_depth, color_type, interlace = ihdr
+    if bit_depth != 8 or color_type not in (2, 6) or interlace != 0:
+        raise ValueError("unsupported PNG format")
+    channels = 3 if color_type == 2 else 4
+    expected = _png_image_byte_count(width, height, channels, bit_depth, interlace)
+    if expected is None:
+        raise ValueError("PNG image exceeds byte limit")
+    raw = bytearray()
+    offset = 8
+    while offset < len(data):
+        chunk = _png_chunk(data, offset)
+        if chunk is None:
+            raise ValueError("invalid PNG chunk")
+        kind, chunk_data, offset = chunk
+        if kind == b"IDAT":
+            if len(raw) + len(chunk_data) > _MAX_PNG_IMAGE_BYTES:
+                raise ValueError("PNG IDAT exceeds limit")
+            raw.extend(chunk_data)
+    decompressor = zlib.decompressobj()
+    decoded = decompressor.decompress(bytes(raw), expected + 1)
+    if (
+        len(decoded) != expected
+        or decompressor.unconsumed_tail
+        or decompressor.unused_data
+        or not decompressor.eof
+    ):
+        raise ValueError("invalid PNG scanline payload")
+    stride = width * channels
+    rows: list[bytes] = []; cursor = 0; prior = bytearray(stride)
+    for _ in range(height):
+        filter_type = decoded[cursor]; cursor += 1; row = bytearray(decoded[cursor:cursor + stride]); cursor += stride
+        for index in range(stride):
+            left = row[index - channels] if index >= channels else 0; up = prior[index]; upper = prior[index - channels] if index >= channels else 0
+            if filter_type == 1: row[index] = (row[index] + left) & 255
+            elif filter_type == 2: row[index] = (row[index] + up) & 255
+            elif filter_type == 3: row[index] = (row[index] + (left + up) // 2) & 255
+            elif filter_type == 4:
+                estimate = left + up - upper; pa, pb, pc = abs(estimate-left), abs(estimate-up), abs(estimate-upper)
+                row[index] = (row[index] + (left if pa <= pb and pa <= pc else up if pb <= pc else upper)) & 255
+        rows.append(bytes(row)); prior = row
+    return width, height, b"".join(rows), channels
+
+
+def check_edge_clipping(path: Path, expected_width: Optional[str], scale: float, check_polarity: bool = False) -> list[str]:
+    errors: list[str] = []
+    images = [path] if path.is_file() else sorted(path.glob("*.png")) if path.is_dir() else []
+    if not images: return [f"edge clipping path not found: {path}"]
+    for image in images:
+        try:
+            width, height, pixels, channels = _decode_png(image.read_bytes())
+            if expected_width is not None and width != round(float(expected_width) * scale):
+                errors.append(f"{image}: EDGE_PIXEL_WIDTH expected {round(float(expected_width) * scale)}, got {width}")
+            start, end = int(height * .14), max(int(height * .14) + 1, int(height * .86))
+            def rgb(y: int, x: int) -> tuple[int, int, int]:
+                base = (y * width + x) * channels; return tuple(pixels[base:base + 3])
+            corners = [rgb(start, 0), rgb(start, width - 1), rgb(end - 1, 0), rgb(end - 1, width - 1)]
+            background = tuple(sorted(channel[index] for channel in corners)[2] for index in range(3))
+            left = sum(any(max(abs(rgb(y, x)[i] - background[i]) for i in range(3)) >= 28 for x in range(min(2, width))) for y in range(start, end)) / max(1, end - start)
+            right = sum(any(max(abs(rgb(y, width - 1 - x)[i] - background[i]) for i in range(3)) >= 28 for x in range(min(2, width))) for y in range(start, end)) / max(1, end - start)
+            if left >= .06: errors.append(f"{image}: EDGE_CLIPPING_LEFT")
+            if right >= .06: errors.append(f"{image}: EDGE_CLIPPING_RIGHT")
+            polarity = check_polarity or image.stem.casefold().endswith(("_light", "_dark"))
+            if polarity:
+                mean_luma = sum(0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b in (tuple(pixels[index:index + 3]) for index in range(0, len(pixels), channels))) / max(1, width * height)
+                stem = image.stem.casefold()
+                if stem.endswith("_light") and mean_luma < 85:
+                    errors.append(f"{image}: POLARITY_MISMATCH")
+                if stem.endswith("_dark") and mean_luma > 170:
+                    errors.append(f"{image}: POLARITY_MISMATCH")
+        except (OSError, ValueError, struct.error, zlib.error) as error:
+            errors.append(f"{image}: invalid PNG: {error}")
+    return errors
+
+
+def audit_geometry(path: Path, platform: str) -> list[str]:
+    try: document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error: return [f"GEOM_INVALID: {error}"]
+    viewport = float(document.get("viewportWidth", document.get("viewport", {}).get("width", 0)))
+    nodes: list[dict[str, Any]] = []
+    def visit(value: Any, parent: Optional[dict[str, Any]] = None) -> None:
+        if isinstance(value, dict):
+            if isinstance(value.get("frame"), dict):
+                item = dict(value); item["_parent"] = parent; nodes.append(item)
+            for child in value.get("children", []): visit(child, value)
+        elif isinstance(value, list):
+            for child in value: visit(child, parent)
+    visit(document)
+    errors: list[str] = []
+    for node in nodes:
+        frame = node["frame"]; x, y = float(frame.get("minX", frame.get("x", 0))), float(frame.get("minY", frame.get("y", 0))); width, height = float(frame.get("width", 0)), float(frame.get("height", 0)); max_x, max_y = x + width, y + height
+        if viewport and (x < 0 or max_x > viewport): errors.append("GEOM_VIEWPORT_OVERFLOW")
+        text = str(node.get("text", node.get("label", "")))
+        if node.get("numeric") and ("…" in text or "..." in text): errors.append("GEOM_NUMERIC_TRUNCATION")
+        if node.get("interactive") and (width < (44 if platform == "mobile" else 28) or height < (44 if platform == "mobile" else 28)): errors.append("GEOM_HIT_TARGET_TOO_SMALL")
+    for parent in {id(node.get("_parent")): node.get("_parent") for node in nodes if node.get("_parent")}.values():
+        siblings = [node for node in nodes if node.get("_parent") is parent]
+        for index, first in enumerate(siblings):
+            a = first["frame"]; ax, ay = float(a.get("minX", a.get("x", 0))), float(a.get("minY", a.get("y", 0))); ar, ab = ax + float(a.get("width", 0)), ay + float(a.get("height", 0))
+            for second in siblings[index + 1:]:
+                b = second["frame"]; bx, by = float(b.get("minX", b.get("x", 0))), float(b.get("minY", b.get("y", 0))); br, bb = bx + float(b.get("width", 0)), by + float(b.get("height", 0))
+                if min(ar, br) > max(ax, bx) and min(ab, bb) > max(ay, by): errors.append("GEOM_SIBLING_OVERLAP")
+    def role(node: dict[str, Any], wanted: str) -> bool:
+        return node.get("role") == wanted or node.get("kind") == wanted
+
+    headers = [node for node in nodes if role(node, "tableHeader")]
+    rows = [node for node in nodes if role(node, "tableRow")]
+    def scope(node: dict[str, Any]) -> Any:
+        return node.get("tableId", node.get("group", id(node.get("_parent"))))
+    def column(node: dict[str, Any], index: int) -> Any:
+        return next((node[key] for key in ("col", "columnIndex", "column") if key in node), index)
+    header_groups: dict[Any, list[dict[str, Any]]] = {}
+    row_groups: dict[Any, list[dict[str, Any]]] = {}
+    for node in headers:
+        header_groups.setdefault(scope(node), []).append(node)
+    for node in rows:
+        row_groups.setdefault(scope(node), []).append(node)
+    for key, header_group in header_groups.items():
+        row_group = row_groups.get(key, [])
+        row_by_column = {column(node, index): node for index, node in enumerate(row_group)}
+        for index, header in enumerate(header_group):
+            row = row_by_column.get(column(header, index))
+            if row is None:
+                continue
+            hf, rf = header["frame"], row["frame"]
+            if abs(float(hf.get("minX", hf.get("x", 0))) - float(rf.get("minX", rf.get("x", 0)))) > 1 or abs(float(hf.get("width", 0)) - float(rf.get("width", 0))) > 1:
+                errors.append("GEOM_COLUMN_MISALIGNED")
+
+    bento = [node for node in nodes if node.get("role") == "bento"]
+    for index, first in enumerate(bento):
+        a = first["frame"]
+        ay = float(a.get("minY", a.get("y", 0)))
+        ab = ay + float(a.get("height", 0))
+        for second in bento[index + 1:]:
+            b = second["frame"]
+            by = float(b.get("minY", b.get("y", 0)))
+            same_group = first.get("row", first.get("group")) is not None and first.get("row", first.get("group")) == second.get("row", second.get("group"))
+            if (same_group or abs(ay - by) <= 20.0) and abs(ab - (by + float(b.get("height", 0)))) > 1.0:
+                errors.append("GEOM_BENTO_BOTTOM_MISALIGNED")
+    return list(dict.fromkeys(errors))
+
+
 def _jev_threshold_argument(value: str) -> float:
     score = _jev_score(value)
     if score is None:
@@ -616,7 +972,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Audit docs/design-contract.md and scan UI sources."
     )
     parser.add_argument("--root", type=Path, default=Path("."))
-    parser.add_argument("--contract", default="docs/design-contract.md")
+    parser.add_argument(
+        "--contract",
+        default="docs/design-contract.md",
+        help="Path to design contract markdown (skipped if absent when standalone gate flags are used).",
+    )
     parser.add_argument("--ui-path", action="append", default=[])
     parser.add_argument("--exclude", action="append", default=[])
     parser.add_argument("--screenshot-dir", type=Path, default=None)
@@ -637,6 +997,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--appearances", default="light,dark")
     parser.add_argument("--snapshot-dir", type=Path)
     parser.add_argument("--expected-pixel-width")
+    parser.add_argument("--audit-code", nargs="*", default=None, metavar="PATH")
+    parser.add_argument("--cases-file", type=Path, default=None, metavar="JSON")
+    parser.add_argument("--platform", choices=("desktop", "mobile", "web", "all"), default="desktop")
+    parser.add_argument("--audit-l10n", nargs="?", const=".", default=None, metavar="PATH")
+    parser.add_argument("--locales", default="en,zh-Hans")
+    parser.add_argument("--check-edge-clipping", metavar="PNG_OR_DIR")
+    parser.add_argument("--check-polarity", action="store_true")
+    parser.add_argument("--scale", type=float, default=1.0)
+    parser.add_argument("--audit-geometry", metavar="GEOMETRY_JSON")
     return parser
 
 
@@ -924,21 +1293,37 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     contract_path = (
         contract_arg.resolve() if contract_arg.is_absolute() else root / contract_arg
     )
-    contract_errors = audit_contract(contract_path)
+    targeted = any(value is not None for value in (args.audit_code, args.audit_l10n, args.check_edge_clipping, args.audit_geometry))
+    contract_errors = [] if targeted and args.contract == "docs/design-contract.md" and not contract_path.is_file() else audit_contract(contract_path)
     violations = (
         scan_ui_sources(root, args.ui_path, args.exclude) if args.ui_path else []
     )
-    visual_errors = (
-        _visual_audit(
-            root,
-            _parse_csv(args.states),
-            _parse_csv(args.appearances),
-            args.snapshot_dir,
-            args.expected_pixel_width,
+    if args.audit_code is not None:
+        audit_paths = _audit_paths(root, args.audit_code, SUPPORTED_SUFFIXES)
+        cases_file = args.cases_file if args.cases_file is None or args.cases_file.is_absolute() else root / args.cases_file
+        violations.extend(audit_code(audit_paths, args.platform, cases_file))
+    if args.audit_l10n is not None:
+        l10n_target = [args.audit_l10n] if args.audit_l10n != "." else []
+        violations.extend(audit_l10n(root, l10n_target, _parse_csv(args.locales)))
+    visual_errors: list[str] = []
+    if args.check_edge_clipping:
+        target = Path(args.check_edge_clipping)
+        target = target if target.is_absolute() else root / target
+        visual_errors.extend(check_edge_clipping(target, args.expected_pixel_width, args.scale, args.check_polarity))
+    if args.audit_geometry:
+        target = Path(args.audit_geometry)
+        target = target if target.is_absolute() else root / target
+        visual_errors.extend(audit_geometry(target, args.platform))
+    if args.visual:
+        visual_errors.extend(
+            _visual_audit(
+                root,
+                _parse_csv(args.states),
+                _parse_csv(args.appearances),
+                args.snapshot_dir,
+                args.expected_pixel_width,
+            )
         )
-        if args.visual
-        else []
-    )
     screenshot_paths: list[Path] = []
     advisory_violations: Optional[list[DesignViolation]] = None
     if args.screenshot_dir is not None:
