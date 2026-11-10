@@ -3,7 +3,6 @@
 ## Read first
 
 - Before repository changes: [Repository guide](docs/repository-guide.md).
-- For M2 spec-only and worktree skill orchestration: [Workflow orchestration](https://github.com/LeePepe/user-skills/blob/main/skills/m2-dispatcher/SKILL.md).
 - For ownership and dependencies: [Layer map and leaf contexts](docs/architecture/tech-context.md).
 - For a code or contract change: [Repository PR work units](docs/repository-guide.md#pr-work-units).
 
