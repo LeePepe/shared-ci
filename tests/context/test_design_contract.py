@@ -684,6 +684,85 @@ No raw colors.
                 self.assertEqual("", stdout.getvalue())
                 self.assertIn("Jev threshold must be finite and between 0 and 1", stderr.getvalue())
 
+    def test_audit_code_detects_instructional_micro_copy_in_swiftui_and_web(self) -> None:
+        self._write(
+            "UI/TodoPage.swift",
+            'Text("待办清单")\n'
+            'Text("点击任务置顶聚焦 · 标题与属性展示处直接点按修改")\n'
+            'Label("点按标题即可直接编辑", systemImage: "list.bullet")\n'
+            'Text("点按文字原地修改 · 按住麦克风继续补充")\n'
+            'Text("按住右下按钮继续追补")\n'
+            'Text("点按任意条目切换至顶部聚焦")\n'
+            'Text("点击即可修改") // design-contract-allow: UI_INSTRUCTIONAL_CLUTTER\n',
+        )
+        self._write(
+            "UI/TodoCard.html",
+            "<h1>待办清单</h1>\n"
+            "<p>点按文字原地修改 · 操作/展示一体</p>\n",
+        )
+        findings = design_contract.audit_code(
+            [self.root / "UI/TodoPage.swift", self.root / "UI/TodoCard.html"],
+            "mobile",
+        )
+        clutter_lines = [
+            (pathlib.Path(item.path).name, item.line)
+            for item in findings
+            if item.rule == "UI_INSTRUCTIONAL_CLUTTER"
+        ]
+        self.assertEqual(
+            [
+                ("TodoPage.swift", 2),
+                ("TodoPage.swift", 3),
+                ("TodoPage.swift", 4),
+                ("TodoPage.swift", 5),
+                ("TodoPage.swift", 6),
+                ("TodoCard.html", 2),
+            ],
+            clutter_lines,
+        )
+
+    def test_audit_spec_enforces_negative_assertions_and_concrete_obsolete_test_manifest(self) -> None:
+        bad_spec = self._write(
+            "handoff/design.md",
+            "# Design\n\n"
+            "底部只保留左下切换和右下录音两个按钮，彻底去掉灰色遮罩。 <!-- design-contract-allow: unrelated -->\n\n"
+            "- **Obsolete Test Manifest**：\n"
+            "  - 无破坏性旧单测删除；新增单测。\n",
+        )
+        findings = design_contract.audit_subtractive_spec(bad_spec)
+        self.assertEqual(
+            {
+                "SUBTRACTIVE_MISSING_NEGATIVE_ASSERTIONS",
+                "SUBTRACTIVE_MISSING_OBSOLETE_TEST_MANIFEST",
+            },
+            {item.rule for item in findings},
+        )
+        with captured_output() as (stdout, _):
+            status = design_contract.main(
+                ["--root", str(self.root), "--audit-spec", "handoff/design.md", "--json"]
+            )
+        self.assertEqual(1, status)
+        report = json.loads(stdout.getvalue())
+        self.assertFalse(report["ok"])
+
+        good_spec = self._write(
+            "handoff/good-design.md",
+            "# Design\n\n"
+            "底部只保留左下切换和右下录音两个按钮，彻底去掉灰色遮罩。\n\n"
+            "## Negative DOM/View Assertions\n"
+            "- `!app.otherElements[\"vox.recording.indicator\"].exists` (`count == 0`)\n"
+            "- `!app.staticTexts[\"r3-feedback\"].exists` (`count == 0`)\n\n"
+            "## Obsolete Test Manifest\n"
+            "- `VoxPocket/VoxPocketUITests/VoxPocketUITests.swift:151` — remove `appendBanner.waitForExistence` assertion\n",
+        )
+        self.assertEqual([], design_contract.audit_subtractive_spec(good_spec))
+        with captured_output() as (stdout, _):
+            status = design_contract.main(
+                ["--root", str(self.root), "--audit-spec", "handoff/good-design.md", "--json"]
+            )
+        self.assertEqual(0, status)
+        self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
     def test_new_audit_code_gate_has_positive_and_negative_results(self) -> None:
         self._write("UI/Good.swift", "Text(\"ok\")\n")
         with captured_output() as (stdout, _):

@@ -26,9 +26,54 @@ REQUIRED_HEADINGS = (
     "## Redlines & CI gate",
 )
 REQUIRED_STATES = ("populated", "empty", "loading", "error")
-SUPPORTED_SUFFIXES = frozenset({".swift", ".tsx", ".ts", ".jsx", ".css", ".scss"})
+SUPPORTED_SUFFIXES = frozenset(
+    {".swift", ".tsx", ".ts", ".jsx", ".js", ".html", ".htm", ".css", ".scss"}
+)
 SKIP_DIRECTORY_NAMES = frozenset({"tokens", "generated", "tests", "__tests__"})
 ALLOW_PATTERN = re.compile(r"design-contract-allow:\s*\S+")
+
+INSTRUCTIONAL_MICRO_COPY_TEXT_RE = re.compile(
+    r"(?:"
+    r"(?:点击|点按|长按|按住|双击)[^\n\"'<>]{0,20}?"
+    r"(?:即可|直接|原地|可|继续)[^\n\"'<>]{0,8}?"
+    r"(?:修改|编辑|切换|展开|收起|聚焦|置顶|追补|直补|录入|补充)"
+    r"|(?:点击|点按|长按|按住|双击)[^\n\"'<>]{1,12}?"
+    r"(?:置顶聚焦|原地修改|语音直补|继续追补|切换至顶部聚焦)"
+    r"|操作\s*/\s*展示一体"
+    r")"
+)
+UI_INSTRUCTIONAL_CLUTTER_RE = re.compile(
+    rf"(?:\b(?:Text|Label)\s*\(\s*\"[^\n\"]*{INSTRUCTIONAL_MICRO_COPY_TEXT_RE.pattern}[^\n\"]*\""
+    rf"|>[^<>\n]*{INSTRUCTIONAL_MICRO_COPY_TEXT_RE.pattern}[^<>\n]*<)"
+)
+
+SUBTRACTIVE_MANDATE_RE = re.compile(
+    r"(?:只保留|仅保留|去掉|砍掉|删除|移除|严禁出现|\bONLY\s+keep\b)",
+    re.IGNORECASE,
+)
+NEGATIVE_ASSERTION_HEADING_RE = re.compile(
+    r"^#{1,6}\s*[^\n]*(?:Negative\s+(?:DOM/View\s+)?Assertions?|减法禁用(?:断言|清单)|负向断言)[^\n]*$"
+    r"|^\s*[-*]\s*\*\*(?:Negative\s+(?:DOM/View\s+)?Assertions?|减法禁用(?:断言|清单)|负向断言)\*\*\s*[:：]?",
+    re.IGNORECASE | re.MULTILINE,
+)
+NEGATIVE_ASSERTION_EVIDENCE_RE = re.compile(
+    r"(?:\bcount\s*==\s*0\b|!\s*\w[\w.]*\.exists\b|\bexists\s*==\s*false\b|\bXCTAssertFalse\b|\btoHaveCount\(\s*0\s*\))",
+    re.IGNORECASE,
+)
+OBSOLETE_TEST_HEADING_RE = re.compile(
+    r"^#{1,6}\s*[^\n]*Obsolete\s+Test\s+Manifest[^\n]*$"
+    r"|^\s*[-*]\s*\*\*Obsolete\s+Test\s+Manifest\*\*\s*[:：]?",
+    re.IGNORECASE | re.MULTILINE,
+)
+VAGUE_OBSOLETE_TEST_RE = re.compile(
+    r"(?:无破坏性旧单测删除|无旧单测删除|无需删除旧测试|无冲突旧单测|^\s*none\s*$|^\s*n/a\s*$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+CONCRETE_TEST_REF_RE = re.compile(
+    r"(?:[A-Za-z0-9_./-]+(?:Tests?|Spec)\.[A-Za-z0-9]+(?::\d+)?"
+    r"|\btest_[A-Za-z0-9_]+\.py(?::\d+)?"
+    r"|[A-Za-z0-9_./-]+\.(?:swift|py|ts|tsx|js|jsx|mjs):\d+)"
+)
 
 RAW_HEX_COLOR = re.compile(
     r"(?<![A-Za-z0-9_])#(?:[0-9A-Fa-f]{8}|[0-9A-Fa-f]{6}|"
@@ -73,6 +118,7 @@ AUDIT_CODE_RULES = (
     ("HIG-TABLE-COLUMN-MISMATCH", ("desktop", "mobile"), re.compile(r"var\s+\w*[Hh]eader\w*\s*:\s*some\s+View\s*\{[\s\S]{0,450}?HStack[\s\S]{0,350}?maxWidth\s*:\s*\.infinity[\s\S]{0,600}?var\s+\w*[Rr]ow\w*\s*:\s*some\s+View\s*\{(?![\s\S]{0,450}?maxWidth\s*:\s*\.infinity)[\s\S]{0,450}?HStack[\s\S]{0,350}?\.frame\(\s*width\s*:")),
     ("HIG-APPKIT-LEGACY-MOUSELOOP", ("desktop",), re.compile(r"override\s+func\s+mouseDown\b[\s\S]{0,300}?nextEvent\(\s*matching\s*:")),
     ("HIG-DRAG-WILL-BEGIN-UI", ("desktop", "mobile"), re.compile(r"dragInteraction\([^)]*sessionWillBegin[\s\S]{0,240}?(?:present\(|UIAlertController|withAnimation)")),
+    ("UI_INSTRUCTIONAL_CLUTTER", ("desktop", "mobile", "web"), UI_INSTRUCTIONAL_CLUTTER_RE),
 )
 LOCALIZATION_CALL = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*L10n\.(?:tr|format)|NSLocalizedString|LocalizedStringKey|String\s*\(\s*localized|localized)\s*(?:\(|:)\s*\"([a-z0-9_]+(?:\.[a-z0-9_]+)+(?:\s*%[@lld]+)?)\"", re.I)
 FORMAT_SPECIFIER = re.compile(r"%(?:@|lld|ld|d|f|s)")
@@ -342,6 +388,114 @@ def scan_screenshots_with_jev(
     return violations, advisory_violations
 
 
+def _extract_markdown_block(content: str, heading_pattern: re.Pattern[str]) -> Optional[tuple[int, str]]:
+    """Extract the section or bullet block starting at `heading_pattern`."""
+
+    match = heading_pattern.search(content)
+    if match is None:
+        return None
+    line_number = content.count("\n", 0, match.start()) + 1
+    heading_text = match.group(0).lstrip()
+    tail = content[match.end() :]
+    if heading_text.startswith("#"):
+        level = len(heading_text) - len(heading_text.lstrip("#"))
+        stop = re.search(rf"(?m)^#{{1,{max(1, level)}}}\s+\S", tail)
+    else:
+        stop = re.search(
+            r"(?m)^(?:#{1,6}\s+\S|[-*]\s+\*\*(?!Negative|Obsolete|减法禁用|负向断言)[^*\n]+\*\*)",
+            tail,
+        )
+    block = tail[: stop.start()] if stop is not None else tail
+    return line_number, block.strip()
+
+
+def audit_subtractive_spec(spec_path: Path) -> list[DesignViolation]:
+    """Validate that subtractive design/spec mandates declare Negative Assertions and a concrete Obsolete Test Manifest."""
+
+    if not spec_path.is_file():
+        return [
+            DesignViolation(
+                spec_path.as_posix(),
+                0,
+                "SUBTRACTIVE_SPEC_MISSING",
+                f"spec/design markdown not found: {spec_path}",
+            )
+        ]
+    try:
+        content = spec_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return [
+            DesignViolation(
+                spec_path.as_posix(),
+                0,
+                "SUBTRACTIVE_SPEC_UNREADABLE",
+                f"spec/design markdown is not valid UTF-8: {spec_path}",
+            )
+        ]
+
+    lines = content.splitlines()
+    subtractive_matches = list(SUBTRACTIVE_MANDATE_RE.finditer(content))
+    if not subtractive_matches:
+        return []
+
+    mandate_line = content.count("\n", 0, subtractive_matches[0].start()) + 1
+    allow_negative = bool(
+        re.search(
+            r"design-contract-allow:\s*SUBTRACTIVE_MISSING_NEGATIVE_ASSERTIONS\b",
+            content,
+            re.IGNORECASE,
+        )
+    )
+    allow_obsolete = bool(
+        re.search(
+            r"design-contract-allow:\s*SUBTRACTIVE_MISSING_OBSOLETE_TEST_MANIFEST\b",
+            content,
+            re.IGNORECASE,
+        )
+    )
+
+    findings: list[DesignViolation] = []
+    neg_block = _extract_markdown_block(content, NEGATIVE_ASSERTION_HEADING_RE)
+    if not allow_negative and (
+        neg_block is None or not NEGATIVE_ASSERTION_EVIDENCE_RE.search(neg_block[1])
+    ):
+        findings.append(
+            DesignViolation(
+                spec_path.as_posix(),
+                neg_block[0] if neg_block is not None else mandate_line,
+                "SUBTRACTIVE_MISSING_NEGATIVE_ASSERTIONS",
+                "subtractive mandate requires a non-empty 'Negative DOM/View Assertions' section with explicit count == 0 / !exists assertions",
+            )
+        )
+
+    obs_block = _extract_markdown_block(content, OBSOLETE_TEST_HEADING_RE)
+    if not allow_obsolete:
+        if obs_block is None:
+            findings.append(
+                DesignViolation(
+                    spec_path.as_posix(),
+                    mandate_line,
+                    "SUBTRACTIVE_MISSING_OBSOLETE_TEST_MANIFEST",
+                    "subtractive mandate requires an 'Obsolete Test Manifest' section with concrete test file:line references",
+                )
+            )
+        else:
+            obs_line, obs_body = obs_block
+            cleaned_body = re.sub(r"^[-*0-9.)\s:：]+", "", obs_body).strip()
+            has_concrete_ref = bool(CONCRETE_TEST_REF_RE.search(obs_body))
+            is_vague = bool(VAGUE_OBSOLETE_TEST_RE.search(cleaned_body)) and not has_concrete_ref
+            if not cleaned_body or is_vague or not has_concrete_ref:
+                findings.append(
+                    DesignViolation(
+                        spec_path.as_posix(),
+                        obs_line,
+                        "SUBTRACTIVE_MISSING_OBSOLETE_TEST_MANIFEST",
+                        "Obsolete Test Manifest must cite concrete test file/file:line references (vague placeholders like '无破坏性旧单测删除' are forbidden)",
+                    )
+                )
+    return findings
+
+
 def audit_contract(contract_path: Path) -> list[str]:
     """Return all completeness errors found in a design contract."""
 
@@ -373,6 +527,9 @@ def audit_contract(contract_path: Path) -> list[str]:
     for appearance in ("light", "dark"):
         if appearance not in lowered:
             errors.append(f"missing required appearance mode: {appearance}")
+    if re.search(r"(?m)^schema:\s*agent-design-doc/v1\s*$", content) or contract_path.name.casefold() in ("design.md", "spec.md"):
+        for violation in audit_subtractive_spec(contract_path):
+            errors.append(f"{violation.rule}: {violation.snippet}")
     return errors
 
 
@@ -1006,6 +1163,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--check-polarity", action="store_true")
     parser.add_argument("--scale", type=float, default=1.0)
     parser.add_argument("--audit-geometry", metavar="GEOMETRY_JSON")
+    parser.add_argument(
+        "--audit-spec",
+        nargs="*",
+        default=None,
+        metavar="SPEC_MD",
+        help="Audit design.md / spec.md files for subtractive Negative DOM/View Assertions and concrete Obsolete Test Manifest.",
+    )
     return parser
 
 
@@ -1293,11 +1457,38 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     contract_path = (
         contract_arg.resolve() if contract_arg.is_absolute() else root / contract_arg
     )
-    targeted = any(value is not None for value in (args.audit_code, args.audit_l10n, args.check_edge_clipping, args.audit_geometry))
+    targeted = any(
+        value is not None
+        for value in (
+            args.audit_code,
+            args.audit_l10n,
+            args.check_edge_clipping,
+            args.audit_geometry,
+            args.audit_spec,
+        )
+    )
     contract_errors = [] if targeted and args.contract == "docs/design-contract.md" and not contract_path.is_file() else audit_contract(contract_path)
     violations = (
         scan_ui_sources(root, args.ui_path, args.exclude) if args.ui_path else []
     )
+    if args.audit_spec is not None:
+        spec_targets = (
+            [
+                candidate
+                for name in ("design.md", "spec.md")
+                for candidate in (root / name,)
+                if candidate.is_file()
+            ]
+            if not args.audit_spec
+            else _audit_paths(root, args.audit_spec, {".md"})
+        )
+        if not spec_targets and args.audit_spec:
+            for item in args.audit_spec:
+                candidate = Path(item) if Path(item).is_absolute() else root / item
+                violations.extend(audit_subtractive_spec(candidate))
+        else:
+            for spec_file in spec_targets:
+                violations.extend(audit_subtractive_spec(spec_file))
     if args.audit_code is not None:
         audit_paths = _audit_paths(root, args.audit_code, SUPPORTED_SUFFIXES)
         cases_file = args.cases_file if args.cases_file is None or args.cases_file.is_absolute() else root / args.cases_file

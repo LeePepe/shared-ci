@@ -48,6 +48,15 @@ Every required page and major component covers all four states:
     --root . --ui-path <dir>
   ```
 
+- Run the code and specification gates for instructional micro-copy and
+  subtractive mandates (`Negative DOM/View Assertions` + concrete
+  `Obsolete Test Manifest`):
+
+  ```sh
+  python3 .shared-ci/scripts/context/design_contract.py \
+    --root . --audit-code <dir> --audit-spec <spec.md>
+  ```
+
 The gate must pass before a UI change is accepted.
 
 For rendered UI checks, keep PNG screenshots under the repository root and
