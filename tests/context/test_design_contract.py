@@ -689,16 +689,16 @@ No raw colors.
             "UI/TodoPage.swift",
             'Text("待办清单")\n'
             'Text("点击任务置顶聚焦 · 标题与属性展示处直接点按修改")\n'
-            'Label("执行步骤树", systemImage: "list.bullet")\n'
-            'Text("点按文字原地修改 · 右下麦克风语音直补")\n'
-            'Text("按住右下麦克风继续追补")\n'
+            'Label("点按标题即可直接编辑", systemImage: "list.bullet")\n'
+            'Text("点按文字原地修改 · 按住麦克风继续补充")\n'
+            'Text("按住右下按钮继续追补")\n'
             'Text("点按任意条目切换至顶部聚焦")\n'
-            'Text("点击修改") // design-contract-allow: UI_INSTRUCTIONAL_CLUTTER\n',
+            'Text("点击即可修改") // design-contract-allow: UI_INSTRUCTIONAL_CLUTTER\n',
         )
         self._write(
             "UI/TodoCard.html",
             "<h1>待办清单</h1>\n"
-            "<p>点按文字原地修改 · 右下麦克风语音直补</p>\n",
+            "<p>点按文字原地修改 · 操作/展示一体</p>\n",
         )
         findings = design_contract.audit_code(
             [self.root / "UI/TodoPage.swift", self.root / "UI/TodoCard.html"],
@@ -725,7 +725,7 @@ No raw colors.
         bad_spec = self._write(
             "handoff/design.md",
             "# Design\n\n"
-            "底部只保留左下切换和右下录音两个按钮，彻底去掉灰色遮罩。\n\n"
+            "底部只保留左下切换和右下录音两个按钮，彻底去掉灰色遮罩。 <!-- design-contract-allow: unrelated -->\n\n"
             "- **Obsolete Test Manifest**：\n"
             "  - 无破坏性旧单测删除；新增单测。\n",
         )

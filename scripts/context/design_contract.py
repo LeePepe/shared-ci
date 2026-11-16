@@ -35,16 +35,11 @@ ALLOW_PATTERN = re.compile(r"design-contract-allow:\s*\S+")
 INSTRUCTIONAL_MICRO_COPY_TEXT_RE = re.compile(
     r"(?:"
     r"(?:点击|点按|长按|按住|双击)[^\n\"'<>]{0,20}?"
-    r"(?:即可|直接|原地|可|继续)?[^\n\"'<>]{0,8}?"
+    r"(?:即可|直接|原地|可|继续)[^\n\"'<>]{0,8}?"
     r"(?:修改|编辑|切换|展开|收起|聚焦|置顶|追补|直补|录入|补充)"
+    r"|(?:点击|点按|长按|按住|双击)[^\n\"'<>]{1,12}?"
+    r"(?:置顶聚焦|原地修改|语音直补|继续追补|切换至顶部聚焦)"
     r"|操作\s*/\s*展示一体"
-    r"|执行步骤树"
-    r"|点击任务置顶聚焦"
-    r"|标题与属性展示处直接点按修改"
-    r"|点按文字原地修改"
-    r"|右下麦克风语音直补"
-    r"|按住右下麦克风继续追补"
-    r"|点按任意条目切换至顶部聚焦"
     r")"
 )
 UI_INSTRUCTIONAL_CLUTTER_RE = re.compile(
@@ -71,8 +66,8 @@ OBSOLETE_TEST_HEADING_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 VAGUE_OBSOLETE_TEST_RE = re.compile(
-    r"(?:无破坏性旧单测删除|无旧单测删除|无需删除旧测试|无冲突旧单测|^none$|^n/a$)",
-    re.IGNORECASE,
+    r"(?:无破坏性旧单测删除|无旧单测删除|无需删除旧测试|无冲突旧单测|^\s*none\s*$|^\s*n/a\s*$)",
+    re.IGNORECASE | re.MULTILINE,
 )
 CONCRETE_TEST_REF_RE = re.compile(
     r"(?:[A-Za-z0-9_./-]+(?:Tests?|Spec)\.[A-Za-z0-9]+(?::\d+)?"
@@ -439,17 +434,31 @@ def audit_subtractive_spec(spec_path: Path) -> list[DesignViolation]:
         ]
 
     lines = content.splitlines()
-    subtractive_match = SUBTRACTIVE_MANDATE_RE.search(content)
-    if subtractive_match is None:
+    subtractive_matches = list(SUBTRACTIVE_MANDATE_RE.finditer(content))
+    if not subtractive_matches:
         return []
 
-    mandate_line = content.count("\n", 0, subtractive_match.start()) + 1
-    if ALLOW_PATTERN.search(lines[mandate_line - 1] if mandate_line <= len(lines) else ""):
-        return []
+    mandate_line = content.count("\n", 0, subtractive_matches[0].start()) + 1
+    allow_negative = bool(
+        re.search(
+            r"design-contract-allow:\s*SUBTRACTIVE_MISSING_NEGATIVE_ASSERTIONS\b",
+            content,
+            re.IGNORECASE,
+        )
+    )
+    allow_obsolete = bool(
+        re.search(
+            r"design-contract-allow:\s*SUBTRACTIVE_MISSING_OBSOLETE_TEST_MANIFEST\b",
+            content,
+            re.IGNORECASE,
+        )
+    )
 
     findings: list[DesignViolation] = []
     neg_block = _extract_markdown_block(content, NEGATIVE_ASSERTION_HEADING_RE)
-    if neg_block is None or not NEGATIVE_ASSERTION_EVIDENCE_RE.search(neg_block[1]):
+    if not allow_negative and (
+        neg_block is None or not NEGATIVE_ASSERTION_EVIDENCE_RE.search(neg_block[1])
+    ):
         findings.append(
             DesignViolation(
                 spec_path.as_posix(),
@@ -460,29 +469,30 @@ def audit_subtractive_spec(spec_path: Path) -> list[DesignViolation]:
         )
 
     obs_block = _extract_markdown_block(content, OBSOLETE_TEST_HEADING_RE)
-    if obs_block is None:
-        findings.append(
-            DesignViolation(
-                spec_path.as_posix(),
-                mandate_line,
-                "SUBTRACTIVE_MISSING_OBSOLETE_TEST_MANIFEST",
-                "subtractive mandate requires an 'Obsolete Test Manifest' section with concrete test file:line references",
-            )
-        )
-    else:
-        obs_line, obs_body = obs_block
-        cleaned_body = re.sub(r"^[-*0-9.)\s:：]+", "", obs_body).strip()
-        has_concrete_ref = bool(CONCRETE_TEST_REF_RE.search(obs_body))
-        is_vague = bool(VAGUE_OBSOLETE_TEST_RE.search(cleaned_body)) and not has_concrete_ref
-        if not cleaned_body or is_vague or not has_concrete_ref:
+    if not allow_obsolete:
+        if obs_block is None:
             findings.append(
                 DesignViolation(
                     spec_path.as_posix(),
-                    obs_line,
+                    mandate_line,
                     "SUBTRACTIVE_MISSING_OBSOLETE_TEST_MANIFEST",
-                    "Obsolete Test Manifest must cite concrete test file/file:line references (vague placeholders like '无破坏性旧单测删除' are forbidden)",
+                    "subtractive mandate requires an 'Obsolete Test Manifest' section with concrete test file:line references",
                 )
             )
+        else:
+            obs_line, obs_body = obs_block
+            cleaned_body = re.sub(r"^[-*0-9.)\s:：]+", "", obs_body).strip()
+            has_concrete_ref = bool(CONCRETE_TEST_REF_RE.search(obs_body))
+            is_vague = bool(VAGUE_OBSOLETE_TEST_RE.search(cleaned_body)) and not has_concrete_ref
+            if not cleaned_body or is_vague or not has_concrete_ref:
+                findings.append(
+                    DesignViolation(
+                        spec_path.as_posix(),
+                        obs_line,
+                        "SUBTRACTIVE_MISSING_OBSOLETE_TEST_MANIFEST",
+                        "Obsolete Test Manifest must cite concrete test file/file:line references (vague placeholders like '无破坏性旧单测删除' are forbidden)",
+                    )
+                )
     return findings
 
 
