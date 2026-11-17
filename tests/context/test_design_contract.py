@@ -812,18 +812,29 @@ No raw colors.
             "                    .transition(.opacity.combined(with: .move(edge: .top)))\n"
             "            }\n"
             "            .clipped()\n"
-            "            inlineTagTrayPanel\n"
-            "                .transition(.opacity.combined(with: .move(edge: .top)))\n"
-            "                .clipped()\n"
-            "            compactStatusCapsule(showLabel: false)\n"
+            "            statusPill(showLabel: false)\n"
+            "            priorityPill(showLabel: true)\n"
             "            Text(\"P0\").frame(minHeight: 24)\n"
             "            compactStatusCapsule(showLabel: isExpanded) // design-contract-allow: UI_EXPAND_STATE_MUTATION\n"
             "        }\n"
             "    }\n"
             "}\n",
         )
+        self._write(
+            "UI/GoodDirectlyClippedPanel.swift",
+            "struct GoodDirectlyClippedPanel: View {\n"
+            "    var body: some View {\n"
+            "        inlineTagTrayPanel\n"
+            "            .transition(.opacity.combined(with: .move(edge: .top)))\n"
+            "            .clipped()\n"
+            "    }\n"
+            "}\n",
+        )
         good_findings = design_contract.audit_code(
-            [self.root / "UI/GoodExpandCard.swift"],
+            [
+                self.root / "UI/GoodExpandCard.swift",
+                self.root / "UI/GoodDirectlyClippedPanel.swift",
+            ],
             "mobile",
         )
         self.assertEqual([], good_findings)

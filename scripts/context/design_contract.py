@@ -49,8 +49,8 @@ UI_INSTRUCTIONAL_CLUTTER_RE = re.compile(
 UI_EXPAND_STATE_MUTATION_RE = re.compile(
     r"(?:"
     r"\bshowLabel\s*:\s*[^\n,)]*\b(?:isExpanded|expanded)\b"
-    r"|\bshowLabel\s*:\s*false\b[\s\S]{0,600}?\bshowLabel\s*:\s*true\b"
-    r"|\bshowLabel\s*:\s*true\b[\s\S]{0,600}?\bshowLabel\s*:\s*false\b"
+    r"|\bif\s+!\s*(?:isExpanded|expanded)\b[\s\S]{0,450}?\bshowLabel\s*:\s*false\b[\s\S]{0,450}?\belse\b[\s\S]{0,450}?\bshowLabel\s*:\s*true\b"
+    r"|\bif\s+(?:isExpanded|expanded)\b[\s\S]{0,450}?\bshowLabel\s*:\s*true\b[\s\S]{0,450}?\belse\b[\s\S]{0,450}?\bshowLabel\s*:\s*false\b"
     r"|\b(?:minHeight|maxHeight|height)\s*:\s*[^\n,)]*\b(?:isExpanded|expanded)\s*\?"
     r"|\bif\s+(?:isExpanded|expanded)\s*\{\s*Text\s*\(\s*statusTitle\b"
     r")"
@@ -59,7 +59,7 @@ UI_HEADER_INTERLEAVED_INSERTION_RE = re.compile(
     r"\b\w*TitleHeaderRow\b(?:\s*\n\s*|\s*;\s*|\s+)if\s+(?:isExpanded|expanded)\b[\s\S]{0,260}?(?:\s*\n\s*|\s*;\s*|\s+)\b\w*(?:Metadata|Status|Priority)\w*Row\b"
 )
 UI_UNCLIPPED_PANEL_OVERLAP_RE = re.compile(
-    r"\.transition\s*\([^\n)]*\.move\s*\(\s*edge\s*:\s*\.top\s*\)[^\n)]*\)(?!(?:\s*\n\s*|\s*)\.(?:clipped|clipShape)\s*\()"
+    r"\.transition\s*\([^\n;{}]*\.move\s*\(\s*edge\s*:\s*\.top\s*\)[^\n;{}]*\)(?!(?:\s*\n\s*|\s*)\.(?:clipped|clipShape)\s*\()"
 )
 
 SUBTRACTIVE_MANDATE_RE = re.compile(
@@ -897,14 +897,28 @@ def _load_code_rules(
 
 
 def _has_enclosing_clipped_reveal_container(content: str, match_start: int, match_end: int) -> bool:
-    prefix = content[max(0, match_start - 400) : match_start]
-    suffix = content[match_end : min(len(content), match_end + 260)]
+    cursor = match_end
+    while cursor < len(content) and content[cursor] in ") \t":
+        cursor += 1
+    suffix = content[cursor : min(len(content), cursor + 260)]
     if re.match(r"^\s*\.(?:clipped|clipShape)\s*\(", suffix):
         return True
-    if re.search(r"\b\w*(?:ExpandReveal|Reveal)Layout\b", prefix) and re.search(
-        r"\.(?:clipped|clipShape)\s*\(", suffix
-    ):
-        return True
+    prefix = content[max(0, match_start - 400) : match_start]
+    for layout_match in re.finditer(r"\b\w*(?:ExpandReveal|Reveal)Layout\b[^{]*\{", prefix):
+        brace_open = prefix.rfind("{", layout_match.start(), layout_match.end())
+        if brace_open < 0:
+            continue
+        abs_open = max(0, match_start - 400) + brace_open
+        depth = 1
+        idx = abs_open + 1
+        while idx < len(content) and depth > 0:
+            if content[idx] == "{":
+                depth += 1
+            elif content[idx] == "}":
+                depth -= 1
+            idx += 1
+        if idx >= match_end and re.match(r"^\s*\.(?:clipped|clipShape)\s*\(", content[idx : idx + 80]):
+            return True
     return False
 
 
