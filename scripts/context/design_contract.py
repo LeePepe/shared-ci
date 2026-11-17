@@ -46,6 +46,21 @@ UI_INSTRUCTIONAL_CLUTTER_RE = re.compile(
     rf"(?:\b(?:Text|Label)\s*\(\s*\"[^\n\"]*{INSTRUCTIONAL_MICRO_COPY_TEXT_RE.pattern}[^\n\"]*\""
     rf"|>[^<>\n]*{INSTRUCTIONAL_MICRO_COPY_TEXT_RE.pattern}[^<>\n]*<)"
 )
+UI_EXPAND_STATE_MUTATION_RE = re.compile(
+    r"(?:"
+    r"\bshowLabel\s*:\s*[^\n,)]*\b(?:isExpanded|expanded)\b"
+    r"|\bif\s+!\s*(?:isExpanded|expanded)\b[\s\S]{0,450}?\bshowLabel\s*:\s*false\b[\s\S]{0,450}?\belse\b[\s\S]{0,450}?\bshowLabel\s*:\s*true\b"
+    r"|\bif\s+(?:isExpanded|expanded)\b[\s\S]{0,450}?\bshowLabel\s*:\s*true\b[\s\S]{0,450}?\belse\b[\s\S]{0,450}?\bshowLabel\s*:\s*false\b"
+    r"|\b(?:minHeight|maxHeight|height)\s*:\s*[^\n,)]*\b(?:isExpanded|expanded)\s*\?"
+    r"|\bif\s+(?:isExpanded|expanded)\s*\{\s*Text\s*\(\s*statusTitle\b"
+    r")"
+)
+UI_HEADER_INTERLEAVED_INSERTION_RE = re.compile(
+    r"\b\w*TitleHeaderRow\b(?:\s*\n\s*|\s*;\s*|\s+)if\s+(?:isExpanded|expanded)\b[\s\S]{0,260}?(?:\s*\n\s*|\s*;\s*|\s+)\b\w*(?:Metadata|Status|Priority)\w*Row\b"
+)
+UI_UNCLIPPED_PANEL_OVERLAP_RE = re.compile(
+    r"\.transition\s*\([^\n;{}]*\.move\s*\(\s*edge\s*:\s*\.top\s*\)"
+)
 
 SUBTRACTIVE_MANDATE_RE = re.compile(
     r"(?:只保留|仅保留|去掉|砍掉|删除|移除|严禁出现|\bONLY\s+keep\b)",
@@ -119,6 +134,9 @@ AUDIT_CODE_RULES = (
     ("HIG-APPKIT-LEGACY-MOUSELOOP", ("desktop",), re.compile(r"override\s+func\s+mouseDown\b[\s\S]{0,300}?nextEvent\(\s*matching\s*:")),
     ("HIG-DRAG-WILL-BEGIN-UI", ("desktop", "mobile"), re.compile(r"dragInteraction\([^)]*sessionWillBegin[\s\S]{0,240}?(?:present\(|UIAlertController|withAnimation)")),
     ("UI_INSTRUCTIONAL_CLUTTER", ("desktop", "mobile", "web"), UI_INSTRUCTIONAL_CLUTTER_RE),
+    ("UI_EXPAND_STATE_MUTATION", ("desktop", "mobile", "web"), UI_EXPAND_STATE_MUTATION_RE),
+    ("UI_HEADER_INTERLEAVED_INSERTION", ("desktop", "mobile", "web"), UI_HEADER_INTERLEAVED_INSERTION_RE),
+    ("UI_UNCLIPPED_PANEL_OVERLAP", ("desktop", "mobile", "web"), UI_UNCLIPPED_PANEL_OVERLAP_RE),
 )
 LOCALIZATION_CALL = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*L10n\.(?:tr|format)|NSLocalizedString|LocalizedStringKey|String\s*\(\s*localized|localized)\s*(?:\(|:)\s*\"([a-z0-9_]+(?:\.[a-z0-9_]+)+(?:\s*%[@lld]+)?)\"", re.I)
 FORMAT_SPECIFIER = re.compile(r"%(?:@|lld|ld|d|f|s)")
@@ -878,6 +896,41 @@ def _load_code_rules(
     return rules, errors
 
 
+def _has_enclosing_clipped_reveal_container(content: str, match_start: int, match_end: int) -> bool:
+    open_paren = content.find("(", match_start)
+    cursor = match_end
+    if open_paren != -1 and open_paren < match_end:
+        depth = 1
+        idx = open_paren + 1
+        while idx < len(content) and depth > 0:
+            if content[idx] == "(":
+                depth += 1
+            elif content[idx] == ")":
+                depth -= 1
+            idx += 1
+        cursor = idx
+    suffix = content[cursor : min(len(content), cursor + 260)]
+    if re.match(r"^\s*\.(?:clipped|clipShape)\s*\(", suffix):
+        return True
+    prefix = content[max(0, match_start - 400) : match_start]
+    for layout_match in re.finditer(r"\b\w*(?:ExpandReveal|Reveal)Layout\b[^{]*\{", prefix):
+        brace_open = prefix.rfind("{", layout_match.start(), layout_match.end())
+        if brace_open < 0:
+            continue
+        abs_open = max(0, match_start - 400) + brace_open
+        depth = 1
+        idx = abs_open + 1
+        while idx < len(content) and depth > 0:
+            if content[idx] == "{":
+                depth += 1
+            elif content[idx] == "}":
+                depth -= 1
+            idx += 1
+        if idx >= cursor and re.match(r"^\s*\.(?:clipped|clipShape)\s*\(", content[idx : idx + 80]):
+            return True
+    return False
+
+
 def audit_code(paths: Sequence[Path], platform: str, cases_file: Optional[Path] = None) -> list[DesignViolation]:
     rules, findings = _load_code_rules(cases_file)
     active = {"desktop", "mobile", "web"} if platform == "all" else {platform}
@@ -894,6 +947,10 @@ def audit_code(paths: Sequence[Path], platform: str, cases_file: Optional[Path] 
             if "all" not in platforms and not active.intersection(platforms):
                 continue
             for match in pattern.finditer(content):
+                if rule == "UI_UNCLIPPED_PANEL_OVERLAP" and _has_enclosing_clipped_reveal_container(
+                    content, match.start(), match.end()
+                ):
+                    continue
                 line_number = content.count("\n", 0, match.start()) + 1
                 end_line = content.count("\n", 0, max(match.start(), match.end() - 1)) + 1
                 spanned = "\n".join(lines[line_number - 1 : end_line])

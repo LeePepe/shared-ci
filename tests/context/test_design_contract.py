@@ -763,6 +763,85 @@ No raw colors.
         self.assertEqual(0, status)
         self.assertTrue(json.loads(stdout.getvalue())["ok"])
 
+    def test_audit_code_detects_expand_mutation_header_interleaving_and_unclipped_overlap(self) -> None:
+        self._write(
+            "UI/BadExpandCard.swift",
+            "struct BadExpandCard: View {\n"
+            "    let isExpanded: Bool\n"
+            "    var body: some View {\n"
+            "        VStack {\n"
+            "            unifiedTitleHeaderRow\n"
+            "            if isExpanded {\n"
+            "                editableDescriptionBlock\n"
+            "            }\n"
+            "            unifiedMetadataStatusPriorityTimestampRow\n"
+            "            if !isExpanded {\n"
+            "                compactStatusCapsule(showLabel: false)\n"
+            "            } else {\n"
+            "                compactStatusCapsule(showLabel: true)\n"
+            "            }\n"
+            "            compactStatusCapsule(showLabel: isExpanded)\n"
+            "            Text(\"P0\").frame(minHeight: isExpanded ? 28 : 22)\n"
+            "            if isExpanded {\n"
+            "                inlineTagTrayPanel\n"
+            "                    .transition(.opacity.combined(with: .move(edge: .top)))\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "}\n",
+        )
+        findings = design_contract.audit_code(
+            [self.root / "UI/BadExpandCard.swift"],
+            "mobile",
+        )
+        rules = [item.rule for item in findings]
+        self.assertEqual(3, rules.count("UI_EXPAND_STATE_MUTATION"))
+        self.assertEqual(1, rules.count("UI_HEADER_INTERLEAVED_INSERTION"))
+        self.assertEqual(1, rules.count("UI_UNCLIPPED_PANEL_OVERLAP"))
+
+        self._write(
+            "UI/GoodExpandCard.swift",
+            "struct GoodExpandCard: View {\n"
+            "    let isExpanded: Bool\n"
+            "    var body: some View {\n"
+            "        VStack {\n"
+            "            unifiedTitleHeaderRow\n"
+            "            unifiedMetadataStatusPriorityTimestampRow\n"
+            "            TodoExpandRevealLayout(progress: isExpanded ? 1.0 : 0.0) {\n"
+            "                inlineTagTrayPanel\n"
+            "                    .transition(.opacity.combined(with: .move(edge: .top)))\n"
+            "            }\n"
+            "            .clipped()\n"
+            "            statusPill(showLabel: false)\n"
+            "            priorityPill(showLabel: true)\n"
+            "            Text(\"P0\").frame(minHeight: 24)\n"
+            "            compactStatusCapsule(showLabel: isExpanded) // design-contract-allow: UI_EXPAND_STATE_MUTATION\n"
+            "        }\n"
+            "    }\n"
+            "}\n",
+        )
+        self._write(
+            "UI/GoodDirectlyClippedPanel.swift",
+            "struct GoodDirectlyClippedPanel: View {\n"
+            "    var body: some View {\n"
+            "        VStack {\n"
+            "            inlineTagTrayPanel.transition(.opacity.combined(with: .move(edge: .top))).clipped()\n"
+            "            inlineTagTrayPanel\n"
+            "                .transition(.opacity.combined(with: .move(edge: .top)))\n"
+            "                .clipped()\n"
+            "        }\n"
+            "    }\n"
+            "}\n",
+        )
+        good_findings = design_contract.audit_code(
+            [
+                self.root / "UI/GoodExpandCard.swift",
+                self.root / "UI/GoodDirectlyClippedPanel.swift",
+            ],
+            "mobile",
+        )
+        self.assertEqual([], good_findings)
+
     def test_new_audit_code_gate_has_positive_and_negative_results(self) -> None:
         self._write("UI/Good.swift", "Text(\"ok\")\n")
         with captured_output() as (stdout, _):
