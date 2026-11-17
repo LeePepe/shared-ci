@@ -59,7 +59,7 @@ UI_HEADER_INTERLEAVED_INSERTION_RE = re.compile(
     r"\b\w*TitleHeaderRow\b(?:\s*\n\s*|\s*;\s*|\s+)if\s+(?:isExpanded|expanded)\b[\s\S]{0,260}?(?:\s*\n\s*|\s*;\s*|\s+)\b\w*(?:Metadata|Status|Priority)\w*Row\b"
 )
 UI_UNCLIPPED_PANEL_OVERLAP_RE = re.compile(
-    r"\.transition\s*\([^\n;{}]*\.move\s*\(\s*edge\s*:\s*\.top\s*\)[^\n;{}]*\)(?!(?:\s*\n\s*|\s*)\.(?:clipped|clipShape)\s*\()"
+    r"\.transition\s*\([^\n;{}]*\.move\s*\(\s*edge\s*:\s*\.top\s*\)"
 )
 
 SUBTRACTIVE_MANDATE_RE = re.compile(
@@ -897,9 +897,18 @@ def _load_code_rules(
 
 
 def _has_enclosing_clipped_reveal_container(content: str, match_start: int, match_end: int) -> bool:
+    open_paren = content.find("(", match_start)
     cursor = match_end
-    while cursor < len(content) and content[cursor] in ") \t":
-        cursor += 1
+    if open_paren != -1 and open_paren < match_end:
+        depth = 1
+        idx = open_paren + 1
+        while idx < len(content) and depth > 0:
+            if content[idx] == "(":
+                depth += 1
+            elif content[idx] == ")":
+                depth -= 1
+            idx += 1
+        cursor = idx
     suffix = content[cursor : min(len(content), cursor + 260)]
     if re.match(r"^\s*\.(?:clipped|clipShape)\s*\(", suffix):
         return True
@@ -917,7 +926,7 @@ def _has_enclosing_clipped_reveal_container(content: str, match_start: int, matc
             elif content[idx] == "}":
                 depth -= 1
             idx += 1
-        if idx >= match_end and re.match(r"^\s*\.(?:clipped|clipShape)\s*\(", content[idx : idx + 80]):
+        if idx >= cursor and re.match(r"^\s*\.(?:clipped|clipShape)\s*\(", content[idx : idx + 80]):
             return True
     return False
 

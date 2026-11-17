@@ -824,9 +824,12 @@ No raw colors.
             "UI/GoodDirectlyClippedPanel.swift",
             "struct GoodDirectlyClippedPanel: View {\n"
             "    var body: some View {\n"
-            "        inlineTagTrayPanel\n"
-            "            .transition(.opacity.combined(with: .move(edge: .top)))\n"
-            "            .clipped()\n"
+            "        VStack {\n"
+            "            inlineTagTrayPanel.transition(.opacity.combined(with: .move(edge: .top))).clipped()\n"
+            "            inlineTagTrayPanel\n"
+            "                .transition(.opacity.combined(with: .move(edge: .top)))\n"
+            "                .clipped()\n"
+            "        }\n"
             "    }\n"
             "}\n",
         )
