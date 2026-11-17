@@ -46,6 +46,19 @@ UI_INSTRUCTIONAL_CLUTTER_RE = re.compile(
     rf"(?:\b(?:Text|Label)\s*\(\s*\"[^\n\"]*{INSTRUCTIONAL_MICRO_COPY_TEXT_RE.pattern}[^\n\"]*\""
     rf"|>[^<>\n]*{INSTRUCTIONAL_MICRO_COPY_TEXT_RE.pattern}[^<>\n]*<)"
 )
+UI_EXPAND_STATE_MUTATION_RE = re.compile(
+    r"(?:"
+    r"\bshowLabel\s*:\s*(?:false\b|[^\n,)]*\b(?:isExpanded|expanded)\b)"
+    r"|\b(?:minHeight|maxHeight|height)\s*:\s*[^\n,)]*\b(?:isExpanded|expanded)\s*\?"
+    r"|\bif\s+(?:isExpanded|expanded)\s*\{\s*Text\s*\(\s*statusTitle\b"
+    r")"
+)
+UI_HEADER_INTERLEAVED_INSERTION_RE = re.compile(
+    r"\b\w*TitleHeaderRow\b\s*\n+\s*if\s+(?:isExpanded|expanded)\b[\s\S]{0,260}?\n+\s*\b\w*(?:Metadata|Status|Priority)\w*Row\b"
+)
+UI_UNCLIPPED_PANEL_OVERLAP_RE = re.compile(
+    r"\.transition\s*\([^\n)]*\.move\s*\(\s*edge\s*:\s*\.top\s*\)"
+)
 
 SUBTRACTIVE_MANDATE_RE = re.compile(
     r"(?:只保留|仅保留|去掉|砍掉|删除|移除|严禁出现|\bONLY\s+keep\b)",
@@ -119,6 +132,9 @@ AUDIT_CODE_RULES = (
     ("HIG-APPKIT-LEGACY-MOUSELOOP", ("desktop",), re.compile(r"override\s+func\s+mouseDown\b[\s\S]{0,300}?nextEvent\(\s*matching\s*:")),
     ("HIG-DRAG-WILL-BEGIN-UI", ("desktop", "mobile"), re.compile(r"dragInteraction\([^)]*sessionWillBegin[\s\S]{0,240}?(?:present\(|UIAlertController|withAnimation)")),
     ("UI_INSTRUCTIONAL_CLUTTER", ("desktop", "mobile", "web"), UI_INSTRUCTIONAL_CLUTTER_RE),
+    ("UI_EXPAND_STATE_MUTATION", ("desktop", "mobile", "web"), UI_EXPAND_STATE_MUTATION_RE),
+    ("UI_HEADER_INTERLEAVED_INSERTION", ("desktop", "mobile", "web"), UI_HEADER_INTERLEAVED_INSERTION_RE),
+    ("UI_UNCLIPPED_PANEL_OVERLAP", ("desktop", "mobile", "web"), UI_UNCLIPPED_PANEL_OVERLAP_RE),
 )
 LOCALIZATION_CALL = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*L10n\.(?:tr|format)|NSLocalizedString|LocalizedStringKey|String\s*\(\s*localized|localized)\s*(?:\(|:)\s*\"([a-z0-9_]+(?:\.[a-z0-9_]+)+(?:\s*%[@lld]+)?)\"", re.I)
 FORMAT_SPECIFIER = re.compile(r"%(?:@|lld|ld|d|f|s)")
