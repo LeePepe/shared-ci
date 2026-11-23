@@ -151,6 +151,9 @@ jobs:
         name: Build upload and query the internal TestFlight build
         if: steps.eligible.outputs.release == 'true'
         shell: bash
+        # On self-hosted macOS runners with external SSD storage, mount the dedicated
+        # APFS Xcode volume at $HOME/XcodeSSD (~/XcodeSSD, outside /Volumes/)
+        # to avoid headless kTCCServiceSystemPolicyRemovableVolumes blocks.
         run: |
           echo '::error::TestFlight upload and exact-build availability queries not configured.'
           exit 1

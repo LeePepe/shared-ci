@@ -108,6 +108,16 @@ provisioning, and publication evidence. Keeping the workflows separate also
 eliminates duplicate post-merge simulator runs on `main`; the PR gate proves
 the change, while the protected CD flow proves the signed delivery.
 
+On self-hosted macOS runners with external SSD storage, mount a dedicated APFS
+volume (or APFS sparsebundle) outside `/Volumes/`—for example at
+`$HOME/XcodeSSD` (`~/XcodeSSD`)—with subdirectories
+`{Archives,DerivedData,GymLogs,TestFlightOutput}`, and point
+`~/Library/Developer/Xcode/{Archives,DerivedData}` and Fastlane
+`VITALSTRIDE_SSD_XCODE_ROOT` / `SSD_XCODE_ROOT` at `$HOME/XcodeSSD`. Mounting
+under `$HOME/XcodeSSD` instead of `/Volumes/<Disk>` avoids headless macOS
+`kTCCServiceSystemPolicyRemovableVolumes` blocks on non-interactive launchd
+runner shells while physically isolating other folders on the external disk.
+
 ## Consumer contract
 
 Consumers should begin at [`docs/repository-guide.md`](repository-guide.md),
