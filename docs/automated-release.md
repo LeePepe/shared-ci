@@ -166,7 +166,12 @@ All read-only preparation and pre-write checks remain mandatory under force;
 no SDK source, eligibility or repeat-publication policy changes.
 
 The TF `publish` step owns signing/build/upload and reads Apple state using the
-repository's existing authorized interface. Set `expected-app`,
+repository's existing authorized interface. When running on a self-hosted macOS
+runner backed by external SSD storage, mount a dedicated APFS volume (or APFS
+sparsebundle) at `$HOME/XcodeSSD` (`~/XcodeSSD`, outside `/Volumes/`) for
+`{Archives,DerivedData,GymLogs,TestFlightOutput}` so headless runner processes
+never hit `kTCCServiceSystemPolicyRemovableVolumes` prompts while keeping
+`/Volumes/<SSD>` isolated. Set `expected-app`,
 `expected-platform` and `expected-build` from the exact candidate's actual
 built/uploaded identity, not from the latest Apple build. A build identifier
 must distinguish the applicable version/build combination when the product does
